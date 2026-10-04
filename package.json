@@ -14,7 +14,8 @@
     "icon": "electron tools/make-icon.js",
     "dist:store": "node tools/dist-store.js",
     "appx-assets": "electron tools/make-appx-assets.js",
-    "hero": "electron tools/make-hero.js"
+    "hero": "electron tools/make-hero.js",
+    "store-art": "electron tools/make-store-art.js"
   },
   "build": {
     "appId": "com.kindsusu.retextpdf",
