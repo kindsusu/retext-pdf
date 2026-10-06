@@ -12,7 +12,9 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 
 ## 다운로드
 
-**[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**에서 최신 빌드를 받습니다.
+**권장: [Microsoft Store에서 받기](https://apps.microsoft.com/detail/9MXQD6ZHX6HH)** — Microsoft가 서명한 패키지라 SmartScreen 경고 없이 설치되고, 새 버전이 나오면 Store가 자동으로 업데이트합니다.
+
+설치 파일을 직접 받으려면 **[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**에서 받습니다.
 
 | 파일 | 이럴 때 |
 |---|---|
@@ -21,7 +23,7 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 
 요구 사항: Windows 10·11(x64), 디스크 약 400MB. 계정이나 인터넷 연결이 필요 없습니다.
 
-**처음 실행할 때 SmartScreen.** 아직 코드 서명이 없어 "Windows의 PC 보호" 창이 뜰 수 있습니다. 이 저장소의 Releases에서 받은 파일인지 확인한 뒤 **추가 정보 → 실행**을 누르세요. 또는 받은 파일을 우클릭 → **속성** → **차단 해제**에 체크 → 확인을 누르면 경고 없이 열립니다. 경고를 피하려고 Microsoft Defender를 끄지 마세요.
+**처음 실행할 때 SmartScreen(Releases 설치 파일만).** Releases의 exe는 코드 서명이 없어 "Windows의 PC 보호" 창이 뜰 수 있습니다. 이 저장소의 Releases에서 받은 파일인지 확인한 뒤 **추가 정보 → 실행**을 누르세요. 또는 받은 파일을 우클릭 → **속성** → **차단 해제**에 체크 → 확인을 누르면 경고 없이 열립니다. 경고를 피하려고 Microsoft Defender를 끄지 마세요.
 
 ## 3.0에서 달라진 점
 
@@ -111,7 +113,7 @@ npm start
 
 ## 자주 묻는 질문
 
-**SmartScreen 경고를 없앨 수 있나요?** 코드 서명을 해야 없어집니다. 검토 중인 방법은 [계획](PLAN.md)에 있습니다. 그전까지는 위의 "추가 정보 → 실행" 또는 "차단 해제"를 쓰세요.
+**SmartScreen 경고를 없앨 수 있나요?** [Microsoft Store판](https://apps.microsoft.com/detail/9MXQD6ZHX6HH)은 Microsoft가 서명해 경고가 없습니다. Releases의 exe는 서명이 없어 위의 "추가 정보 → 실행" 또는 "차단 해제"를 써야 합니다.
 
 **고친 글자가 맑은 고딕으로 바뀌었어요.** PDF에는 보통 이미 쓰인 글자 모양만 들어 있습니다. 원래 글꼴에 없는 새 글자는 맑은 고딕으로 그립니다. **폰트 맞추기**로 더 비슷한 설치 글꼴이나 TTF를 지정할 수 있습니다.
 

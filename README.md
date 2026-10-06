@@ -12,7 +12,9 @@ A local Windows editor that changes PDF text objects directly and removes sensit
 
 ## Download
 
-Get the latest build from **[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**.
+**Recommended: [get it from the Microsoft Store](https://apps.microsoft.com/detail/9MXQD6ZHX6HH)** — the package is signed by Microsoft, so it installs without a SmartScreen warning, and the Store keeps it up to date.
+
+To download an installer directly, use **[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**.
 
 | File | Use it when |
 |---|---|
@@ -21,7 +23,7 @@ Get the latest build from **[Releases](https://github.com/kindsusu/retext-pdf/re
 
 Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or internet connection is needed.
 
-**First launch and SmartScreen.** The builds are not code-signed yet, so Windows may show "Windows protected your PC". Check that the file came from this repository's Releases page, then choose **More info → Run anyway**. Alternatively, right-click the downloaded file → **Properties** → tick **Unblock** → OK. Do not turn off Microsoft Defender to get past the warning.
+**First launch and SmartScreen (Releases installers only).** The Releases builds are not code-signed, so Windows may show "Windows protected your PC". Check that the file came from this repository's Releases page, then choose **More info → Run anyway**. Alternatively, right-click the downloaded file → **Properties** → tick **Unblock** → OK. Do not turn off Microsoft Defender to get past the warning.
 
 ## What's new in 3.0
 
@@ -111,7 +113,7 @@ Rotated pages keep their text, redaction, search, and drag-to-move overlays alig
 
 ## FAQ
 
-**Can the SmartScreen warning be removed?** Only by code-signing the app. The options are tracked in [the plan](PLAN.md); until then use "More info → Run anyway" or "Unblock" as described above.
+**Can the SmartScreen warning be removed?** The [Microsoft Store version](https://apps.microsoft.com/detail/9MXQD6ZHX6HH) is signed by Microsoft and shows no warning. The Releases installers are unsigned, so use "More info → Run anyway" or "Unblock" as described above.
 
 **Some characters changed to Malgun Gothic after editing.** A PDF usually embeds only the characters it already uses. New characters that the embedded font lacks are drawn with Malgun Gothic. Use **폰트 맞추기** to pick a closer installed or TTF font.
 
