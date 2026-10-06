@@ -1,13 +1,17 @@
-// README용 실제 렌더 이미지 생성: 편집·마스킹 전/후 (워크스페이스의 가상 회의록 PDF 사용)
+// README용 실제 렌더 이미지 생성: 편집·가리기 전/후 (워크스페이스의 가상 안내문 PDF 사용)
 // node tools/demo-assets.js  → assets/edit-before.png, assets/edit-after.png
+// 예시 문서는 회사 문서처럼 보이지 않도록 「10월 독서 모임 안내」를 쓴다(2026-10-06, 이전 예시는 가상 회의록이었다).
+// 앱과 같은 경로로 고친다: 줄 묶기(groupLines) → 첫 조각에 줄 전체 + 나머지 조각 지우기(applyEdits), 가리기는 글자 제거(redact) + 덮개
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const { open } = require('../app/pdf-engine');
+const { groupLines } = require('../app/text-grouping');
+const { applyEdits } = require('../app/pdf-edit-service');
 
-const SRC = path.join(__dirname, '..', 'workspace', '회의록_초안.pdf');
+const SRC = path.join(__dirname, '..', 'workspace', '독서모임_안내.pdf');
 const OUT = path.join(__dirname, '..', 'assets');
-const SCALE = 2, CROP_H = 0.42; // 위쪽 42%만
+const SCALE = 2, CROP_TOP = 0.055, CROP_H = 0.3; // 위 여백을 빼고 제목·일시·장소·문의·이번 달 책까지만
 
 function png(rgba, w, h, stride) {
   const raw = Buffer.alloc((w * 4 + 1) * h);
@@ -19,35 +23,46 @@ function png(rgba, w, h, stride) {
 }
 async function shot(doc, file) {
   const r = doc._renderRaw(0, SCALE);
-  const h = Math.round(r.h * CROP_H);
-  fs.writeFileSync(path.join(OUT, file), png(r.data, r.w, h, r.stride));
+  const top = Math.round(r.h * CROP_TOP), h = Math.round(r.h * CROP_H);
+  fs.writeFileSync(path.join(OUT, file), png(r.data.subarray(top * r.stride), r.w, h, r.stride));
   console.log(file, r.w + 'x' + h);
 }
+const lineStarting = (doc, prefix) => {
+  const line = groupLines(doc.objects(0)).find((l) => l.text.startsWith(prefix));
+  if (!line) throw new Error(`줄을 찾지 못했습니다: ${prefix}`);
+  return line;
+};
+
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
   const doc = await open(fs.readFileSync(SRC));
   await shot(doc, 'edit-before.png');
-  const objs = doc.objects(0).filter((o) => o.type === 'text');
-  // 1) 제목 "(초안)" → "(확정)": 조각 객체라 "초" "안" 조각을 찾아 첫 조각에 넣고 나머지는 공백
-  const find = (s) => objs.find((o) => o.text.startsWith(s));
-  const cho = find('초'), an = find('안');
-  if (cho && an) { doc.setText(0, cho.idx, '확정'); doc.setText(0, an.idx, ' '); }
-  // 2) "참석:" 줄의 "재무팀장" 마스킹 — 조각 객체를 줄로 묶어 범위를 찾고, 텍스트 제거 + 검은 사각형 (UI의 /api/pdf/mask와 같은 절차)
-  const anchor = objs.find((o) => o.text.includes('참석')) || objs.find((o) => o.text.trim() === '참');
-  const line = objs.filter((o) => Math.abs(o.bounds.y0 - anchor.bounds.y0) < 3).sort((a, b) => a.bounds.x0 - b.bounds.x0);
-  let pos = 0; const spans = line.map((o) => { const s = { o, from: pos, to: pos + o.text.length }; pos += o.text.length; return s; });
-  const full = line.map((o) => o.text).join(''), f = full.indexOf('재무팀장'), t = f + 4;
-  const parts = spans.filter((s) => s.to > f && s.from < t).map((s) => ({ idx: s.o.idx, from: Math.max(0, f - s.from), to: Math.min(s.o.text.length, t - s.from), o: s.o }));
+
+  // 1) 날짜 고치기: "10월 17일" → "10월 24일" (앱의 줄 편집과 같이 첫 조각이 줄 전체를 받고 나머지 조각은 지운다)
+  const when = lineStarting(doc, '일시:');
+  const [first, ...rest] = when.objs;
+  applyEdits(doc, 0, [{ idx: first.idx, text: when.text.replace('10월 17일', '10월 24일') }], { primary: first.idx, remove: rest.map((o) => o.idx) });
+
+  // 2) 연락처 가리기: "010-1234-5678"을 글자에서 지우고 검은 사각형으로 덮는다(UI의 [선택 글자 가리기]와 같은 절차)
+  const ask = lineStarting(doc, '문의:');
+  const from = ask.text.indexOf('010-'), to = from + '010-1234-5678'.length;
+  let off = 0; const parts = [];
+  ask.objs.forEach((o, j) => {
+    const s = off, e = off + o.text.length; off = e + (ask.seps[j] || '').length;
+    const a = Math.max(from, s), b = Math.min(to, e);
+    if (a < b) parts.push({ idx: o.idx, from: a - s, to: b - s });
+  });
   const rects = [];
   for (const p of parts.sort((a, b) => b.idx - a.idx)) {
     const r = doc.redact(0, p.idx, p.from, p.to);
-    if (r.ok) rects.push(...r.rects);
-    else { doc.setText(0, p.idx, ' '); rects.push(p.o.bounds); }
+    if (!r.ok) throw new Error(`가리지 못했습니다(${r.reason})`);
+    rects.push(...r.rects);
   }
+  // 글자마다 따로 덮인 사각형(하이픈은 얇다)을 줄 높이의 상자 하나로 고르게 덮는다 — 글자는 위에서 이미 지워졌다
   const u = rects.reduce((b, r) => ({ x0: Math.min(b.x0, r.x0), y0: Math.min(b.y0, r.y0), x1: Math.max(b.x1, r.x1), y1: Math.max(b.y1, r.y1) }), { x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9 });
-  doc.addRect(0, u, [0, 0, 0, 255]);
-  const count = (s) => s.split('재무팀장').length - 1;
-  console.log('masked parts', parts.length, '| occurrences before', count(full) + 1, 'after', count(doc.pageText(0)), '(결정 사항 줄의 1건은 그대로 둠)');
+  doc.addRect(0, { x0: u.x0 - 1, y0: Math.min(u.y0, ask.bounds.y0) - 1, x1: u.x1 + 1, y1: Math.max(u.y1, ask.bounds.y1) + 1 }, [0, 0, 0, 255]);
+  const text = doc.pageText(0);
+  console.log('edited:', text.includes('10월 24일'), '| phone left in text:', text.includes('010-1234-5678') || text.includes('1234'));
   await shot(doc, 'edit-after.png');
   doc.close();
-})();
+})().catch((e) => { console.error(e); process.exitCode = 1; });

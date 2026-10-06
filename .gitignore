@@ -3,6 +3,8 @@ dist/
 tmp/
 workspace/*
 !workspace/sample.pdf
+!workspace/독서모임_안내.md
+!workspace/독서모임_안내.pdf
 !workspace/회의록_초안.md
 !workspace/회의록_초안.pdf
 .claude/
