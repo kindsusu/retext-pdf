@@ -233,7 +233,8 @@ console.log('OK — CRLF Markdown·여러 조각 줄 폰트 맞추기 단언 통
 
 // 2026-10-03: 앱 이름 Retext PDF(4.0.0). 보이는 이름과 내부 식별자를 모두 새 이름으로 통일했다(기존 사용자 없음 — 호환 코드 없음).
 // Store identityName만 Partner Center가 정한 옛 이름 기반 값이라 그대로 둔다
-assert.strictEqual(pkg.version, '4.0.0', '버전은 4.0.0이다');
+assert.strictEqual(pkg.version, '4.0.1', '버전은 4.0.1이다');
+assert.strictEqual(require('../package-lock.json').version, '4.0.1', 'package-lock.json 버전도 4.0.1이다');
 assert.strictEqual(pkg.productName, 'Retext PDF', 'package.json productName은 Retext PDF다');
 assert.strictEqual(pkg.build.productName, 'Retext PDF', 'build.productName은 Retext PDF다');
 assert.strictEqual(pkg.build.appx.displayName, 'Retext PDF', 'Store 표시 이름은 Retext PDF다');
@@ -259,4 +260,20 @@ assert.match(html, /X-Retext-Pdf-Temp/, '임시 파일 헤더는 X-Retext-Pdf-Te
 assert.match(html, /<title>Retext PDF<\/title>/, 'index.html 제목은 Retext PDF다');
 assert.match(html, /<header><b>Retext PDF<\/b>/, '머리줄 브랜드는 Retext PDF다');
 assert.match(mainSource, /title: `Retext PDF v\$\{/, '창 제목은 Retext PDF vX.Y.Z다');
-console.log('OK — 앱 이름 변경(Retext PDF 4.0.0) 단언 통과');
+console.log('OK — 앱 이름 변경(Retext PDF 4.0.1) 단언 통과');
+
+// 4.0.1: 앱에 동봉해 첫 실행에 복사하는 샘플은 가상 안내문(독서모임_안내.md/.pdf) 두 개뿐이다.
+// sample.pdf(AI 기능 시절 시험 문서)·회의록_초안.*(회사 회의록처럼 보임)은 테스트 픽스처로 저장소에만 남는다
+{
+  const bundled = pkg.build.files.filter((f) => f.startsWith('workspace/'));
+  assert.deepStrictEqual(bundled.sort(), ['workspace/독서모임_안내.md', 'workspace/독서모임_안내.pdf'], 'build.files의 샘플은 독서모임_안내 두 개다');
+  assert.ok(!pkg.build.files.some((f) => /sample\.pdf|회의록/.test(f)), 'build.files에 sample.pdf·회의록이 없다');
+  const copy = serverSource.match(/const BUNDLED_SAMPLES = (\[[^\]]*\])/);
+  assert.ok(copy, 'server.js에 첫 실행 복사 목록(BUNDLED_SAMPLES)이 있다');
+  const list = JSON.parse(copy[1].replace(/'/g, '"'));
+  assert.deepStrictEqual(list.sort(), ['독서모임_안내.md', '독서모임_안내.pdf'], '첫 실행 복사 목록은 독서모임_안내 두 개다');
+  assert.match(serverSource, /for \(const name of BUNDLED_SAMPLES\)/, '기본 작업 폴더는 BUNDLED_SAMPLES를 복사한다');
+  assert.doesNotMatch(serverSource, /'sample\.pdf'|'회의록_초안/, 'server.js에 옛 샘플 이름이 없다');
+  for (const f of list) assert.ok(fs.existsSync(path.join(__dirname, '..', 'workspace', f)), `동봉 샘플 파일이 있다: ${f}`);
+  console.log('OK — 동봉 샘플(독서모임_안내 두 개) 단언 통과');
+}

@@ -1033,13 +1033,35 @@ async function open(buffer) {
       return best ? [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255] : [0, 0, 0, 255];
     },
 
+    // 가림 덮개의 세로 범위(줄 높이). 글자 상자는 글자마다 높이가 달라(독서모임_안내.pdf 11pt 실측: 하이픈 기준선 위 2.8~3.5pt,
+    // 숫자 0~8.2pt, 한글 −1.0~9.5pt) 글자별로 덮으면 들쭉날쭉하다 → 기준선(행렬 f) −0.25em ~ +0.85em 과,
+    // 같은 줄(기준선 차 0.2em 이내·글자 크기 0.8~1.25배)의 글자 객체 상자 합집합(+0.5pt) 중 넓은 쪽. 같은 줄은 따로 가려도 높이가 같다.
+    // 회전·기울임·뒤집힌 객체나 행렬이 없으면 null(호출한 쪽이 글자 상자를 그대로 쓴다). all: 미리 읽은 objects(i)
+    lineBand(i, item, all = api.objects(i)) {
+      const flat = (m) => m && Math.abs(m[1]) <= 0.01 && Math.abs(m[2]) <= 0.01 && m[0] > 0 && m[3] > 0;
+      if (!item || item.type !== 'text' || !flat(item.matrix)) return null;
+      const em = (item.size || 0) * item.matrix[3], y = item.matrix[5], PAD = 0.5;
+      if (!(em > 0)) return null;
+      let y0 = y - 0.25 * em, y1 = y + 0.85 * em;
+      for (const o of all) {
+        if (o.type !== 'text' || o.mask || !o.bounds || !flat(o.matrix) || !(o.text || '').trim()) continue;
+        const oem = (o.size || 0) * o.matrix[3];
+        if (Math.abs(o.matrix[5] - y) > 0.2 * em || !(oem >= 0.8 * em && oem <= 1.25 * em)) continue;
+        if (o.bounds.y1 - o.bounds.y0 > 1.6 * em) continue; // 글리프 상자가 비정상적으로 큰 글꼴(Type3 등)은 줄 높이에 넣지 않는다
+        y0 = Math.min(y0, o.bounds.y0 - PAD); y1 = Math.max(y1, o.bounds.y1 + PAD);
+      }
+      return { y, em, y0, y1 };
+    },
+
     // color: [r,g,b,a] | 'auto'(배경색 추출) | 생략(검정)
     // 겹쳐 그린 사본: InDesign·한글의 가짜 굵게·그림자는 같은 낱말을 같은 자리에 같은 글꼴로 두 번 그린다.
     // PDFium 텍스트 페이지는 뒤 것을 중복으로 보고 빼므로(objects() 텍스트 '', charBoxes 빈 배열) 화면에 안 잡히지만,
     // 보이는 것만 지우면 저장 뒤 더는 중복이 아닌 사본에서 지운 글자가 다시 읽힌다(글리프도 덮개 밑에 남는다).
     // → 같은 글꼴·상자가 큰 쪽의 0.8 이상 겹침·텍스트 ''(또는 같은 텍스트)인 객체를 사본으로 보고,
     //   대상의 텍스트·글자 상자로 같은 자르기를 한다. 인덱스가 밀리지 않게 큰 인덱스부터 처리한다.
-    redact(i, idx, from, to, color) {
+    // opts.draw === false: 덮개를 그리지 않고 영역(rects)과 줄 정보(line: 기준선 y·글자 크기 em)만 돌려준다 —
+    // /api/pdf/mask(pdf-edit-service.maskParts)가 한 요청의 덮개를 줄마다 사각형 하나로 합쳐 그린다(4.0.1)
+    redact(i, idx, from, to, color, opts = {}) {
       return api.batch(() => {
         const p = page(i);
         const o = P.FPDFPage_GetObject(p, idx);
@@ -1085,6 +1107,9 @@ async function open(buffer) {
           if (!cover) cover = { ...item.bounds };
           const PAD = 0.5;
           cover = { x0: cover.x0 - PAD, y0: cover.y0 - PAD, x1: cover.x1 + PAD, y1: cover.y1 + PAD };
+          // 세로는 글자 상자가 아니라 줄 높이로(하이픈은 얇고 숫자·받침 글자는 굵어 글자별 덮개가 들쭉날쭉하다). 줄 정보가 없으면 글자 상자 그대로
+          const band = api.lineBand(i, item, all);
+          if (band) cover = { ...cover, y0: Math.min(cover.y0, band.y0), y1: Math.max(cover.y1, band.y1) };
 
           const prefix = text.slice(0, from), suffix = text.slice(to);
           // 상자 기준 상대 이동량. e 는 펜 시작점이라 첫 글자 상자 x0 와 lsb 만큼 어긋나므로
@@ -1126,9 +1151,9 @@ async function open(buffer) {
             if (!okPre) return { ok: false, reason: 'prefix' };
           }
 
-          api.addRect(i, cover, color === 'auto' ? api.sampleColor(i, cover) : (color || [0, 0, 0, 255]));
+          if (opts.draw !== false) api.addRect(i, cover, color === 'auto' ? api.sampleColor(i, cover) : (color || [0, 0, 0, 255]));
           regen(p);
-          return { ok: true, rects: [cover], inserted, ...(twins.length ? { twins: twins.length } : {}) };
+          return { ok: true, rects: [cover], inserted, ...(band ? { line: { y: band.y, em: band.em } } : {}), ...(twins.length ? { twins: twins.length } : {}) };
         } finally { free(scratch); }
       });
     },

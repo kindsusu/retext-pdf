@@ -853,6 +853,33 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     console.log('redact 뒷부분 스타일 유지 OK');
   }
 
+  // --- 4.0.1 redact 덮개 높이: 글자 상자가 아니라 줄 높이(lineBand). draw:false는 그리지 않고 영역·줄 정보만 돌려준다 ---
+  {
+    const d = await open(fs.readFileSync(path.join(WS, '독서모임_안내.pdf')));
+    const objs = d.objects(0), dash = objs.find((o) => o.text === '-');
+    const same = (t) => objs.find((o) => o.text === t && Math.abs(o.origin.y - dash.origin.y) < 0.1);
+    const zero = same('0'), five = same('5'), masks0 = objs.filter((o) => o.mask).length;
+    assert.ok(dash.bounds.y1 - dash.bounds.y0 < 1 && zero.bounds.y1 - zero.bounds.y0 > 8, '하이픈 글자 상자는 얇고 숫자는 굵다(시험 전제)');
+    const band = d.lineBand(0, dash, objs), em = dash.size * dash.matrix[3];
+    assert.ok(band && Math.abs(band.y - dash.origin.y) < 0.01 && band.y0 <= band.y - 0.25 * em && band.y1 >= band.y + 0.85 * em, `줄 높이: ${JSON.stringify(band)}`);
+    // 인덱스가 밀리지 않게 뒤에서부터(하이픈 → 0)
+    const a = d.redact(0, dash.idx, 0, 1, undefined, { draw: false }), b = d.redact(0, zero.idx, 0, 1, undefined, { draw: false });
+    assert.ok(a.ok && b.ok && a.line && b.line, JSON.stringify([a, b]));
+    assert.strictEqual(d.objects(0).filter((o) => o.mask).length, masks0, 'draw:false는 덮개를 그리지 않는다');
+    const h = (r) => r.rects[0].y1 - r.rects[0].y0;
+    assert.ok(Math.abs(h(a) - h(b)) < 0.01 && Math.abs(a.rects[0].y0 - band.y0) < 0.01, `하이픈·숫자 덮개 높이가 같다: ${h(a)} / ${h(b)}`);
+    assert.deepStrictEqual([d.objects(0)[dash.idx].text.trim(), d.objects(0)[zero.idx].text.trim()], ['', ''], '글자는 그대로 지워진다');
+    const c = d.redact(0, five.idx, 0, 1); // 기본: 줄 높이 덮개를 그린다
+    assert.ok(c.ok && Math.abs(h(c) - h(a)) < 0.01, `기본 redact 덮개도 같은 높이: ${h(c)}`);
+    assert.strictEqual(d.objects(0).filter((o) => o.mask).length, masks0 + 1, '기본 redact는 덮개 1개');
+    d.close();
+    // 회전 글자는 줄 정보 없음(호출한 쪽이 글자 상자 그대로 덮는다)
+    const rot = await open(mkPdf({ content: 'BT /F1 12 Tf 0 1 -1 0 100 100 Tm (ROT) Tj ET' }));
+    assert.strictEqual(rot.lineBand(0, rot.objects(0)[0]), null, '회전 글자는 lineBand null');
+    rot.close();
+    console.log(`redact 줄 높이 덮개 OK — 하이픈 글자 상자 ${(dash.bounds.y1 - dash.bounds.y0).toFixed(2)}pt → 덮개 ${h(a).toFixed(2)}pt`);
+  }
+
   // --- 픽셀 샘플링: /Rotate·CropBox가 있어도 같은 페이지 좌표의 색을 읽는다 ---
   {
     const content = '1 0 0 rg 150 150 60 40 re f\n0 0 1 rg 230 260 30 30 re f\n0 g BT /F1 14 Tf 60 330 Td (INK) Tj ET';

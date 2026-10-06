@@ -1,13 +1,14 @@
 // README용 실제 렌더 이미지 생성: 편집·가리기 전/후 (워크스페이스의 가상 안내문 PDF 사용)
 // node tools/demo-assets.js  → assets/edit-before.png, assets/edit-after.png
 // 예시 문서는 회사 문서처럼 보이지 않도록 「10월 독서 모임 안내」를 쓴다(2026-10-06, 이전 예시는 가상 회의록이었다).
-// 앱과 같은 경로로 고친다: 줄 묶기(groupLines) → 첫 조각에 줄 전체 + 나머지 조각 지우기(applyEdits), 가리기는 글자 제거(redact) + 덮개
+// 앱과 같은 경로로 고친다: 줄 묶기(groupLines) → 첫 조각에 줄 전체 + 나머지 조각 지우기(applyEdits),
+// 가리기는 /api/pdf/mask와 같은 maskParts(글자 제거 + 줄마다 고른 덮개 하나)
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const { open } = require('../app/pdf-engine');
 const { groupLines } = require('../app/text-grouping');
-const { applyEdits } = require('../app/pdf-edit-service');
+const { applyEdits, maskParts } = require('../app/pdf-edit-service');
 
 const SRC = path.join(__dirname, '..', 'workspace', '독서모임_안내.pdf');
 const OUT = path.join(__dirname, '..', 'assets');
@@ -52,17 +53,10 @@ const lineStarting = (doc, prefix) => {
     const a = Math.max(from, s), b = Math.min(to, e);
     if (a < b) parts.push({ idx: o.idx, from: a - s, to: b - s });
   });
-  const rects = [];
-  for (const p of parts.sort((a, b) => b.idx - a.idx)) {
-    const r = doc.redact(0, p.idx, p.from, p.to);
-    if (!r.ok) throw new Error(`가리지 못했습니다(${r.reason})`);
-    rects.push(...r.rects);
-  }
-  // 글자마다 따로 덮인 사각형(하이픈은 얇다)을 줄 높이의 상자 하나로 고르게 덮는다 — 글자는 위에서 이미 지워졌다
-  const u = rects.reduce((b, r) => ({ x0: Math.min(b.x0, r.x0), y0: Math.min(b.y0, r.y0), x1: Math.max(b.x1, r.x1), y1: Math.max(b.y1, r.y1) }), { x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9 });
-  doc.addRect(0, { x0: u.x0 - 1, y0: Math.min(u.y0, ask.bounds.y0) - 1, x1: u.x1 + 1, y1: Math.max(u.y1, ask.bounds.y1) + 1 }, [0, 0, 0, 255]);
+  const masked = maskParts(doc, 0, parts);
+  if (!masked.ok || masked.skipped.length) throw new Error(`가리지 못했습니다(${JSON.stringify(masked.skipped)})`);
   const text = doc.pageText(0);
-  console.log('edited:', text.includes('10월 24일'), '| phone left in text:', text.includes('010-1234-5678') || text.includes('1234'));
+  console.log('edited:', text.includes('10월 24일'), '| phone left in text:', text.includes('010-1234-5678') || text.includes('1234'), '| covers:', masked.rects.length);
   await shot(doc, 'edit-after.png');
   doc.close();
 })().catch((e) => { console.error(e); process.exitCode = 1; });

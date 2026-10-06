@@ -12,13 +12,16 @@ const CONF = path.join(os.homedir(), '.retext-pdf.json');
 const pdfEngine = require('./pdf-engine');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
-const { applyEdits, verifyEdits } = require('./pdf-edit-service');
+const { applyEdits, verifyEdits, maskParts } = require('./pdf-edit-service');
 const APP_VERSION = require('../package.json').version;
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 // 기본 작업 폴더. 패키징된 앱에서는 __dirname이 app.asar 안이라 소스 옆 workspace는 읽기만 되고 저장이 실패한다
 // → 사용자 문서 폴더 아래 Retext PDF를 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
 const SAMPLES = path.join(ROOT, '..', 'workspace');
+// 앱에 동봉해 첫 실행에 복사하는 샘플(package.json build.files와 같은 목록). 회사 문서처럼 보이지 않는 가상 안내문만 넣는다(4.0.1).
+// workspace의 sample.pdf·회의록_초안.*은 테스트 픽스처로만 저장소에 남는다
+const BUNDLED_SAMPLES = ['독서모임_안내.md', '독서모임_안내.pdf'];
 const PACKAGED = /[\\/]app\.asar[\\/]/i.test(ROOT);
 function defaultWorkspace() {
   if (!PACKAGED) return SAMPLES;
@@ -28,7 +31,7 @@ function defaultWorkspace() {
     try {
       if (!fs.existsSync(dir)) { // 사용자가 지운 샘플을 되살리지 않도록 폴더가 없을 때만 복사
         fs.mkdirSync(dir, { recursive: true });
-        for (const name of ['sample.pdf', '회의록_초안.md', '회의록_초안.pdf']) {
+        for (const name of BUNDLED_SAMPLES) {
           try { fs.copyFileSync(path.join(SAMPLES, name), path.join(dir, name)); } catch {}
         }
       }
@@ -752,34 +755,10 @@ const server = http.createServer(async (req, res) => {
       const { name, i, parts, fallbackRects, color } = await readJson(req);
       if (!Array.isArray(parts)) return json(res, 400, { error: '가릴 글자를 고르세요' });
       const entry = await getEditableDoc(name);
-      const rects = [], skipped = [];
-      const colFor = (b) => (color === 'auto' ? entry.doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
-      // 하나라도 가렸으면 성공(건너뛴 조각은 skipped로 알린다). 아무것도 못 가렸으면 ok:false — 문서·스택은 그대로
-      const r = await mutate(entry, i, () => {
-        // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
-        const sorted = [...parts].sort((a, b) => b.idx - a.idx);
-        for (const { idx, from, to } of sorted) {
-          const r = entry.doc.redact(i, idx, from, to, color === 'auto' ? 'auto' : (color || undefined));
-          if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 사각형을 얹었다
-          // 글자 단위로 못 자르는 객체(조각 텍스트 charmap, 회전·기울임 rotated): 객체 전체를 공백으로 지우고 상자를 따로 덮는다
-          if (r.reason === 'charmap' || r.reason === 'rotated') {
-            const obj = entry.doc.objects(i)[idx];
-            const col = obj && obj.bounds ? colFor(obj.bounds) : null; // 글자를 지우기 전에 색을 잰다
-            const cleared = entry.doc.setText(i, idx, ' ');
-            if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
-            // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
-            // _setOneRaw는 객체 자리를 유지한다(setText는 투명 사본을 드러내며 맨 뒤로 옮겨 남은 parts의 인덱스를 민다)
-            for (const j of r.twins || []) {
-              const t = entry.doc._setOneRaw(i, j, ' ');
-              if (!t?.ok) skipped.push({ idx: j, reason: t?.reason || 'twin' });
-            }
-            if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, col); rects.push(obj.bounds); }
-          } else skipped.push({ idx, reason: r.reason });
-        }
-        for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, colFor(b)); rects.push(b); }
-        return { ok: rects.length > 0 };
-      });
-      return json(res, 200, { ok: r.ok, rects: r.ok ? rects : [], skipped, textLeft: entry.doc.pageText(i), ...stacks(entry) });
+      // 글자 제거 + 줄마다 덮개 하나(pdf-edit-service.maskParts). 하나라도 가렸으면 성공(건너뛴 조각은 skipped로 알린다).
+      // 아무것도 못 가렸으면 ok:false — mutate가 문서를 되돌리고 스택은 그대로. 서버 라우트 하나 = 스냅샷 하나라 실행 취소 한 번
+      const r = await mutate(entry, i, () => maskParts(entry.doc, i, parts, { color, fallbackRects }));
+      return json(res, 200, { ok: r.ok, rects: r.ok ? r.rects : [], skipped: r.skipped, textLeft: entry.doc.pageText(i), ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/undo' && req.method === 'POST') {
       const { name } = await readJson(req);

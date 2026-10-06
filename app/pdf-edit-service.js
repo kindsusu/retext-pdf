@@ -101,4 +101,54 @@ function verifyEdits(doc, i, edits, results, { primary } = {}) {
   return drop.length;
 }
 
-module.exports = { applyEdits, verifyEdits };
+// 한 번의 가리기 요청에서 같은 줄(기준선 차 0.2em 이내·글자 크기 차 10% 이내)에 속한 덮개를 사각형 하나로 합친다:
+// 가로는 가린 첫 글자 왼쪽 ~ 마지막 글자 오른쪽(사이 틈 포함), 세로는 줄 높이(엔진 lineBand). 줄 정보가 없는 덮개(회전·기울임 글자)는 그대로
+function mergeLineCovers(covers) {
+  const lines = [], loose = [];
+  for (const { rect, line } of covers) {
+    if (!line) { loose.push(rect); continue; }
+    const near = (g) => Math.abs(g.y - line.y) <= 0.2 * Math.max(g.em, line.em) && Math.abs(g.em - line.em) <= 0.1 * Math.max(g.em, line.em);
+    const g = lines.find(near);
+    if (!g) { lines.push({ y: line.y, em: line.em, rect: { ...rect } }); continue; }
+    const r = g.rect;
+    g.rect = { x0: Math.min(r.x0, rect.x0), y0: Math.min(r.y0, rect.y0), x1: Math.max(r.x1, rect.x1), y1: Math.max(r.y1, rect.y1) };
+  }
+  return [...lines.map((g) => g.rect), ...loose];
+}
+
+// 가리기(/api/pdf/mask와 tools/demo-assets.js가 같이 쓴다). parts: [{ idx, from, to }] — 글자를 텍스트에서 실제로 지우고(redact),
+// 덮개는 다 지운 뒤 줄마다 하나씩 그린다(4.0.1 이전에는 글자·조각마다 따로 그려 높이가 들쭉날쭉했다).
+// 하나라도 가렸으면 ok:true(건너뛴 조각은 skipped). 아무것도 못 가렸으면 ok:false — 호출한 쪽(mutate)이 문서를 되돌린다
+function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
+  const covers = [], skipped = [], rects = [];
+  const colFor = (b) => (color === 'auto' ? doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
+  // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
+  const sorted = [...parts].sort((a, b) => b.idx - a.idx);
+  for (const { idx, from, to } of sorted) {
+    const r = doc.redact(i, idx, from, to, undefined, { draw: false });
+    if (r.ok) { covers.push({ rect: r.rects[0], line: r.line }); continue; }
+    // 글자 단위로 못 자르는 객체(조각 텍스트 charmap, 회전·기울임 rotated): 객체 전체를 공백으로 지우고 상자를 따로 덮는다
+    if (r.reason === 'charmap' || r.reason === 'rotated') {
+      const all = doc.objects(i), obj = all[idx];
+      const band = obj && obj.bounds ? doc.lineBand(i, obj, all) : null; // 글자를 지우기 전에 줄 높이를 잰다
+      const cleared = doc.setText(i, idx, ' ');
+      if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
+      // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
+      // _setOneRaw는 객체 자리를 유지한다(setText는 투명 사본을 드러내며 맨 뒤로 옮겨 남은 parts의 인덱스를 민다)
+      for (const j of r.twins || []) {
+        const t = doc._setOneRaw(i, j, ' ');
+        if (!t?.ok) skipped.push({ idx: j, reason: t?.reason || 'twin' });
+      }
+      if (obj && obj.bounds) {
+        const b = obj.bounds;
+        covers.push(band ? { rect: { x0: b.x0, x1: b.x1, y0: Math.min(b.y0, band.y0), y1: Math.max(b.y1, band.y1) }, line: { y: band.y, em: band.em } } : { rect: b });
+      }
+    } else skipped.push({ idx, reason: r.reason });
+  }
+  // 덮개 색은 글자를 다 지운 뒤 합친 상자에서 잰다('auto')
+  for (const b of mergeLineCovers(covers)) { doc.addRect(i, b, colFor(b)); rects.push(b); }
+  for (const b of fallbackRects || []) { doc.addRect(i, b, colFor(b)); rects.push(b); }
+  return { ok: rects.length > 0, rects, skipped };
+}
+
+module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers };

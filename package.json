@@ -1,7 +1,7 @@
 {
   "name": "retext-pdf",
   "productName": "Retext PDF",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Local PDF and Markdown editor with true text editing and redaction",
   "main": "app/main.js",
   "scripts": {
@@ -28,9 +28,8 @@
     "files": [
       "app/**",
       "package.json",
-      "workspace/sample.pdf",
-      "workspace/회의록_초안.md",
-      "workspace/회의록_초안.pdf",
+      "workspace/독서모임_안내.md",
+      "workspace/독서모임_안내.pdf",
       "LICENSE"
     ],
     "asar": true,
