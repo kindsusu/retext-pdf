@@ -25,6 +25,8 @@ function pathsFromArgv(argv) {
 }
 
 function main() {
+  // 도장 보관함 등 앱 데이터 폴더. 서버 모듈을 읽기 전에 정한다(stamp-store가 이 값을 쓴다). 시험·개발에서 미리 정했으면 그대로
+  if (!process.env.RETEXTPDF_DATA) process.env.RETEXTPDF_DATA = app.getPath('userData');
   const { ready } = require('./server.js');
   let win = null, rendererReady = false, pendingPaths = [];
   // 렌더러가 아직 준비 전(첫 로드 중)이면 파일 목록을 큐에 쌓아뒀다가 did-finish-load 뒤에 보낸다
@@ -49,7 +51,7 @@ function main() {
     try { port = await ready; } // 기본 4747이 사용 중이면 서버가 다음 포트로 옮긴다
     catch (e) { dialog.showErrorBox('Retext PDF를 시작할 수 없습니다', `로컬 서버를 열지 못했습니다.\n${e.message}`); app.quit(); return; }
     win = new BrowserWindow({
-      width: 1400, height: 900, title: `Retext PDF v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#1b1b1f',
+      width: 1400, height: 900, title: `Retext PDF v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#fbf9f4',
       webPreferences: { preload: path.join(__dirname, 'preload.js') },
     });
     const appUrl = `http://localhost:${port}`;
@@ -112,6 +114,35 @@ function main() {
       }
       const r = await dialog.showSaveDialog(win, { defaultPath, filters, title: '다른 이름으로 저장' });
       return r.canceled ? null : r.filePath;
+    });
+
+    // P7 인쇄: { name, pages?:[0 기준 쪽 번호] } → { ok:true } | { ok:false, cancelled:true } | { error, needPassword? }
+    // 숨은 창으로 서버의 인쇄용 HTML(/api/pdf/print-html — 쪽마다 약 200dpi 그림, 쪽 크기별 @page)을 열고
+    // 그림이 다 디코딩되면(window.printReady) 시스템 인쇄 대화상자를 띄운다. 서버의 열린 문서를 그리므로 저장 안 한 편집도 인쇄된다.
+    // 끝나면(인쇄·취소·오류 모두) 창을 닫는다. 같은 HTML을 printToPDF로 확인한 결과는 보고서 참고(세로·가로 섞인 문서의 쪽 크기)
+    let printing = false;
+    ipcMain.handle('print', async (_e, opts) => {
+      const { name, pages } = opts || {};
+      if (!name) return { error: '인쇄할 문서가 없습니다.' };
+      if (printing) return { error: '이미 인쇄를 준비하고 있습니다.' };
+      const q = new URLSearchParams({ name });
+      if (Array.isArray(pages) && pages.length) q.set('pages', pages.map(Number).join(','));
+      const url = `${appUrl}/api/pdf/print-html?${q}`;
+      printing = true;
+      let pw = null;
+      try {
+        // 먼저 서버 응답을 확인한다 — 잠긴 문서(401)·없는 쪽(400)이면 창을 띄우지 않고 이유를 돌려준다
+        const head = await fetch(url);
+        if (!head.ok) { const err = await head.json().catch(() => ({})); return { error: err.error || `인쇄 준비 실패 (${head.status})`, ...(err.needPassword ? { needPassword: true } : {}) }; }
+        pw = new BrowserWindow({ show: false, parent: win, webPreferences: { sandbox: true } });
+        await pw.loadURL(url);
+        const ready = await pw.webContents.executeJavaScript('window.printReady || false');
+        if (ready !== true) return { error: '쪽 그림을 준비하지 못했습니다. 다시 시도하세요.' };
+        const r = await new Promise((resolve) => pw.webContents.print({ silent: false, printBackground: true }, (success, reason) => resolve({ success, reason })));
+        if (r.success) return { ok: true };
+        return /cancel/i.test(r.reason || '') ? { ok: false, cancelled: true } : { error: r.reason || '인쇄하지 못했습니다.' };
+      } catch (e) { return { error: e.message }; }
+      finally { printing = false; if (pw && !pw.isDestroyed()) pw.destroy(); }
     });
 
     // 닫을 때 미저장이면 네 가지 중 선택. 저장은 렌더러의 window.retextPdfSave / retextPdfSaveAs가 수행하고 성공 여부(true/false)를 돌려준다

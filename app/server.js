@@ -10,9 +10,13 @@ const MARKED_BROWSER = path.join(path.dirname(require.resolve('marked')), 'marke
 const DOMPURIFY_BROWSER = path.join(path.dirname(require.resolve('dompurify')), 'purify.min.js');
 const CONF = path.join(os.homedir(), '.retext-pdf.json');
 const pdfEngine = require('./pdf-engine');
+const pdfEncrypt = require('./pdf-encrypt');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
 const { applyEdits, verifyEdits, maskParts } = require('./pdf-edit-service');
+const { jpegSize, decodePng, sniff, MIME } = require('./image-util');
+const stamps = require('./stamp-store');
+const { buildPrintHtml } = require('./print-html');
 const APP_VERSION = require('../package.json').version;
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
@@ -48,20 +52,45 @@ const httpError = (status, message) => Object.assign(new Error(message), { statu
 // 캐시 키: 상대·절대 표기가 달라도 같은 파일이면 한 항목(Windows는 대소문자 무시)
 const docKey = (name) => { const p = safe(name); return process.platform === 'win32' ? p.toLowerCase() : p; };
 
+// ── 암호 PDF ───────────────────────────────────────────────────────────────
+// 여는 암호가 걸린 파일은 /api/pdf/unlock {name, password}로 연다. 그 전까지 이 파일을 쓰는 PDF 요청은 모두
+// 401 { error, needPassword:true, wrong } (wrong = 암호를 받았는데 틀림). 암호는 메모리의 캐시 항목(entry.password)에만 두고
+// 디스크·설정에 쓰지 않는다 — 문서를 닫으면(dropDoc) 항목과 함께 사라진다. 디스크 파일이 바뀌어 다시 열 때만 다시 쓴다.
+// entry.security는 처음 연 파일의 보안 정보 { encrypted, openPassword, restricted }. 엔진 저장 바이트는 암호가 풀린 문서라
+// 실행 취소로 바꿔 끼운 문서는 암호가 없지만 "원본 파일이 암호 문서"라는 사실은 이 값으로 남긴다(덮어쓰기 저장 확인용)
+const PLAIN = { encrypted: false, openPassword: false, restricted: false };
+async function openPdf(bytes, password) {
+  try { return await pdfEngine.open(bytes, password); }
+  catch (e) {
+    // AES-256 암호는 SASLprep(≈NFKC)한 UTF-8로 만든다(Acrobat·이 앱의 /api/pdf/protect). PDFium은 받은 그대로 비교하므로
+    // 정규화로 바뀌는 암호(전각 문자 등)가 틀리면 정규화본으로 한 번 더 열어 본다
+    const alt = e.code === 'PASSWORD_WRONG' && typeof password === 'string' ? pdfEncrypt.normalizePassword(password) : null;
+    if (alt && alt !== password) {
+      try { return await pdfEngine.open(bytes, alt); } catch (e2) { if (e2.code !== 'PASSWORD_WRONG') throw e2; }
+    }
+    if (e.code !== 'PASSWORD_REQUIRED' && e.code !== 'PASSWORD_WRONG') throw e;
+    throw Object.assign(httpError(401, e.message), { extra: { needPassword: true, wrong: e.code === 'PASSWORD_WRONG' } });
+  }
+}
+const newEntry = (doc, mtimeMs, password) => ({ doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false,
+  security: { ...(doc.security || PLAIN) }, ...(password ? { password } : {}) });
+
 // 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다.
 // 미저장 편집이 있으면(또는 긴 작업 중이면) 다시 열지 않는다 — 편집과 실행 취소 기록을 지키고
 // externalChange로 "디스크의 파일이 바뀌었다"만 알린다(OneDrive 동기화·백신이 mtime을 바꾸는 경우). 저장하면 풀린다.
-async function getPdfDoc(name) {
+// password: /api/pdf/unlock이 넘긴다(처음 열기). 다시 열 때는 캐시 항목이 기억한 암호를 쓴다
+async function getPdfDoc(name, password) {
   const p = safe(name), key = docKey(name), cached = pdfDocs[key];
   let mtimeMs;
   try { mtimeMs = fs.statSync(p).mtimeMs; } // 미저장 편집 중 파일이 사라져도(동기화가 옮김) 편집은 남겨 저장할 수 있게 한다
   catch (e) { if (cached?.dirty) { cached.externalChange = true; return cached; } throw e; }
   if (cached && cached.mtimeMs === mtimeMs) return cached;
   if (cached && (cached.dirty || cached.busy)) { if (cached.dirty) cached.externalChange = true; return cached; }
+  const pw = password || cached?.password;
   if (cached) { delete pdfDocs[key]; cached.doc.close(); } // 다시 열기가 실패해도 닫힌 문서가 캐시에 남지 않게 먼저 뺀다
-  const doc = await pdfEngine.open(fs.readFileSync(p));
+  const doc = await openPdf(fs.readFileSync(p), pw);
   if (pdfDocs[key]) { doc.close(); return pdfDocs[key]; } // 같은 파일을 동시에 연 다른 요청이 먼저 넣었다
-  return (pdfDocs[key] = { doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false });
+  return (pdfDocs[key] = newEntry(doc, mtimeMs, doc.security?.openPassword ? pw : null));
 }
 // 문서를 바꾸는 요청용: 긴 작업이 같은 문서를 쓰는 중이면 409. 끼어들면 작업의 되돌리기·스냅샷이 엉킨다.
 // 긴 작업 라우트는 이것으로 문서를 얻은 뒤 (await 없이) entry.busy = true, finally에서 푼다
@@ -289,24 +318,34 @@ function isTempPath(p) {
 function isReadOnlyPath(p) {
   try { fs.accessSync(p, fs.constants.W_OK); return false; } catch { return true; }
 }
-// JPEG의 SOF0/SOF2(비-차등, 허프만) 마커에서 픽셀 크기를 읽는다(이미지 삽입 시 종횡비 유지용). 못 찾으면 null.
-// 마커 포맷: 0xFF 0xC0~0xCF(단, C4/C8/CC 제외) 뒤에 length(2B) + precision(1B) + height(2B) + width(2B)
-function jpegSize(buf) {
-  if (!(buf[0] === 0xff && buf[1] === 0xd8)) return null;
-  let off = 2;
-  while (off + 9 < buf.length) {
-    if (buf[off] !== 0xff) { off++; continue; }
-    const marker = buf[off + 1];
-    if (marker === 0xff) { off++; continue; } // 채움 바이트
-    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { off += 2; continue; }
-    if (marker === 0xd9) break; // EOI
-    const len = buf.readUInt16BE(off + 2);
-    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      return { height: buf.readUInt16BE(off + 5), width: buf.readUInt16BE(off + 7) };
-    }
-    off += 2 + len;
+// 이미지 바이트 → insertImage가 받는 모양 { image, width, height }. JPEG는 그대로(DCTDecode), PNG는 RGBA로 풀어 투명을 살린다.
+// PNG 풀기는 image-util(node:zlib) — 못 푸는 PNG(인터레이스)는 Electron이면 nativeImage로 한 번 더 시도한다
+function imageForPdf(data) {
+  const type = sniff(data);
+  if (type === 'jpeg') {
+    const size = jpegSize(data);
+    if (!size) throw httpError(400, 'JPEG 크기를 읽을 수 없습니다');
+    return { image: { kind: 'jpeg', data }, width: size.width, height: size.height };
   }
-  return null;
+  if (type !== 'png') throw httpError(400, '지원하지 않는 이미지 형식입니다 (PNG/JPEG만 가능)');
+  try {
+    const png = decodePng(data);
+    return { image: { kind: 'rgba', data: png.data, width: png.width, height: png.height }, width: png.width, height: png.height };
+  } catch (e) {
+    if (!process.versions.electron) throw httpError(400, e.message);
+    const img = require('electron').nativeImage.createFromBuffer(data);
+    const { width, height } = img.getSize();
+    if (!width || !height) throw httpError(400, '이미지를 읽을 수 없습니다');
+    const bgra = img.toBitmap(), rgba = Buffer.alloc(bgra.length); // BGRA → RGBA
+    for (let k = 0; k < bgra.length; k += 4) { rgba[k] = bgra[k + 2]; rgba[k + 1] = bgra[k + 1]; rgba[k + 2] = bgra[k]; rgba[k + 3] = bgra[k + 3]; }
+    return { image: { kind: 'rgba', data: rgba, width, height }, width, height };
+  }
+}
+// 상자를 안 주면 쪽 가운데에 폭 frac(쪽 폭 비율)로, 이미지 종횡비를 지켜 놓는다
+function defaultBox(doc, i, imgW, imgH, frac) {
+  const { w: pw, h: ph } = doc.pageSize(i);
+  const boxW = pw * frac, boxH = boxW * (imgH / imgW);
+  return { x: (pw - boxW) / 2, y: (ph - boxH) / 2, w: boxW, h: boxH };
 }
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 // 요청 본문을 Buffer로 모은다. 조각마다 따로 UTF-8로 풀면 조각 경계에 걸린 한글이 깨진다(U+FFFD) → 다 모아 한 번에 푼다.
@@ -397,8 +436,16 @@ const server = http.createServer(async (req, res) => {
       const p = safe(name);
       return json(res, 200, {
         pages: Array.from({ length: entry.doc.pageCount }, (_, i) => entry.doc.pageSize(i)), dirty: entry.dirty,
-        temp: isTempPath(p), readOnly: isReadOnlyPath(p), ...stacks(entry),
+        temp: isTempPath(p), readOnly: isReadOnlyPath(p), security: entry.security || PLAIN, ...stacks(entry),
       });
+    }
+    // P7: 여는 암호가 걸린 PDF 열기. 맞으면 보통 열기처럼 캐시에 넣고(암호는 메모리에만) info와 같은 security를 준다.
+    // 틀리면 401 { needPassword:true, wrong:true }. 이미 열려 있으면 그대로 ok
+    if (url.pathname === '/api/pdf/unlock' && req.method === 'POST') {
+      const { name, password } = await readJson(req);
+      if (typeof password !== 'string' || !password) return json(res, 400, { error: '암호를 입력하세요' });
+      const entry = await getPdfDoc(name, password);
+      return json(res, 200, { ok: true, pageCount: entry.doc.pageCount, security: entry.security || PLAIN });
     }
     if (url.pathname === '/api/pdf/page' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
@@ -449,7 +496,7 @@ const server = http.createServer(async (req, res) => {
       entry.busy = true;
       try {
         await tick();
-        if (!progress(job, { message: '페이지 삭제 중' })) return json(res, 200, { cancelled: true, ...stacks(entry) }); // 아직 아무것도 바꾸지 않았다
+        if (!progress(job, { message: '쪽 지우는 중' })) return json(res, 200, { cancelled: true, ...stacks(entry) }); // 아직 아무것도 바꾸지 않았다
         const r = await mutate(entry, null, () => entry.doc.deletePages(indices));
         progress(job, { done: 1 });
         return json(res, 200, { ...r, ...stacks(entry) });
@@ -468,6 +515,96 @@ const server = http.createServer(async (req, res) => {
       const entry = await getEditableDoc(name);
       const r = await mutate(entry, null, () => entry.doc.reorderPages(order));
       return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    // ── P7: 빈 쪽·복제·다른 PDF 끼우기 · 쪽 번호 — 모두 문서 전체 스냅샷(page:null) 하나 = 실행 취소 한 번, 응답에 reloadAll ──
+    if (url.pathname === '/api/pdf/pages/blank' && req.method === 'POST') { // at 자리에 빈 쪽. width·height를 안 주면 옆 쪽 크기
+      const { name, at, width, height } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.insertBlankPage(at, width, height));
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/pages/duplicate' && req.method === 'POST') { // 각 쪽의 사본을 바로 뒤에. pages: 사본의 최종 인덱스
+      const { name, pages } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.duplicatePages(pages));
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/pages/insert-pdf' && req.method === 'POST') { // path: 다른 PDF(절대경로 또는 작업 폴더 상대). 암호 걸린 원본은 400
+      const { name, at, path: src } = await readJson(req);
+      if (!src) return json(res, 400, { error: '끼울 PDF를 고르세요' });
+      const entry = await getEditableDoc(name);
+      const file = safe(src);
+      if (!fs.existsSync(file)) return json(res, 404, { error: '끼울 PDF를 찾을 수 없습니다' });
+      const bytes = fs.readFileSync(file);
+      let r;
+      try { r = await mutate(entry, null, () => entry.doc.insertPdf(at, bytes)); }
+      catch (e) { if (e.code === 'SOURCE_ENCRYPTED') throw Object.assign(httpError(400, e.message), { extra: { sourceEncrypted: true } }); throw e; }
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/page-numbers' && req.method === 'POST') { // 다시 부르면 옛 번호를 바꿔 끼운다(RetextPdfPageNum 마크)
+      const { name, format, position, size, margin, startAt, skipFirst, color, font } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.addPageNumbers({ format, position, size, margin, startAt, skipFirst, color, fontId: font }));
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/page-numbers/remove' && req.method === 'POST') { // 지울 번호가 없으면 ok:false(스냅샷도 없음)
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.removePageNumbers());
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    // P7: 글상자 — 빈 자리에 새 글자. x·y는 상자 왼쪽 위(PDF 사용자 좌표). idxs의 객체는 이후 /api/pdf/edit 등 줄 편집으로 고칠 수 있다
+    if (url.pathname === '/api/pdf/textbox' && req.method === 'POST') {
+      const { name, i, x, y, text, font, size, color } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.addTextBox(i, { x, y, text, fontId: font, size, color }));
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    // P7: 인쇄용 HTML(main.js 'print'가 숨은 창으로 연다). pages=0,2,5 (생략하면 전체). 저장하지 않은 편집까지 그린다
+    if (url.pathname === '/api/pdf/print-html' && req.method === 'GET') {
+      const name = url.searchParams.get('name');
+      const { doc } = await getPdfDoc(name);
+      const want = (url.searchParams.get('pages') || '').split(',').filter((s) => s.trim() !== '').map(Number);
+      const list = (want.length ? want : Array.from({ length: doc.pageCount }, (_, i) => i)).filter((i) => Number.isInteger(i) && i >= 0 && i < doc.pageCount);
+      if (!list.length) return json(res, 400, { error: '인쇄할 쪽이 없습니다' });
+      const html = buildPrintHtml({ name, pages: list.map((i) => { const s = doc.pageSize(i); return { i, w: s.w, h: s.h }; }) });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(html);
+    }
+    // ── P7: 도장 보관함(앱 데이터 폴더, 문서와 무관하게 다시 쓴다) ──
+    if (url.pathname === '/api/stamps' && req.method === 'GET') return json(res, 200, stamps.list());
+    if (url.pathname === '/api/stamps/image' && req.method === 'GET') {
+      const { meta, data } = stamps.get(url.searchParams.get('id'));
+      res.writeHead(200, { 'Content-Type': MIME[meta.type], 'Cache-Control': 'no-store' });
+      return res.end(data);
+    }
+    // 넣기: JSON { name, data(base64) } 또는 { name, path(이미지 파일) }, 아니면 본문 = 이미지 바이트 + ?name=
+    if (url.pathname === '/api/stamps' && req.method === 'POST') {
+      const raw = await body(req);
+      let name = url.searchParams.get('name'), data = raw;
+      if (/json/i.test(req.headers['content-type'] || '') || raw[0] === 0x7b) { // '{'
+        let q; try { q = JSON.parse(raw.toString('utf8')); } catch { throw httpError(400, '요청 형식이 잘못됐습니다 (JSON)'); }
+        name = q.name ?? name;
+        if (q.path) {
+          const file = safe(q.path);
+          if (fs.statSync(file).size > stamps.MAX_BYTES) throw httpError(413, '도장 이미지는 20MB 이하만 넣을 수 있습니다.');
+          data = fs.readFileSync(file);
+          if (name == null) name = path.basename(file).replace(/\.[^.]+$/, '');
+        } else data = Buffer.from(String(q.data || ''), 'base64');
+      }
+      return json(res, 200, stamps.add(name, data));
+    }
+    if (url.pathname === '/api/stamps/delete' && req.method === 'POST') { const { id } = await readJson(req); return json(res, 200, stamps.remove(id)); }
+    if (url.pathname === '/api/stamps/rename' && req.method === 'POST') { const { id, name } = await readJson(req); return json(res, 200, stamps.rename(id, name)); }
+    // 도장 찍기: 보관함 이미지를 쪽에 넣는다(투명 PNG는 투명 그대로). w·h를 안 주면 쪽 폭의 25%로 가운데. 이후 /api/pdf/object/resize·/api/pdf/move로 조절
+    if (url.pathname === '/api/pdf/stamp' && req.method === 'POST') {
+      const { name, i, id, x, y, w, h } = await readJson(req);
+      const { data } = stamps.get(id);
+      const entry = await getEditableDoc(name);
+      const { image, width, height } = imageForPdf(data);
+      const box = [x, y, w, h].every(Number.isFinite) ? { x, y, w, h } : defaultBox(entry.doc, i, width, height, 0.25);
+      const r = await mutate(entry, i, () => entry.doc.insertImage(i, image, box));
+      return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/pages/extract' && req.method === 'POST') { // 새 문서를 만드는 동작이라 실행취소 스택에는 넣지 않는다(병합과 같은 이유)
       const { name, indices, out } = await readJson(req);
@@ -553,30 +690,10 @@ const server = http.createServer(async (req, res) => {
       const { name, i, path: imgPath, box } = await readJson(req);
       const entry = await getEditableDoc(name);
       const imgFile = safe(imgPath || ''); // 다른 파일 경로와 같은 규칙(절대경로 그대로, 상대경로는 작업 폴더 안)
-      const ext = path.extname(imgFile).toLowerCase();
-      let image, imgW, imgH;
-      if (ext === '.jpg' || ext === '.jpeg') {
-        const data = fs.readFileSync(imgFile);
-        const size = jpegSize(data);
-        if (!size) return json(res, 400, { error: 'JPEG 크기를 읽을 수 없습니다' });
-        image = { kind: 'jpeg', data }; imgW = size.width; imgH = size.height;
-      } else if (ext === '.png') {
-        if (!process.versions.electron) return json(res, 400, { error: 'PNG 삽입은 Electron 앱에서만 지원합니다. JPEG를 사용하세요.' });
-        const { nativeImage } = require('electron');
-        const img = nativeImage.createFromPath(imgFile);
-        const { width, height } = img.getSize();
-        if (!width || !height) return json(res, 400, { error: '이미지를 읽을 수 없습니다' });
-        const bgra = img.toBitmap(); // BGRA → RGBA
-        const rgba = Buffer.alloc(bgra.length);
-        for (let k = 0; k < bgra.length; k += 4) { rgba[k] = bgra[k + 2]; rgba[k + 1] = bgra[k + 1]; rgba[k + 2] = bgra[k]; rgba[k + 3] = bgra[k + 3]; }
-        image = { kind: 'rgba', data: rgba, width, height }; imgW = width; imgH = height;
-      } else return json(res, 400, { error: '지원하지 않는 이미지 형식입니다 (PNG/JPEG만 가능)' });
-      let finalBox = box;
-      if (!finalBox) {
-        const { w: pw, h: ph } = entry.doc.pageSize(i);
-        const boxW = pw * 0.4, boxH = boxW * (imgH / imgW);
-        finalBox = { x: (pw - boxW) / 2, y: (ph - boxH) / 2, w: boxW, h: boxH };
-      }
+      if (!/\.(png|jpe?g)$/i.test(imgFile)) return json(res, 400, { error: '지원하지 않는 이미지 형식입니다 (PNG/JPEG만 가능)' });
+      // P7: PNG는 Electron 없이도 풀고(image-util), 투명(알파)이 있으면 엔진이 SMask로 살린다 — 예전에는 흰 배경에 합성돼 밑 글자를 가렸다
+      const { image, width: imgW, height: imgH } = imageForPdf(fs.readFileSync(imgFile));
+      const finalBox = box || defaultBox(entry.doc, i, imgW, imgH, 0.4);
       const r = await mutate(entry, i, () => entry.doc.insertImage(i, image, finalBox));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
@@ -789,11 +906,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { text: doc.pageText(+url.searchParams.get('i')) });
     }
     if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
-      const { name } = await readJson(req);
+      const { name, force } = await readJson(req);
       const entry = await getEditableDoc(name);
+      // P7: 암호·권한이 걸린 원본을 그대로 덮어쓰면 암호가 풀린 파일로 바뀐다 → 처음에는 409로 "다른 이름으로 저장"을 유도하고, force:true면 덮어쓴다
+      if (entry.security?.encrypted && !force) {
+        throw Object.assign(httpError(409, '암호나 권한 제한이 걸린 원본입니다. 저장하면 암호가 풀린 파일이 되므로 다른 이름으로 저장하세요.'), { extra: { needSaveAs: true } });
+      }
       const p = safe(name);
       writeAtomic(p, entry.doc.save());
       entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
+      entry.security = { ...PLAIN }; delete entry.password; // 디스크 파일이 이제 암호 없는 문서
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/pdf/saveas' && req.method === 'POST') {
@@ -803,7 +925,33 @@ const server = http.createServer(async (req, res) => {
       if (from !== key) dropDoc(to); // 대상이 따로 열려 있었으면 버린다(긴 작업 중이면 409 — 쓰기 전에)
       writeAtomic(p, entry.doc.save());
       entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
+      entry.security = { ...PLAIN }; delete entry.password; // 새 파일은 암호 없는 보통 문서(엔진이 암호를 벗겨 저장한다)
       if (from !== key) { delete pdfDocs[from]; pdfDocs[key] = entry; }
+      return json(res, 200, { ok: true, path: to });
+    }
+    // PDF 암호 걸기: 지금 문서(미저장 편집 포함)를 AES-256(R6)으로 암호화한 사본을 to에 쓴다(pdf-encrypt.js).
+    // allow: { print, copy, modify } 생략하면 모두 허용. 열린 문서는 그대로(메모리는 암호 없음·dirty 유지·경로 그대로).
+    // 단 to가 지금 파일이면 디스크가 암호 문서가 됐으므로 dirty를 풀고 security를 암호 문서로 바꾸고 암호를 메모리에만 둔다
+    // → 이후 /api/pdf/save는 409 needSaveAs(덮어쓰면 암호가 풀린다). 암호는 로그·디스크에 남기지 않는다
+    if (url.pathname === '/api/pdf/protect' && req.method === 'POST') {
+      const { name, to, userPassword, ownerPassword, allow } = await readJson(req);
+      const bad = pdfEncrypt.passwordProblem(userPassword, '여는 암호')
+        || (ownerPassword != null && ownerPassword !== '' ? pdfEncrypt.passwordProblem(ownerPassword, '권한 암호') : null);
+      if (bad) return json(res, 400, { error: bad });
+      if (typeof to !== 'string' || !to) return json(res, 400, { error: '저장할 파일을 고르세요' });
+      const entry = await getEditableDoc(name);
+      const p = safe(to), from = docKey(name), key = docKey(to);
+      const perms = { print: allow?.print !== false, copy: allow?.copy !== false, modify: allow?.modify !== false };
+      let bytes;
+      try { bytes = pdfEncrypt.encryptPdf(entry.doc.save(), { userPassword, ownerPassword: ownerPassword || undefined, allow: perms }); }
+      catch (e) { throw httpError(e.code === 'BAD_PASSWORD' ? 400 : 500, `암호를 걸지 못했습니다: ${e.message}`); }
+      if (from !== key) dropDoc(to); // 대상이 따로 열려 있었으면 버린다(긴 작업 중이면 409 — 쓰기 전에)
+      writeAtomic(p, bytes);
+      if (from === key) {
+        entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
+        entry.security = { encrypted: true, openPassword: true, restricted: !(perms.print && perms.copy && perms.modify) };
+        entry.password = userPassword; // 디스크 파일이 바뀌어 다시 열 때 쓴다(메모리에만)
+      }
       return json(res, 200, { ok: true, path: to });
     }
     if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
@@ -814,7 +962,7 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: 'not found' });
   } catch (e) {
     if (res.headersSent) return res.end();
-    json(res, e.status || 500, { error: e.message });
+    json(res, e.status || 500, { error: e.message, ...(e.extra || {}) }); // extra: 암호(needPassword·wrong)·저장 확인(needSaveAs) 같은 UI용 표시
   }
 });
 // 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속

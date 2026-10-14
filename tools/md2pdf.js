@@ -21,7 +21,10 @@ async function main() {
     process.exit(1);
   }
 
-  const html = `<!doctype html><html><head><meta charset="utf-8">
+  // <title>이 없으면 Chromium이 data: 주소 전체(HTML 원문)를 PDF 제목(/Title)으로 적는다 → 첫 제목 줄이나 파일 이름을 넣는다
+  const heading = (md.match(/^#\s+(.+)$/m) || [])[1];
+  const title = (heading || path.basename(inPath, path.extname(inPath))).trim().replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
 <style>
 @page{size:A4;margin:20mm}

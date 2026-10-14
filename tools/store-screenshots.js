@@ -26,7 +26,7 @@ app.whenReady().then(async () => {
   process.env.RETEXTPDF_PORT = '4849';
   const port = await require(path.join(root, 'app', 'server.js')).ready;
   // 설치된 앱과 같은 화면이 되도록 preload를 붙인다(없으면 브라우저 모드 화면이 찍힌다). 대화상자용 IPC 처리기는 없지만 찍는 데는 쓰지 않는다
-  const win = new BrowserWindow({ width: W, height: H, show: false, backgroundColor: '#1b1b1f',
+  const win = new BrowserWindow({ width: W, height: H, show: false, backgroundColor: '#fbf9f4',
     webPreferences: { offscreen: true, partition: 'store-shots', preload: path.join(root, 'app', 'preload.js') } });
   await win.loadURL(`http://localhost:${port}`);
   await wait(1500);
@@ -62,6 +62,9 @@ app.whenReady().then(async () => {
   await wait(2500);
   await closeDialogs();
   await shot('screenshot-1-pdf.png');
+  // 2·3은 글자가 읽히도록 "폭 맞춤"으로 키운다(5.0.0부터 PDF는 "쪽 전체 보기"로 열려 글자가 작다). 바꾼 뒤 쪽 위쪽으로 돌린다
+  await js(`const s = document.querySelector('#zoomSelect'); s.value = 'fitWidth'; s.dispatchEvent(new Event('change')); document.querySelector('#pdf').scrollTop = 0;`);
+  await wait(1500);
   // 2) "일시" 줄을 눌러 날짜를 고치는 중인 장면(17일 → 24일, 적용 전)
   await clickLine('일시:');
   await js(`const ta = document.querySelector('.pdfEditor textarea'); ta.value = ta.value.replace('10월 17일', '10월 24일'); const p = ta.value.indexOf('24일'); ta.focus(); ta.setSelectionRange(p + 3, p + 3);`);

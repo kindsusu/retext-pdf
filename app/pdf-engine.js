@@ -7,6 +7,7 @@ const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽
 const fontRegistry = require('./pdf-fonts');
 
 const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
+const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
 
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
@@ -116,13 +117,24 @@ function pdfium() {
 
 // FPDF_LoadMemDocument 실패 이유. FPDF_GetLastError 4 = FPDF_ERR_PASSWORD
 const isPasswordError = (P) => P.FPDF_GetLastError() === 4;
+// 암호 오류는 code로 구분한다 — 서버가 "암호 입력"(PASSWORD_REQUIRED)과 "암호 틀림"(PASSWORD_WRONG)을 다르게 응답한다
+const passwordError = (given) => Object.assign(
+  new Error(given ? '암호가 맞지 않습니다.' : '암호가 걸린 PDF입니다. 암호를 입력하세요.'),
+  { code: given ? 'PASSWORD_WRONG' : 'PASSWORD_REQUIRED' });
+const FPDF_REMOVE_SECURITY = 3; // FPDF_SaveAsCopy 플래그
+// FPDF_GetDocPermissions 중 사용자가 체감하는 권한 비트(인쇄 4·수정 8·복사 16·주석 32·양식 256·추출 512·조립 1024·고품질 인쇄 2048)
+const PERM_ALL = 0xf3c;
 
 // 저장 루틴 — api.save()와 모듈 함수 merge()가 함께 쓴다 (FPDF_SaveAsCopy + 파일 라이터 콜백)
+// 암호화된 문서는 암호를 벗겨 저장한다(FPDF_REMOVE_SECURITY). PDFiumExt_SaveAsCopy는 암호화를 그대로 남겨
+// (실측 2026-10-14: AES-128 문서를 저장한 바이트를 암호 없이 다시 열면 FPDF_ERR_PASSWORD) 실행 취소 스냅샷·편집 검증 재열기가 모두 막힌다.
+// 파일 라이터가 FPDF_FILEWRITE 구조라 FPDF_SaveAsCopy에 그대로 넘길 수 있다. 암호 없는 문서는 예전 경로 그대로(출력 바이트 불변)
 function saveDoc(P, doc) {
   const M = P.pdfium;
   const w = P.PDFiumExt_OpenFileWriter();
   try {
-    if (!P.PDFiumExt_SaveAsCopy(doc, w)) throw new Error('저장 실패');
+    const plain = P.FPDF_GetSecurityHandlerRevision(doc) === -1;
+    if (!(plain ? P.PDFiumExt_SaveAsCopy(doc, w) : P.FPDF_SaveAsCopy(doc, w, FPDF_REMOVE_SECURITY))) throw new Error('저장 실패');
     const size = P.PDFiumExt_GetFileWriterSize(w);
     const out = M._malloc(size);
     try {
@@ -201,7 +213,8 @@ function encodeJpeg(data, width, height, quality) {
   return Buffer.from(jpeg.encode({ data: px, width, height }, q).data);
 }
 
-async function open(buffer) {
+// password: 여는 암호(사용자 암호). 없으면 빈 암호로 연다 — 소유자 암호만 걸린(권한 제한) 문서는 PDFium이 빈 암호로 연다
+async function open(buffer, password) {
   const P = await pdfium();
   const M = P.pdfium; // emscripten 모듈 (_malloc/_free/HEAPU8/getValue/...)
 
@@ -217,8 +230,19 @@ async function open(buffer) {
   // FPDF_LoadMemDocument는 버퍼를 복사하지 않는다 → close()까지 살려둔다.
   const srcPtr = mal(buffer.length);
   heap().set(buffer, srcPtr);
-  const doc = P.FPDF_LoadMemDocument(srcPtr, buffer.length, 0);
-  if (!doc) { const pw = isPasswordError(P); free(srcPtr); throw new Error(pw ? '암호가 걸린 PDF는 열 수 없습니다. 암호를 푼 뒤 다시 여세요.' : 'PDF를 열 수 없습니다 (손상된 파일)'); }
+  const given = typeof password === 'string' && password ? password : 0;
+  const doc = P.FPDF_LoadMemDocument(srcPtr, buffer.length, given);
+  if (!doc) { const pw = isPasswordError(P); free(srcPtr); throw pw ? passwordError(!!given) : new Error('PDF를 열 수 없습니다 (손상된 파일)'); }
+  // 보안 정보: encrypted = 보안 처리기가 있다, openPassword = 여는 암호가 있어야 열린다, restricted = 권한(인쇄·복사 등)이 다 풀려 있지 않다.
+  // 소유자 암호로 열었거나(PDFium이 권한을 다 준다) 사용자 암호로 열어도 권한 비트가 다 서 있으면 restricted가 아니다.
+  // openPassword: 암호를 받아 열었을 때만 빈 암호로 한 번 더 열어 본다 — 빈 암호로도 열리면 소유자 암호만 걸린 문서다(잘못 넘긴 암호)
+  const security = (() => {
+    const rev = P.FPDF_GetSecurityHandlerRevision(doc);
+    if (rev === -1) return { encrypted: false, openPassword: false, restricted: false };
+    let openPassword = false;
+    if (given) { const probe = P.FPDF_LoadMemDocument(srcPtr, buffer.length, 0); if (probe) P.FPDF_CloseDocument(probe); else openPassword = true; }
+    return { encrypted: true, openPassword, restricted: ((P.FPDF_GetDocPermissions(doc) >>> 0) & PERM_ALL) !== PERM_ALL };
+  })();
 
   const pages = new Map();
   const page = (i) => {
@@ -407,6 +431,26 @@ async function open(buffer) {
     } finally { M.removeFunction(cb); free(arr); free(fa); free(src); }
   };
 
+  // 투명이 있는 RGBA(도장·서명 PNG)는 JPEG로 보내면 흰 배경에 합성돼 밑 글자를 가린다 → BGRA 비트맵으로 넣는다.
+  // 실측 2026-10-14: FPDFBitmap_CreateEx(BGRA) + FPDFImageObj_SetBitmap → PDFium이 /SMask(DeviceGray)를 붙여 저장하고,
+  // 저장·재열기 후 알파 0 칸은 밑의 빨간 사각형이, 알파 255 칸은 이미지 색이 그려진다. 비트맵 버퍼는 호출 중에 복사된다 —
+  // 해제 전에 0xAB로 덮어 두므로 복사하지 않는 빌드로 바뀌면 시험(투명 도장 픽셀)이 바로 깨진다
+  const putBitmap = (io, rgba, width, height) => {
+    if (!(width > 0 && height > 0) || rgba.length < width * height * 4) throw new Error('RGBA 데이터가 이미지 크기보다 짧습니다.');
+    const buf = mal(width * height * 4), H = heap();
+    for (let k = 0; k < width * height * 4; k += 4) { H[buf + k] = rgba[k + 2]; H[buf + k + 1] = rgba[k + 1]; H[buf + k + 2] = rgba[k]; H[buf + k + 3] = rgba[k + 3]; } // RGBA → BGRA
+    const bmp = P.FPDFBitmap_CreateEx(width, height, BMP_BGRA, buf, width * 4);
+    try {
+      if (!bmp || !P.FPDFImageObj_SetBitmap(0, 0, io, bmp)) throw new Error('이미지를 PDF에 넣지 못했습니다 (투명 이미지).');
+    } finally { if (bmp) P.FPDFBitmap_Destroy(bmp); heap().fill(0xab, buf, buf + width * height * 4); free(buf); }
+  };
+  const transparent = (image) => {
+    if (image?.kind !== 'rgba' || !image.data) return false;
+    const d = image.data, n = Math.min(d.length, (image.width * image.height) * 4);
+    for (let k = 3; k < n; k += 4) if (d[k] !== 255) return true;
+    return false;
+  };
+
   // { kind:'jpeg', data } 또는 { kind:'rgba', data, width, height, quality? } → JPEG 바이트
   const toJpeg = (image) => {
     if (!image || !image.data || !image.data.length) throw new Error('이미지 데이터가 없습니다.');
@@ -488,8 +532,83 @@ async function open(buffer) {
   };
   const newGroupId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+  // 페이지 인덱스가 바뀌는 작업(삭제·끼우기·복제·순서 변경) 전에: 미룬 콘텐츠를 쓰고 캐시된 페이지 핸들을 모두 닫는다
+  const resetPages = () => { flush(); for (const h of pages.values()) P.FPDF_ClosePage(h); pages.clear(); };
+
+  // 화면(보이는 방향) 좌표 → 페이지 사용자 좌표. 쪽 번호·글상자가 /Rotate 된 쪽에서도 똑바로 보이게 한다.
+  // 기준 상자는 CropBox(없으면 MediaBox). vx·vy는 보이는 쪽의 왼쪽 아래가 원점, 위가 +y.
+  // /Rotate r(시계 방향 90°×r)로 보이므로 글자 행렬은 반대로(반시계) 돌린다: r=1 → [0 1 −1 0]
+  //   r=0: (x0+vx, y0+vy)   r=1: (x0+W−vy, y0+vx)   r=2: (x1−vx, y1−vy)   r=3: (x0+vy, y1−vx)   (W·H = 상자 폭·높이)
+  // 렌더 비트맵으로 검사한다(pdf-engine.test.js 쪽 번호 — 회전 쪽에서 보이는 아래 가운데에 잉크)
+  const visualFrame = (i) => {
+    const p = page(i), b = mal(16);
+    try {
+      let box = null;
+      for (const get of [P.FPDFPage_GetCropBox, P.FPDFPage_GetMediaBox]) {
+        if (get.call(P, p, b, b + 4, b + 8, b + 12)) { box = { x0: f32(b), y0: f32(b + 4), x1: f32(b + 8), y1: f32(b + 12) }; break; }
+      }
+      const rot = ((P.FPDFPage_GetRotation(p) % 4) + 4) % 4;
+      if (!box) { const { w, h } = api.pageSize(i); box = rot % 2 ? { x0: 0, y0: 0, x1: h, y1: w } : { x0: 0, y0: 0, x1: w, y1: h }; }
+      const x0 = Math.min(box.x0, box.x1), x1 = Math.max(box.x0, box.x1), y0 = Math.min(box.y0, box.y1), y1 = Math.max(box.y0, box.y1);
+      const W = x1 - x0, H = y1 - y0;
+      const map = [
+        (vx, vy) => [x0 + vx, y0 + vy], (vx, vy) => [x0 + W - vy, y0 + vx],
+        (vx, vy) => [x1 - vx, y1 - vy], (vx, vy) => [x0 + vy, y1 - vx],
+      ][rot];
+      const rotm = [[1, 0, 0, 1], [0, 1, -1, 0], [-1, 0, 0, -1], [0, -1, 1, 0]][rot]; // a b c d (글자 진행 방향 · 위 방향)
+      return { width: rot % 2 ? H : W, height: rot % 2 ? W : H, map, rotm, rot };
+    } finally { free(b); }
+  };
+  // '#rrggbb' → [r,g,b,255]. 잘못된 값이면 검정
+  const parseColor = (c) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(c ?? ''));
+    if (!m) return [0, 0, 0, 255];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255];
+  };
+  // 새 글자 객체 하나: 폰트·크기로 만들어 텍스트를 넣고 행렬 m(a b c d e f)·색을 건다. 실패하면 던진다(페이지에는 아직 넣지 않는다)
+  const makeText = (font, size, text, m, color) => {
+    const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
+    const u = utf16(text || ' '); // 빈 문자열 SetText는 WASM 트랩
+    const ok = neo && P.FPDFText_SetText(neo, u); free(u);
+    if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); throw new Error('글자 객체를 만들지 못했습니다.'); }
+    if (m) setMatrix(neo, m);
+    P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
+    return neo;
+  };
+  const setMatrix = (o, m) => {
+    const b = mal(24);
+    try { m.forEach((v, k) => M.setValue(b + k * 4, v, 'float')); P.FPDFPageObj_SetMatrix(o, b); } finally { free(b); }
+  };
+  const boundsOf = (o) => {
+    const b = mal(16);
+    try { P.FPDFPageObj_GetBounds(o, b, b + 4, b + 8, b + 12); return { x0: f32(b), y0: f32(b + 4), x1: f32(b + 8), y1: f32(b + 12) }; } finally { free(b); }
+  };
+  // 새 글자(쪽 번호·글상자)에 쓸 폰트: 지정한 설치 폰트(fontId) 또는 대체 한글 폰트(맑은 고딕). 그릴 수 없으면 던진다
+  const newTextFont = (fontId, text, size) => {
+    const entry = fontId ? fontRegistry.get(fontId) : null;
+    if (entry) { const absent = fontRegistry.missing(entry, text); if (absent.length) throw new Error(`선택한 폰트에 없는 글자: ${absent.slice(0, 12).join(' ')}`); }
+    const font = entry ? customFont(entry, text) : fallbackFont(false, text);
+    if (!font || !canRender(font, text, size)) throw new Error(noGlyphReason(font, text, size));
+    return { font, entry };
+  };
+
   const api = {
     get pageCount() { return P.FPDF_GetPageCount(doc); },
+
+    // 열 때 읽은 보안 정보 { encrypted, openPassword, restricted }. 저장 바이트는 암호가 풀린 문서다(saveDoc)
+    get security() { return { ...security }; },
+    // 권한 비트(FPDF_GetDocPermissions, 부호 없는 32비트). 암호 없는 문서·소유자 암호로 연 문서는 0xFFFFFFFF
+    get permissions() { return P.FPDF_GetDocPermissions(doc) >>> 0; },
+    // 보안 처리기 리비전(암호 없으면 -1, AES-256은 6)
+    get securityRevision() { return P.FPDF_GetSecurityHandlerRevision(doc); },
+    // 문서 정보(/Info) 값 하나 — tag: 'Title' · 'Author' · 'Subject' · 'Producer' 등. 없으면 ''
+    metaText(tag) {
+      const t = String(tag), n = P.FPDF_GetMetaText(doc, t, 0, 0);
+      if (n <= 2) return '';
+      const b = mal(n);
+      try { P.FPDF_GetMetaText(doc, t, b, n); return M.UTF16ToString(b); } finally { free(b); }
+    },
 
     // fn() 안의 편집이 부르는 GenerateContent를 모아 가장 바깥 batch가 끝날 때(정상·예외 모두) 페이지당 한 번만 부른다. 중첩 가능. fn의 반환값을 돌려준다
     batch(fn) {
@@ -636,6 +755,7 @@ async function open(buffer) {
             bounds: null, color: [0, 0, 0, 255], mask: false,
           };
           item.mask = !!findMark(o, MARK_MASK);
+          if (findMark(o, MARK_PAGENUM)) item.pageNum = true; // 쪽 번호 글자(다시 매기기·지우기 대상)
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) {
             const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7;
@@ -1236,6 +1356,161 @@ async function open(buffer) {
       return { ok: true, pageCount: P.FPDF_GetPageCount(doc) };
     },
 
+    // ── 빈 페이지 끼우기 ──────────────────────────────────────────────────
+    // at(0 기준) 자리에 넣는다(at = pageCount면 맨 뒤). 크기를 안 주면 옆 쪽(at−1, 맨 앞이면 0쪽)의 보이는 크기 —
+    // 회전된 가로 쪽 옆이면 회전 없는 가로 쪽이 된다(보이는 모양이 같다). FPDFPage_New가 돌려준 핸들은 바로 닫는다
+    insertBlankPage(at, width, height) {
+      const count = P.FPDF_GetPageCount(doc);
+      const pos = Number.isInteger(Number(at)) ? Math.max(0, Math.min(count, Number(at))) : count;
+      let w = Number(width), h = Number(height);
+      if (!(w > 0 && h > 0)) { const s = api.pageSize(pos > 0 ? pos - 1 : 0); w = s.w; h = s.h; }
+      if (!(w >= 1 && h >= 1 && w <= 14400 && h <= 14400)) throw new Error('쪽 크기는 1~14400pt 범위로 지정하세요.');
+      resetPages();
+      const p = P.FPDFPage_New(doc, pos, w, h);
+      if (!p) throw new Error('빈 페이지를 만들지 못했습니다.');
+      P.FPDF_ClosePage(p);
+      return { ok: true, at: pos, width: w, height: h, pageCount: P.FPDF_GetPageCount(doc) };
+    },
+
+    // ── 페이지 복제 ───────────────────────────────────────────────────────
+    // 각 쪽의 사본을 원래 쪽 바로 뒤에 넣는다. FPDF_ImportPagesByIndex(doc, doc, …) — 같은 문서에서 가져와도 된다
+    // (실측 2026-10-14: 3쪽 문서의 1쪽을 2번 자리로 → 4쪽, 저장·재열기 뒤 텍스트 1·2·2·3). 사본은 콘텐츠 스트림을 따로 갖는다(시험: 사본 편집이 원본에 번지지 않음).
+    // 뒤쪽부터 처리해 앞쪽 인덱스가 밀리지 않게 한다. pages: 사본이 놓인 최종 인덱스(오름차순)
+    duplicatePages(indices) {
+      const count = P.FPDF_GetPageCount(doc);
+      const targets = [...new Set([].concat(indices ?? []).map(Number))]
+        .filter((n) => Number.isInteger(n) && n >= 0 && n < count).sort((a, b) => a - b);
+      if (!targets.length) return { ok: false, pages: [], pageCount: count };
+      resetPages(); // 가져오기는 콘텐츠 스트림을 읽는다 + 인덱스가 밀린다
+      const arr = mal(4);
+      try {
+        for (const n of [...targets].reverse()) {
+          M.setValue(arr, n, 'i32');
+          if (!P.FPDF_ImportPagesByIndex(doc, doc, arr, 1, n + 1)) throw new Error(`${n + 1}쪽을 복제하지 못했습니다.`);
+        }
+      } finally { free(arr); }
+      return { ok: true, pages: targets.map((n, k) => n + k + 1), pageCount: P.FPDF_GetPageCount(doc) };
+    },
+
+    // ── 다른 PDF 끼우기 ───────────────────────────────────────────────────
+    // buffer(파일 바이트)의 모든 쪽을 at 자리에 넣는다. 암호가 걸린 원본은 code SOURCE_ENCRYPTED로 거절한다
+    // (권한만 걸린 문서는 빈 암호로 열리므로 그대로 들어간다). 가져오기는 객체를 복사한다 — 원본 문서를 닫고 버퍼를 0xAB로 덮은 뒤에도
+    // 저장·재열기 텍스트가 그대로다(시험). 그래서 원본은 바로 닫고 해제한다
+    insertPdf(at, buffer) {
+      const b = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || []);
+      if (!b.length) throw new Error('넣을 PDF가 비어 있습니다.');
+      const count = P.FPDF_GetPageCount(doc);
+      const pos = Number.isInteger(Number(at)) ? Math.max(0, Math.min(count, Number(at))) : count;
+      const ptr = mal(b.length);
+      heap().set(b, ptr);
+      const src = P.FPDF_LoadMemDocument(ptr, b.length, 0);
+      try {
+        if (!src) {
+          if (isPasswordError(P)) throw Object.assign(new Error('암호가 걸린 PDF는 끼울 수 없습니다. 그 파일을 열어 암호를 푼 뒤 다른 이름으로 저장하고 다시 넣으세요.'), { code: 'SOURCE_ENCRYPTED' });
+          throw new Error('넣을 PDF를 열 수 없습니다 (손상된 파일)');
+        }
+        const n = P.FPDF_GetPageCount(src);
+        if (!n) throw new Error('넣을 PDF에 페이지가 없습니다.');
+        resetPages();
+        if (!P.FPDF_ImportPages(doc, src, null, pos)) throw new Error('페이지를 가져오지 못했습니다.');
+        return { ok: true, at: pos, inserted: n, pageCount: P.FPDF_GetPageCount(doc) };
+      } finally {
+        if (src) P.FPDF_CloseDocument(src);
+        heap().fill(0xab, ptr, ptr + b.length); // 가져온 객체가 원본 버퍼를 참조하면 시험이 깨지게
+        free(ptr);
+      }
+    },
+
+    // ── 쪽 번호 ───────────────────────────────────────────────────────────
+    // opts: { format:'n'|'n/N'|'dash'|'ko', position:'bottom-center'|'bottom-right'|'bottom-left'|'top-center'|'top-right',
+    //         size(pt, 기본 10), margin(pt, 기본 24), startAt(기본 1), skipFirst(표지 건너뜀), color '#rrggbb', fontId? }
+    // 쪽마다 글자 객체 하나를 만들어 RetextPdfPageNum 마크를 단다. 다시 부르면 옛 번호를 지우고 새로 넣는다(겹쳐 쌓이지 않음).
+    // 위치는 보이는 방향 기준(visualFrame) — 회전된 쪽도 보이는 아래쪽에 똑바로, CropBox 안쪽 여백만큼.
+    // 번호: skipFirst면 1쪽(표지)은 비우고 2쪽부터 startAt. N = 마지막 번호
+    addPageNumbers(opts = {}) {
+      const fmt = opts.format || 'n', pos = opts.position || 'bottom-center';
+      const label = { n: (n) => `${n}`, 'n/N': (n, N) => `${n} / ${N}`, dash: (n) => `- ${n} -`, ko: (n) => `${n}쪽` }[fmt];
+      if (!label) throw new Error(`알 수 없는 쪽 번호 형식입니다: ${fmt}`);
+      if (!['bottom-center', 'bottom-right', 'bottom-left', 'top-center', 'top-right'].includes(pos)) throw new Error(`알 수 없는 쪽 번호 위치입니다: ${pos}`);
+      const size = opts.size == null ? 10 : Number(opts.size), margin = opts.margin == null ? 24 : Number(opts.margin);
+      if (!(size >= 4 && size <= 72)) throw new Error('쪽 번호 글자 크기는 4~72pt 범위로 지정하세요.');
+      if (!(margin >= 0 && margin <= 300)) throw new Error('쪽 번호 여백은 0~300pt 범위로 지정하세요.');
+      const startAt = opts.startAt == null ? 1 : Number(opts.startAt);
+      if (!Number.isInteger(startAt) || startAt < 0 || startAt > 99999) throw new Error('시작 번호는 0~99999 정수로 지정하세요.');
+      const color = parseColor(opts.color);
+      const count = P.FPDF_GetPageCount(doc), first = opts.skipFirst ? 1 : 0;
+      const N = startAt + Math.max(0, count - first) - 1;
+      const labels = Array.from({ length: count }, (_, i) => (i < first ? null : label(startAt + i - first, N)));
+      const { font } = newTextFont(opts.fontId, labels.filter(Boolean).join('') || '0', size); // 쓰는 글자 전부를 담은 서브셋 하나
+      return api.batch(() => {
+        const removed = api.removePageNumbers().removed;
+        let numbered = 0;
+        for (let i = 0; i < count; i++) {
+          if (!labels[i]) continue;
+          const p = page(i), f = visualFrame(i);
+          const o = makeText(font, size, labels[i], null, color);
+          const b = boundsOf(o); // 원점(기준선 시작)에 놓인 글자의 잉크 상자 — 폭과 위끝(대략 글자 높이)
+          const vx = pos.endsWith('center') ? (f.width - (b.x1 - b.x0)) / 2 - b.x0 : pos.endsWith('right') ? f.width - margin - b.x1 : margin - b.x0;
+          const vy = pos.startsWith('bottom') ? margin : f.height - margin - b.y1;
+          const [e, ff] = f.map(vx, vy);
+          setMatrix(o, [...f.rotm, e, ff]);
+          P.FPDFPageObj_AddMark(o, MARK_PAGENUM);
+          P.FPDFPage_InsertObject(p, o);
+          regen(p);
+          numbered++;
+        }
+        return { ok: true, numbered, removed, last: N };
+      });
+    },
+
+    // 쪽 번호 지우기: 모든 쪽에서 RetextPdfPageNum 마크가 달린 객체를 뺀다
+    removePageNumbers() {
+      let removed = 0;
+      for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
+        const p = page(i);
+        let hit = false;
+        for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+          const o = P.FPDFPage_GetObject(p, idx);
+          if (!o || !findMark(o, MARK_PAGENUM)) continue;
+          if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; hit = true; }
+        }
+        if (hit) regen(p);
+      }
+      return { ok: removed > 0, removed };
+    },
+
+    // ── 글상자(빈 자리에 새 글자) ─────────────────────────────────────────
+    // { x, y: 상자 왼쪽 위(페이지 사용자 좌표), text('\n'으로 여러 줄), fontId(/api/fonts의 id, 없으면 맑은 고딕), size(기본 12), color '#rrggbb' }
+    // 줄마다 글자 객체 하나, 행간 1.25배. 첫 기준선은 위끝에서 0.9em 아래. 회전된 쪽은 보이는 방향으로 똑바로 쓴다(visualFrame의 행렬).
+    // 여러 줄이면 RetextPdfGroup으로 묶어 한 상자로 보이게 하고, 폰트를 고르면 RetextPdfFont 마크를 달아 이후 줄 편집(/api/pdf/edit)도 같은 폰트를 쓴다.
+    // 돌려주는 idxs는 페이지 맨 뒤(가장 위 z-순서)에 들어간 객체 인덱스
+    addTextBox(i, opts = {}) {
+      const text = String(opts.text ?? '');
+      if (!text.trim() || text.length > 5000) throw new Error('글상자 내용은 1~5,000자로 입력하세요.');
+      const size = opts.size == null ? 12 : Number(opts.size);
+      if (!(size >= 1 && size <= 300)) throw new Error('글자 크기는 1~300pt 범위로 입력하세요.');
+      const x = Number(opts.x), y = Number(opts.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('글상자 위치가 잘못됐습니다.');
+      const lines = text.split(/\r?\n/);
+      const { font, entry } = newTextFont(opts.fontId, lines.join(''), size);
+      const color = parseColor(opts.color);
+      const p = page(i), [a, b, c, d] = visualFrame(i).rotm, lh = 1.25 * size;
+      const gid = lines.length > 1 ? newGroupId() : null;
+      const idxs = [];
+      return api.batch(() => {
+        lines.forEach((line, k) => {
+          const down = 0.9 * size + k * lh; // 보이는 아래 방향 = −(c, d)
+          const o = makeText(font, size, line, [a, b, c, d, x - c * down, y - d * down], color);
+          if (gid) tagGroup(o, gid);
+          if (entry) tagFont(o, entry);
+          P.FPDFPage_InsertObject(p, o);
+          idxs.push(P.FPDFPage_CountObjects(p) - 1);
+        });
+        regen(p);
+        return { ok: true, idx: idxs[0], idxs, group: gid, ...(entry ? { fontId: entry.id, fontLabel: entry.label } : {}) };
+      });
+    },
+
     // ── 페이지 추출 (새 문서 바이트) ───────────────────────────────────────
     // indices 순서대로 새 문서를 만들어 저장 바이트를 돌려준다. 원본 doc는 바뀌지 않는다(실측: 계약서 10쪽 그대로).
     // 중복 인덱스는 그대로 두 번 담는다(같은 쪽을 두 번 넣고 싶을 수 있다). 분할은 서버가 이 함수를 반복 호출한다.
@@ -1263,11 +1538,12 @@ async function open(buffer) {
       const p = page(i);
       for (const k of ['x', 'y', 'w', 'h']) if (!Number.isFinite(box?.[k])) throw new Error('이미지 위치·크기가 잘못됐습니다.');
       if (!(box.w > 0 && box.h > 0)) throw new Error('이미지 크기는 0보다 커야 합니다.');
-      const data = toJpeg(image);
+      const alpha = transparent(image); // 투명이 있으면 JPEG 대신 비트맵(+SMask)으로
+      const data = alpha ? null : toJpeg(image);
       const io = P.FPDFPageObj_NewImageObj(doc);
       if (!io) throw new Error('이미지 객체를 만들지 못했습니다.');
       try {
-        putJpeg(io, data);
+        if (alpha) putBitmap(io, image.data, image.width, image.height); else putJpeg(io, data);
         // 이미지는 단위 정사각형(0..1)에 그려진다 → 행렬 [w 0 0 h x y]가 곧 화면 상자
         const m = mal(24);
         try {

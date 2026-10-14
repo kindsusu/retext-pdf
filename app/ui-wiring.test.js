@@ -11,7 +11,7 @@ assert.match(html, /pdfRenderGeneration/, 'stale PDF renders are invalidated');
 assert.match(html, /DOMPurify\.sanitize\(marked\.parse/, 'Markdown preview is sanitized');
 assert.doesNotMatch(html, /https:\/\/cdnjs\.cloudflare\.com/, 'UI has no CDN runtime dependency');
 assert.match(html, /addEventListener\('wheel'[\s\S]*ctrlKey/, 'Ctrl+wheel zooms the PDF');
-assert.match(html, /id="zoomFit"/, 'fit-to-width zoom exists');
+assert.match(html, /<option value="fitWidth">폭 맞춤<\/option>/, 'fit-to-width zoom exists (zoom select, UI 개편)');
 assert.doesNotMatch(serverSource, /install\.ps1|ExecutionPolicy\s+Bypass|irm\s+https:/i,
   'server never pipes a remote PowerShell script into execution');
 assert.match(serverSource, /headers\.host/, 'server checks the Host header (DNS rebinding)');
@@ -34,20 +34,21 @@ assert.match(serverSource, /reloadAll/, 'undo/redo responses signal reloadAll fo
 // P5 WP-B1: status bar, toolbar groups (dropdown removed), sidebar tabs + thumbnails, empty state / drop overlay, terminology
 assert.match(html, /id="statusbar"/, 'status bar exists (WP-B1)');
 assert.match(html, /id="pageNumInput"/, 'status bar has a page-number input that jumps to a page (WP-B1)');
-assert.match(html, /id="statusHint"/, 'status bar has a first-run hint area (WP-B1)');
+assert.match(html, /id="ctxHint"/, 'context bar has a one-line usage hint area (UI 개편: 상태줄 첫 안내 → 상황줄 사용법)');
 assert.match(html, /retextpdf\.hintSeen/, 'first-run hint is remembered per browser via localStorage (WP-B1)');
 assert.doesNotMatch(html, /id="pageMenuBtn"|id="pageMenuWrap"|class="popupMenu" id="pageMenu"/, 'the old 페이지 ▾ dropdown menu is removed in favor of direct toolbar buttons (WP-B1)');
 assert.match(html, /id="groupView"/, 'toolbar has a 보기 group (WP-B1)');
 assert.match(html, /id="groupEdit"/, 'toolbar has a 편집 group (WP-B1)');
 assert.match(html, /id="groupPage"/, 'toolbar has a 페이지 group (WP-B1)');
 assert.match(html, /id="groupDoc"/, 'toolbar has a 문서 group (WP-B1)');
-assert.match(html, /id="groupSave"/, 'toolbar has a 저장 group (WP-B1)');
+assert.match(html, /id="groupFile"/, 'toolbar has a 파일 group (열기·저장·다른 이름으로·인쇄, UI 개편)');
+assert.match(html, /id="groupTool"/, 'toolbar has a 도구 group (UI 개편)');
 assert.match(html, /id="asideTabs"/, 'sidebar has 파일/페이지 tabs (WP-B1)');
 assert.match(html, /id="pageThumbs"/, 'sidebar page tab renders page thumbnails (WP-B1)');
 assert.match(html, /openPageCtxMenu/, 'page thumbnail right-click context menu exists (WP-B1)');
 assert.match(html, /id="emptyState"/, 'empty state exists when no document is open (WP-B1)');
 assert.match(html, /id="dropOverlay"/, 'full-window drag-and-drop overlay exists (WP-B1)');
-assert.match(html, /id="rectTool"[^>]*>가리기</, '가리기(rect mask) toolbar button uses unified terminology, not "마스킹 삽입" (WP-B1)');
+assert.match(html, /id="rectTool"[^>]*><span class="tl">가리기</, '가리기(rect mask) toolbar button uses unified terminology, not "마스킹 삽입" (WP-B1)');
 assert.match(html, /가린 영역/, 'mask panel title is renamed to 가린 영역 (WP-B1)');
 assert.doesNotMatch(html, /마스킹/, 'no leftover "마스킹" wording remains in the UI (engine mark name RetextPdfMask / route /api/pdf/mask are unaffected, WP-B1)');
 
@@ -69,27 +70,26 @@ assert.match(html, /openSearchHitCtxMenu/, 'right-clicking a search hit offers a
 assert.match(html, /줄 전체 가리기/, 'search hit context menu can mask the whole line (WP-B2)');
 assert.match(html, /function pdfToScreen/, 'shared pdfToScreen() rotation-aware coordinate helper exists (WP-B2)');
 assert.match(html, /function screenToPdf/, 'shared screenToPdf() rotation-aware coordinate helper exists (WP-B2)');
-assert.match(html, /id="rotateLeft"[^>]*>↺/, 'rotate-left toolbar button is enabled with its icon kept (WP-B2)');
+assert.match(html, /id="rotateLeft" data-icon="rotateLeft" data-tip="왼쪽으로 돌리기:[^>]*><span class="tl">왼쪽</, 'rotate-left toolbar button has an icon, a short label 왼쪽 and the full name in its tip (1366px 맞춤)');
 assert.doesNotMatch(html, /id="rotateLeft"[^>]*disabled/, 'rotate-left toolbar button is no longer disabled (WP-B2)');
-assert.match(html, /id="menuSplit"[^>]*>분할…/, 'split toolbar button is enabled and relabeled 분할… (WP-B2)');
-assert.doesNotMatch(html, /id="menuSplit"[^>]*disabled/, 'split toolbar button is no longer disabled (WP-B2)');
+assert.match(html, /\$\('#menuSplit'\)\.onclick = openSplitDialog/, 'split is a toolbar button again (밝은 테마·아이콘 개편: 숨은 메뉴 없음)');
 assert.match(html, /id="splitDialog"/, 'split dialog exists (WP-B2)');
 assert.match(html, /id="downsampleFilesDialog"/, 'multi-file downsample dialog exists (WP-B2)');
 assert.match(html, /id="emptyDownsampleFiles"[^>]*>여러 파일 용량 줄이기/, '빈 상태 여러 파일 용량 줄이기 quick tool is enabled (WP-B2)');
 assert.doesNotMatch(html, /id="emptyDownsampleFiles"[^>]*disabled/, '빈 상태 여러 파일 용량 줄이기 button is no longer disabled (WP-B2)');
 assert.doesNotMatch(html, /id="emptyExportImages"[^>]*disabled/, '빈 상태 이미지로 내보내기 button is no longer disabled (WP-B2)');
-assert.match(html, /savePageAs/, 'thumbnail context menu can save a single page as a new file (WP-B2)');
-assert.match(html, /rotatePages\(\[i\], -90/, 'thumbnail context menu rotates the clicked page (WP-B2)');
+assert.match(html, /function savePagesAs\(indices\)[\s\S]{0,400}\/api\/pdf\/pages\/extract/, 'thumbnail context menu saves the selected pages as a new file (따로 저장…, UI 개편)');
+assert.match(html, /menuItem\('왼쪽으로 돌리기', \(\) => rotatePages\(idxs, -90/, 'thumbnail context menu rotates the selected pages (UI 개편)');
 assert.match(html, /await pdfMutate\('\/api\/pdf\/pages\/reorder'/, 'drag-drop thumbnail reorder is wired to the reorder route (WP-B2)');
 assert.match(html, /window\.retextPdf\.openPdfFiles/, 'renderer wires up openPdfFiles for multi-file downsample picker (WP-B2)');
-// P5: 도구줄 라벨을 되돌린 축약형 대신 명확한 문구로(공통 규칙 — 두 줄로 접혀도 됨)
-assert.match(html, /id="zoomFit"[^>]*>폭 맞춤</, '맞춤 → 폭 맞춤 (P5)');
-assert.match(html, /id="menuExtract"[^>]*>페이지 정리…</, '정리… → 페이지 정리… (P5)');
-assert.match(html, /id="menuInsertImage"[^>]*>이미지 삽입</, '삽입 → 이미지 삽입 (P5)');
-assert.match(html, /id="menuMerge"[^>]*>병합…</, '병합 → 병합… (P5)');
-assert.match(html, /id="menuExportImages"[^>]*>이미지로 내보내기…</, '내보내기… → 이미지로 내보내기… (P5)');
-assert.match(html, /id="menuDownsample"[^>]*>용량 줄이기…</, '줄이기… → 용량 줄이기… (P5)');
-assert.match(html, /id="saveAs"[^>]*>다른 이름으로…</, '다른 이름 → 다른 이름으로… (P5)');
+// UI 개편: 도구줄 버튼은 아이콘 위 짧은 이름(.tl). 긴 설명은 data-tip(→ title)에 둔다
+for (const [id, label] of [['menuExtract', '쪽 정리…'], ['menuInsertImage', '그림'], ['rotateLeft', '왼쪽'],
+  ['saveAs', '다른 이름'], ['save', '저장'], ['openBtn', '열기'], ['undoBtn', '실행 취소'], ['redoBtn', '다시 실행'], ['protectBtn', '암호'],
+  ['toolEdit', '글자 고치기'], ['toolText', '글 상자'], ['toolStamp', '도장'], ['printBtn', '인쇄'], ['pageBlank', '빈 쪽'], ['pageInsertPdf', '끼워 넣기'],
+  ['pageNumbers', '쪽 번호'], ['rotateRight', '오른쪽'], ['searchToggle', '찾기'], ['helpBtn', '도움말'],
+  ['menuMerge', '병합'], ['menuExportImages', '이미지로'], ['menuDownsample', '용량 줄이기'], ['menuSplit', '분할']]) {
+  assert.match(html, new RegExp(`<button type="button" class="tb" id="${id}" data-icon="\\w+"[^>]*><span class="tl">${label}</span></button>`), `도구줄 ${id}: 아이콘 + 짧은 이름 "${label}" (UI 개편)`);
+}
 
 // --- P6 WP-B ---
 const fontEditorSource = fs.readFileSync(path.join(__dirname, 'font-editor.js'), 'utf8');
@@ -113,11 +113,12 @@ assert.match(html, /function maybeFlashUndoTrimmed/, 'a one-shot undoTrimmed fla
 assert.match(html, /실행 취소 기록이 메모리 한도로 일부 지워졌습니다/, 'undo-trim flash message text (P6 WP-B1, contract C3)');
 
 // P6 WP-B2: 실행 취소 토스트 — flash()와 별개, 5초, 액션 포함
-assert.match(html, /id="toast"/, 'undo toast element exists, separate from #status/flash (P6 WP-B2)');
-assert.match(html, /function toast\(text, opts = \{\}\)/, 'toast() helper supports an action button (P6 WP-B2)');
-assert.match(html, /setTimeout\(hideToast, 5000\)/, 'toast auto-hides after 5s (P6 WP-B2)');
+assert.match(html, /<div id="toasts" aria-live="polite"/, 'toast stack container exists, separate from #status/flash, announced politely (UI 개편)');
+assert.match(html, /function toast\(text, opts = \{\}\)/, 'toast() keeps its (text, opts) signature with an action button (P6 WP-B2)');
+assert.match(html, /setTimeout\(\(\) => hideToast\(el\), opts\.ms \?\? 5000\)/, 'toast auto-hides after 5s by default (P6 WP-B2)');
+assert.match(html, /\['warning', 'error'\]\.includes\(opts\.kind\)/, 'toast kinds info/warning/error (UI 개편)');
 assert.match(html, /toast\(label, \{ action: '실행 취소', onAction: undo \}\)/, 'page delete/rotate completion offers an undo toast (P6 WP-B2)');
-assert.match(html, /toast\('페이지 순서를 바꿨습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'page reorder completion offers an undo toast (P6 WP-B2)');
+assert.match(html, /toast\('쪽 순서를 바꿨습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'page reorder completion offers an undo toast (P6 WP-B2)');
 assert.match(html, /toast\('용량을 줄였습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'downsample completion offers an undo toast (P6 WP-B2)');
 
 // P6 WP-B4: 회전 페이지 이미지 크기 조절 손잡이 — 실측(브라우저, 회전 0·1·2·3, 계약 C5 표와 대조) 결과를 코드에 반영
@@ -200,8 +201,8 @@ assert.doesNotMatch(html, /id="authBanner"|AuthError/, 'AI 로그인 만료 배�
 assert.doesNotMatch(html, /\/api\/chat|\/api\/setup|\/api\/session\/reset|font-recommend/, '화면이 AI 라우트를 부르지 않는다');
 assert.doesNotMatch(html, /ai-collapsed|editRadio|showDiff|rebuildDocText/, 'AI 패널 열·편집 모드·수정안 비교 코드가 없다');
 assert.doesNotMatch(html, /claude|codex|chatgpt/i, '화면에 Claude/Codex/ChatGPT 언급이 없다');
-assert.match(html, /grid-template-columns:220px 1fr;/, '레이아웃은 파일 목록/편집기 2열이다');
-assert.match(html, /<span id="status"><\/span>/, '머리줄 #status는 flash() 알림 자리로만 남는다');
+assert.match(html, /\.workarea\{[^}]*grid-template-columns:212px 1fr\}/, '가운데는 왼쪽 패널/문서 2열이다(AI 패널 열 없음)');
+assert.match(html, /<div class="statusbar" id="statusbar">[\s\S]*<span id="status" role="status"><\/span>/, '상태줄 #status는 flash() 알림 자리로만 남는다');
 assert.match(html, /id="ver"/, '앱 버전 표시(#ver)는 유지된다');
 assert.match(html, /fetch\('\/api\/health'\)/, '앱 버전은 /api/health에서 읽는다');
 assert.doesNotMatch(html, /\.ai'|\.aiChoice'/, 'AI 설정 키(localStorage)를 읽거나 청소하는 코드가 없다');
@@ -233,8 +234,8 @@ console.log('OK — CRLF Markdown·여러 조각 줄 폰트 맞추기 단언 통
 
 // 2026-10-03: 앱 이름 Retext PDF(4.0.0). 보이는 이름과 내부 식별자를 모두 새 이름으로 통일했다(기존 사용자 없음 — 호환 코드 없음).
 // Store identityName만 Partner Center가 정한 옛 이름 기반 값이라 그대로 둔다
-assert.strictEqual(pkg.version, '4.0.1', '버전은 4.0.1이다');
-assert.strictEqual(require('../package-lock.json').version, '4.0.1', 'package-lock.json 버전도 4.0.1이다');
+assert.strictEqual(pkg.version, '5.0.0', '버전은 5.0.0이다');
+assert.strictEqual(require('../package-lock.json').version, '5.0.0', 'package-lock.json 버전도 5.0.0이다');
 assert.strictEqual(pkg.productName, 'Retext PDF', 'package.json productName은 Retext PDF다');
 assert.strictEqual(pkg.build.productName, 'Retext PDF', 'build.productName은 Retext PDF다');
 assert.strictEqual(pkg.build.appx.displayName, 'Retext PDF', 'Store 표시 이름은 Retext PDF다');
@@ -258,9 +259,10 @@ assert.match(html, /window\.retextPdf\.openFiles/, '화면은 window.retextPdf�
 assert.match(html, /'retextpdf\.recent'/, '최근 파일 키는 retextpdf.recent다');
 assert.match(html, /X-Retext-Pdf-Temp/, '임시 파일 헤더는 X-Retext-Pdf-Temp다');
 assert.match(html, /<title>Retext PDF<\/title>/, 'index.html 제목은 Retext PDF다');
-assert.match(html, /<header><b>Retext PDF<\/b>/, '머리줄 브랜드는 Retext PDF다');
+assert.match(html, /<span id="ver">Retext PDF<\/span>/, '상태줄 오른쪽 끝 브랜드는 Retext PDF다(머리줄은 없앴다)');
+assert.match(html, /\$\('#ver'\)\.textContent = `Retext PDF v\$\{appVersion\}`/, '버전을 받으면 상태줄에 Retext PDF vX.Y.Z로 쓴다');
 assert.match(mainSource, /title: `Retext PDF v\$\{/, '창 제목은 Retext PDF vX.Y.Z다');
-console.log('OK — 앱 이름 변경(Retext PDF 4.0.1) 단언 통과');
+console.log('OK — 앱 이름 변경(Retext PDF 5.0.0) 단언 통과');
 
 // 4.0.1: 앱에 동봉해 첫 실행에 복사하는 샘플은 가상 안내문(독서모임_안내.md/.pdf) 두 개뿐이다.
 // sample.pdf(AI 기능 시절 시험 문서)·회의록_초안.*(회사 회의록처럼 보임)은 테스트 픽스처로 저장소에만 남는다
@@ -276,4 +278,338 @@ console.log('OK — 앱 이름 변경(Retext PDF 4.0.1) 단언 통과');
   assert.doesNotMatch(serverSource, /'sample\.pdf'|'회의록_초안/, 'server.js에 옛 샘플 이름이 없다');
   for (const f of list) assert.ok(fs.existsSync(path.join(__dirname, '..', 'workspace', f)), `동봉 샘플 파일이 있다: ${f}`);
   console.log('OK — 동봉 샘플(독서모임_안내 두 개) 단언 통과');
+}
+
+// UI 개편(2026-10): 도구줄(아이콘+짧은 이름) / 상황줄 / 왼쪽 패널(파일 | 쪽) / 상태줄, 쪽 목록 여러 쪽 선택·끌어 옮기기, 단축키 도움말, 토스트 쌓기
+{
+  // A. 창 배치: 머리줄 없음, 도구줄은 role=toolbar, 상황줄은 도구 이름·옵션·사용법
+  assert.doesNotMatch(html, /<header>/, '40px 머리줄은 없앴다 — 앱 이름·버전은 상태줄 오른쪽 끝(#ver)');
+  assert.match(html, /<div class="toolbar" id="toolbar" role="toolbar" aria-label="도구 모음">/, '도구줄은 role="toolbar"다');
+  assert.ok(html.indexOf('id="toolbar"') < html.indexOf('id="ctxbar"') && html.indexOf('id="ctxbar"') < html.indexOf('class="workarea"') &&
+    html.indexOf('class="workarea"') < html.indexOf('id="statusbar"'), '위→아래: 도구줄 / 상황줄 / (왼쪽 패널 | 문서) / 상태줄');
+  assert.match(html, /\.toolbar\{[^}]*flex-wrap:nowrap[^}]*overflow-x:auto/, '도구줄은 두 줄로 접히지 않고, 넘치면 가로로 스크롤한다');
+  assert.match(html, /@media \(max-width:1180px\)\{\.toolbar\{[^}]*\}\.tb \.tl\{display:none\}/, '1180px 이하에서는 도구줄 이름을 숨기고 아이콘만');
+  assert.match(script, /function fitToolbar\(\)/, '창 폭을 넘으면 도구줄을 단계적으로 줄인다(c1→c2→c3)');
+  for (const id of ['printBtn', 'toolText', 'toolStamp', 'pageBlank', 'pageInsertPdf', 'pageNumbers', 'toolEdit', 'rectTool', 'helpBtn', 'zoomSelect', 'zoomIn', 'zoomOut']) {
+    assert.match(html, new RegExp(`id="${id}"`), `도구줄에 #${id}가 있다`);
+  }
+  assert.match(html, /<div class="ctxbar" id="ctxbar">[\s\S]*?<select id="maskColor"/, '가림 색(#maskColor)은 상황줄에 있다');
+  assert.match(html, /id="ctxTextOpts"/, '글 상자 옵션 자리(#ctxTextOpts)가 있다(WP-C가 채운다)');
+  assert.match(html, /id="ctxStampOpts"/, '도장 옵션 자리(#ctxStampOpts)가 있다(WP-C가 채운다)');
+  assert.match(html, /id="ctxMulti"/, '여러 상자 선택 동작은 상황줄에 있다');
+  assert.doesNotMatch(script, /bar\.id = 'multiBar'/, '떠 있는 #multiBar는 없앴다');
+  assert.match(script, /const HINTS = \{[\s\S]*?edit: '고칠 줄을 클릭하세요\. 여러 줄은 Shift\+클릭'[\s\S]*?redact: '가릴 곳을 끌어서 감싸세요/, '상황줄 사용법 문구는 HINTS 한 곳에 있다');
+  assert.match(script, /function setTool\(name\)/, '도구는 setTool 하나로 바꾼다(서로 배타)');
+  assert.match(html, /data-tool="edit" aria-pressed="true"/, '도구 버튼은 aria-pressed로 켜짐을 알린다');
+  assert.match(script, /\{ KeyE: 'edit', KeyT: 'text', KeyS: 'stamp', KeyW: 'redact' \}\[e\.code\]/, '도구 단축키 E·T·S·W(한글 입력 상태에서도 e.code로)');
+  assert.match(script, /if \(e\.key === 'Escape'\) \{ if \(tool !== 'edit'\) setTool\('edit'\)/, 'Esc는 글자 고치기로 돌아간다');
+  assert.match(script, /const isTyping = \(el\) => !!el && \(el\.isContentEditable \|\| \/\^\(INPUT\|TEXTAREA\|SELECT\)\$\/\.test\(el\.tagName\)\)/, '입력 중에는 한 글자 단축키를 무시한다');
+
+  // WP-C 연결 지점: 한 블록에 모여 있고, 모두 서버 기능에 연결됐다("준비 중입니다"가 남지 않는다)
+  const scriptLF = script.replace(/\r\n/g, '\n'); // 줄 끝(CRLF/LF)과 무관하게 함수 몸통을 자른다
+  const wpc = scriptLF.slice(scriptLF.indexOf('// === WP-C 연결 지점 ==='), scriptLF.indexOf('// === WP-C 연결 지점 끝 ==='));
+  assert.ok(wpc.length > 100, 'WP-C 연결 지점 블록이 있다');
+  const fnBody = (sig) => { const k = wpc.indexOf(sig); return wpc.slice(k, wpc.indexOf('\n}\n', k)); };
+  for (const sig of ['function onPrint()', 'function onPageBlank(at)', 'function onPageDuplicate(pages)', 'function onInsertPdfAt(at, paths)',
+    'function onPageNumbers()', 'function onToolActivate(name)', 'function onToolDeactivate(name)', 'function onToolPageClick(name, i, pt)']) {
+    assert.ok(wpc.includes(sig), `WP-C 연결 지점에 ${sig}가 있다`);
+    assert.strictEqual(script.split(sig).length, 2, `${sig}는 한 번만 정의된다`);
+    assert.doesNotMatch(fnBody(sig), /notReady|준비 중입니다/, `${sig}는 자리만 차지하지 않는다`);
+  }
+  assert.doesNotMatch(html, /준비 중입니다|notReady/, '"준비 중입니다" 자리 표시가 남지 않았다');
+  assert.match(fnBody('async function onPrint()'), /window\.retextPdf\?\.print[\s\S]*printInBrowser\(name, pages\)/, '인쇄: 앱은 retextPdf.print, 브라우저 화면은 숨은 iframe');
+  assert.match(script, /'\/api\/pdf\/print-html\?' \+ q[\s\S]{0,900}contentWindow\.printReady[\s\S]{0,200}contentWindow\.print\(\)/, '브라우저 화면 인쇄는 print-html을 iframe에 열어 printReady 뒤 print()');
+  assert.match(script, /toast\('인쇄 준비 중…'/, '인쇄 준비 중 토스트');
+  assert.match(script, /sel\.length > 1 && sel\.length < pdfPages\.length\) \{\s*const pick = await askPrintRange\(sel\)/, '여러 쪽을 골랐으면 고른 쪽만/전체를 묻는다');
+  assert.match(html, /<dialog id="printDialog" class="panel"/, '인쇄 범위 창');
+  assert.match(fnBody('async function onPageBlank(at)'), /pdfMutate\('\/api\/pdf\/pages\/blank', \{ name, at \}\)[\s\S]*showAddedPages\(\[r\.at\]/, '[빈 쪽] → /api/pdf/pages/blank, 새 쪽을 고른다');
+  assert.match(fnBody('async function onPageDuplicate(pages)'), /pdfMutate\('\/api\/pdf\/pages\/duplicate', \{ name, pages \}\)[\s\S]*showAddedPages\(r\.pages/, '[복제] → /api/pdf/pages/duplicate, 사본을 고른다');
+  assert.match(fnBody('async function onInsertPdfAt(at, paths)'), /window\.retextPdf\.openPdfFiles\(\)[\s\S]*for \(const p of paths\)[\s\S]*\/api\/pdf\/pages\/insert-pdf/, 'PDF 끼워 넣기: 파일 선택 → 여러 개면 순서대로');
+  assert.match(script, /async function showAddedPages\(idxs, label, undoSteps = 1\) \{[\s\S]{0,200}pageSel\.add\(k\)[\s\S]{0,200}await renderPdfDoc\(cur\)[\s\S]{0,300}action: '실행 취소'/, '쪽을 더하면 다시 그리고 새 쪽을 고르고 실행 취소 토스트');
+  assert.match(script, /pdfMutate\('\/api\/pdf\/textbox', payload\)/, '글 상자 → /api/pdf/textbox');
+  assert.match(script, /pdfMutate\('\/api\/pdf\/stamp', \{ name, i, id: s\.id, x, y, w, h \}\)/, '도장 → /api/pdf/stamp(누른 자리 가운데)');
+  assert.match(script, /if \(hit\) selectImage\(i, hit\.obj/, '찍은 도장은 기존 이동·크기 손잡이로 고른다');
+  assert.match(script, /if \(e\.isComposing \|\| e\.keyCode === 229\) return; \/\/ 한글 조합 중의 Enter·Esc/, '글 상자는 한글 조합 중에 넣거나 취소하지 않는다');
+  assert.match(script, /e\.key === 'Enter' && \(e\.ctrlKey \|\| e\.metaKey\)\) \{ e\.preventDefault\(\); d\.commit\(\); \}/, '글 상자: Ctrl+Enter로 넣는다(Enter는 줄 바꿈)');
+  assert.match(script, /ta\.style\.fontSize = \(Math\.max\(1, \+\$\('#tbSize'\)\.value \|\| 12\) \* pdfScale\) \+ 'px'/, '글 상자 입력칸 글자 크기 = 크기 × 확대 비율');
+  assert.match(script, /fetch\('\/api\/fonts\?text='/, '글 상자 글꼴 목록은 /api/fonts');
+  for (const id of ['tbFont', 'tbSize', 'tbColor', 'stampList', 'stampAdd', 'stampFile']) assert.match(html, new RegExp(`id="${id}"`), `상황줄 글 상자·도장 옵션 #${id}`);
+  assert.match(script, /fetch\('\/api\/stamps'\)/, '도장 보관함 목록');
+  assert.match(script, /'\/api\/stamps\/image\?id='/, '도장 축소본');
+  assert.match(script, /window\.retextPdf\?\.openImage\) \{ const p = await window\.retextPdf\.openImage\(\); if \(p\) await addStampFrom\(\{ path: p \}\)/, '도장 추가(앱): openImage → 경로');
+  assert.match(script, /readAsDataURL\(f\)[\s\S]{0,400}addStampFrom\(\{ name: [\s\S]{0,60}, data \}\)/, '도장 추가(브라우저 화면): 파일 → base64');
+  assert.match(script, /apiPost\('\/api\/stamps\/delete', \{ id: s\.id \}\)/, '도장 지우기');
+  assert.match(script, /stampEmpty: '도장 그림\(PNG·JPEG\)을 추가하세요\. 투명 PNG면 글자 위에 찍어도 글자가 보입니다\.'/, '빈 보관함 안내');
+
+  // 암호 PDF: 암호 창(type=password) → /api/pdf/unlock. 틀리면 창 안에 "암호가 맞지 않습니다". 암호는 어디에도 남기지 않는다
+  assert.match(html, /<dialog id="passwordDialog" class="panel"/, '암호 창');
+  assert.match(html, /<input id="passwordInput" type="password" autocomplete="off"/, '암호 입력칸은 type=password, 자동 완성 없음');
+  assert.match(html, /id="passwordError"[^>]*>암호가 맞지 않습니다</, '틀린 암호 안내');
+  const ask = scriptLF.slice(scriptLF.indexOf('function askPdfPassword(name)'), scriptLF.indexOf('\n}\n', scriptLF.indexOf('function askPdfPassword(name)')));
+  assert.ok(ask.length > 200, 'askPdfPassword가 있다');
+  assert.match(ask, /fetch\('\/api\/pdf\/unlock', \{ method: 'POST', body: JSON\.stringify\(\{ name, password: input\.value \}\) \}\)/, '암호는 /api/pdf/unlock 요청 본문으로만 보낸다');
+  assert.match(ask, /data\.wrong \? '암호가 맞지 않습니다'/, '틀리면 창을 연 채 안내');
+  assert.match(ask, /input\.value = ''/, '끝나면 입력칸을 비운다');
+  assert.doesNotMatch(ask, /localStorage|sessionStorage|console\.|indexedDB|document\.cookie/, '암호 창은 저장소·로그를 건드리지 않는다');
+  assert.doesNotMatch(script, /(localStorage|sessionStorage)\.setItem\([^)]*(password|passwordInput|암호)/i, '암호를 localStorage·sessionStorage에 쓰지 않는다');
+  assert.doesNotMatch(script, /console\.\w+\([^)]*password/i, '암호를 로그에 남기지 않는다');
+  assert.match(script, /if \(info\.needPassword\) \{[\s\S]{0,200}await askPdfPassword\(name\)/, 'PDF를 열 때 401 needPassword면 암호 창');
+  assert.match(script, /return r\.ok \|\| r\.status === 401;/, '최근 파일 확인에서 암호 PDF(401)를 "없는 파일"로 지우지 않는다');
+  assert.match(script, /'암호를 풀고 열었습니다\. 저장하면 암호 없는 사본이 됩니다\.'/, '암호를 풀고 연 문서 안내');
+  assert.match(script, /'편집 제한을 풀고 열었습니다\./, '편집 제한을 풀고 연 문서 안내');
+  assert.match(script, /if \(error\.data\?\.needSaveAs && cur === name\) return saveProtected\(name\)/, '저장 409 needSaveAs → 다른 이름으로 저장으로');
+  assert.match(script, /throw Object\.assign\(new Error\(message\), \{ status: r\.status, data \}\)/, 'apiPost 예외는 응답 표시(needSaveAs 등)를 싣는다');
+
+  // 쪽 번호 창: 모양 4가지(보기 글), 위치 5가지, 크기·여백·시작 번호·첫 쪽 건너뛰기·색, [넣기]/[번호 지우기]/[취소]. 고른 값은 기억한다
+  assert.match(html, /<dialog id="pageNumDialog" class="panel"/, '쪽 번호 창');
+  for (const v of ['n', 'n/N', 'dash', 'ko']) assert.ok(html.includes(`<input type="radio" name="pnFormat" value="${v}">`), `쪽 번호 모양 ${v}`);
+  for (const v of ['bottom-center', 'bottom-right', 'bottom-left', 'top-center', 'top-right']) assert.ok(html.includes(`<option value="${v}">`), `쪽 번호 위치 ${v}`);
+  for (const id of ['pnSize', 'pnMargin', 'pnStart', 'pnSkipFirst', 'pnColor', 'pnApply', 'pnRemove', 'pnCancel']) assert.match(html, new RegExp(`id="${id}"`), `쪽 번호 창 #${id}`);
+  assert.match(html, /id="pnApply" class="pri" type="button">넣기</, '[넣기]');
+  assert.match(html, /id="pnRemove" type="button">번호 지우기</, '[번호 지우기]');
+  assert.match(script, /pdfMutate\('\/api\/pdf\/page-numbers', \{ name, \.\.\.o \}\)/, '쪽 번호 → /api/pdf/page-numbers');
+  assert.match(script, /pdfMutate\('\/api\/pdf\/page-numbers\/remove', \{ name \}\)/, '번호 지우기 → /api/pdf/page-numbers/remove');
+  assert.match(script, /localStorage\.setItem\('retextpdf\.pageNumbers'/, '쪽 번호 설정을 기억한다');
+  {
+    const lbl = new Function(`${script.match(/const pnLabel = [^\n]+/)[0]}; return pnLabel;`)();
+    assert.deepStrictEqual(['n', 'n/N', 'dash', 'ko'].map((f) => lbl(f, 1, 12)), ['1', '1 / 12', '- 1 -', '1쪽'], '쪽 번호 모양 보기 글이 서버 형식과 같다');
+  }
+
+  // 숨은 메뉴 없음: [문서 ▾] 드롭다운을 없애고 병합·이미지로·용량 줄이기·분할을 각각 아이콘+이름 버튼으로. [그림]은 도구 묶음, 돌리기 이름은 왼쪽/오른쪽
+  assert.doesNotMatch(html, /id="menuDoc"|openDocMenu|data-icon="docMenu"|문서 ▾/, '[문서 ▾] 드롭다운은 없다');
+  const groupDoc = html.slice(html.indexOf('id="groupDoc"'), html.indexOf('</div>', html.indexOf('id="groupDoc"')));
+  for (const id of ['menuMerge', 'menuExportImages', 'menuDownsample', 'menuSplit']) assert.ok(groupDoc.includes(`id="${id}"`), `문서 묶음에 #${id} 버튼이 있다`);
+  assert.match(script, /\$\('#menuMerge'\)\.onclick = openMergeDialog/, '[병합] → 병합 창');
+  assert.match(script, /\$\('#menuExportImages'\)\.onclick = \(\) => \(pdfIsOpen\(\) \? openExportImagesDialog\(\) : exportImagesFromFile\(\)\)/, '[이미지로]: 문서가 없으면 파일을 골라 내보낸다');
+  assert.match(script, /\$\('#menuDownsample'\)\.onclick = \(\) => \(pdfIsOpen\(\) \? openDownsampleDialog\(\) : openDownsampleFilesDialog\(\)\)/, '[용량 줄이기]: 문서가 없으면 여러 파일 용량 줄이기');
+  assert.match(html, /id="menuSplit" data-icon="split" data-modes="pdf"/, '[분할]은 PDF를 열었을 때만 보인다');
+  // 아이콘: 22px·같은 굵기, 병합·끼워 넣기·분할·용량 줄이기·이미지로·암호는 서로 다른 그림
+  assert.match(html, /\.tb svg\{width:22px;height:22px;[^}]*stroke-width:1\.8/, '도구줄 아이콘은 22px, 선 굵기 1.8');
+  const icons = {};
+  for (const k of ['merge', 'pageInsertPdf', 'split', 'downsample', 'exportImages', 'insertImage', 'lock']) {
+    const m = script.match(new RegExp(`\\n  ${k}: '([^']+)'`));
+    assert.ok(m, `아이콘 ${k}가 있다`); icons[k] = m[1];
+  }
+  assert.strictEqual(new Set(Object.values(icons)).size, Object.keys(icons).length, '문서·쪽 도구 아이콘은 모두 다른 그림이다');
+  const groupTool = html.slice(html.indexOf('id="groupTool"'), html.indexOf('</div>', html.indexOf('id="groupTool"')));
+  assert.ok(groupTool.includes('id="menuInsertImage"'), '[그림]은 도구 묶음에 있다');
+  assert.match(script, /\$\('#printBtn'\)\.onclick = \(\) => onPrint\(\)/, '[인쇄] → onPrint');
+  assert.match(script, /\$\('#pageBlank'\)\.onclick = \(\) => onPageBlank\(currentPageIndex\(\) \+ 1\)/, '[빈 쪽] → onPageBlank(현재 쪽 뒤)');
+  assert.match(script, /\$\('#pageInsertPdf'\)\.onclick = \(\) => onInsertPdfAt\(currentPageIndex\(\) \+ 1, null\)/, '[PDF 끼워 넣기] → onInsertPdfAt(현재 쪽 뒤, null)');
+  assert.match(script, /\$\('#pageNumbers'\)\.onclick = \(\) => onPageNumbers\(\)/, '[쪽 번호] → onPageNumbers');
+  for (const item of ["menuItem('복제', () => onPageDuplicate(idxs))", "menuItem('앞에 빈 쪽', () => onPageBlank(first))", "menuItem('뒤에 빈 쪽', () => onPageBlank(last + 1))",
+    "menuItem('PDF 끼워 넣기…', () => onInsertPdfAt(last + 1, null))", "menuItem('따로 저장…', () => savePagesAs(idxs)", "menuItem('지우기', deleteSelectedPages"]) {
+    assert.ok(script.includes(item), `쪽 우클릭 메뉴: ${item}`);
+  }
+
+  // B. 왼쪽 패널: PDF는 쪽 목록, Markdown은 파일 목록. 축소본은 보이는 것만(IntersectionObserver)
+  assert.match(script, /showAsideTab\(isPdf \? 'page' : 'file'\)/, 'PDF를 열면 쪽 목록, Markdown을 열면 파일 목록');
+  assert.match(script, /new IntersectionObserver\([\s\S]{0,200}root: \$\('#pageThumbs'\)/, '축소본은 목록에 보이는 것만 그린다');
+  assert.match(script, /const THUMB_W = 140/, '축소본 폭 140px');
+  assert.match(html, /<div id="pageThumbs" tabindex="0" role="listbox" aria-multiselectable="true"/, '쪽 목록은 키보드로 움직일 수 있는 여러 선택 목록이다');
+  assert.match(script, /e\.key === 'Delete'\) \{ e\.preventDefault\(\); deleteSelectedPages\(\); \}/, 'Delete로 고른 쪽을 지운다');
+  assert.match(script, /function deleteSelectedPages\(\)[\s\S]{0,500}runDeletePages\(idxs, '쪽 지우기'\)/, '쪽 지우기는 기존 삭제 흐름(실행 취소 토스트 포함)을 쓴다');
+  assert.match(script, /`\$\{pageDrag\.pages\.length\}쪽 옮기기`/, '끌 때 "N쪽 옮기기" 꼬리표');
+  assert.match(script, /function autoScrollThumbs\(clientY\)/, '목록 위·아래 끝에서 저절로 스크롤');
+  assert.match(script, /onInsertPdfAt\(at, paths\);/, '쪽 목록에 PDF 파일을 놓으면 그 자리에 끼워 넣는다');
+  assert.match(script, /for \(const type of \['dragenter', 'dragleave'\]\)[\s\S]{0,200}e\.stopPropagation\(\)/, '쪽 목록 위의 파일 끌기는 창 전체 "놓아서 열기"를 띄우지 않는다');
+  assert.match(script, /if \(!isFileDrag\(e\)\) return; dragCounter\+\+/, '쪽 축소본 끌기(파일 아님)는 "놓아서 열기" 오버레이를 띄우지 않는다');
+  // 끌어 옮기기의 새 순서 계산을 실제로 돌려 본다(reorder 라우트는 전체 순서를 받는다)
+  const src = script.match(/function computeMoveOrder\(n, moving, at\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(src, 'computeMoveOrder가 있다');
+  const computeMoveOrder = new Function(`${src}; return computeMoveOrder;`)();
+  assert.deepStrictEqual(computeMoveOrder(5, [0], 3), [1, 2, 0, 3, 4], '1쪽을 4쪽 앞으로');
+  assert.deepStrictEqual(computeMoveOrder(5, [4], 0), [4, 0, 1, 2, 3], '5쪽을 맨 앞으로');
+  assert.deepStrictEqual(computeMoveOrder(5, [1, 3], 5), [0, 2, 4, 1, 3], '2·4쪽을 맨 뒤로(원래 순서 유지)');
+  assert.deepStrictEqual(computeMoveOrder(5, [3, 1], 0), [1, 3, 0, 2, 4], '선택 순서와 무관하게 원래 순서대로 모은다');
+  assert.deepStrictEqual(computeMoveOrder(4, [1, 2], 2), [0, 1, 2, 3], '제 자리에 놓으면 그대로');
+  assert.match(script, /await pdfMutate\('\/api\/pdf\/pages\/reorder', \{ name: cur, order \}\)/, '끌어 옮기기는 기존 reorder 라우트에 전체 순서를 보낸다');
+
+  // C·D. 상태줄(쪽 · 파일 · 저장 상태 · 버전), 확대 목록
+  assert.match(html, /<span id="saveState" hidden><span id="dirty" hidden>●<\/span><span id="saveText"><\/span><\/span>/, '상태줄 저장 상태(● + 글)');
+  assert.match(script, /\$\('#saveText'\)\.textContent = d \? '고친 내용 있음' : '저장됨'/, '저장 상태 문구');
+  for (const pct of [50, 75, 100, 125, 150, 200, 300, 400]) assert.match(html, new RegExp(`<option value="[\\d.]+">${pct}%</option>`), `확대 목록에 ${pct}%`);
+  assert.match(html, /<option value="fitPage">쪽 전체 보기<\/option>/, '확대 목록에 쪽 전체 보기');
+  assert.match(script, /else if \(e\.key === '1'\) \{ e\.preventDefault\(\); fitPage\(\); \}/, 'Ctrl+1 = 쪽 전체 보기');
+  assert.match(script, /else if \(e\.key === '0'\) \{ e\.preventDefault\(\); fitWidth\(\); \}/, 'Ctrl+0 = 폭 맞춤(그대로)');
+  assert.doesNotMatch(html, /id="zoomRange"|id="zoomPct"/, '상태줄 확대 슬라이더(중복)는 없앴다');
+
+  // E. 단축키 도움말: SHORTCUTS 배열 하나가 도움말과 버튼 설명을 함께 만든다
+  assert.match(html, /<dialog id="shortcutsDialog"/, '단축키 도움말 창');
+  assert.match(script, /const SHORTCUTS = \[/, 'SHORTCUTS 배열');
+  assert.match(script, /e\.key === 'F1' \|\| \(mod && !e\.altKey && \(e\.key === '\/' \|\| e\.code === 'Slash'\)\)/, 'Ctrl+/ · F1로 연다');
+  assert.match(script, /b\.title = withShortcut\(b\.id, tip\)/, '도구줄 버튼 설명의 단축키는 SHORTCUTS에서 붙인다');
+  assert.match(html, /kbd\{/, '<kbd> 모양');
+
+  // G. 접근성: 아이콘 버튼 이름, 포커스 테두리
+  assert.match(script, /b\.setAttribute\('aria-label', full \|\| label \|\| tip\)/, '아이콘 버튼은 aria-label을 가진다(이름을 숨겨도 읽히고, 줄인 이름 대신 설명의 온전한 이름을 읽는다)');
+  assert.match(html, /:focus-visible\{outline:2px solid var\(--acc\)/, ':focus-visible 테두리');
+  // 아이콘은 직접 그린 인라인 SVG — 외부 아이콘 세트·CDN 없음
+  assert.match(script, /const ICONS = \{/, '인라인 SVG 아이콘');
+  assert.doesNotMatch(html, /lucide|<link[^>]+href="https?:/i, '외부 아이콘 세트·외부 스타일시트를 쓰지 않는다');
+  console.log('OK — UI 개편(도구줄·상황줄·쪽 목록·단축키·토스트) 단언 통과');
+}
+
+// 밝은 아이보리 테마 · 쪽 기준 보기(쪽 전체 보기 기본) · 암호 걸기(2026-10)
+{
+  const scriptLF = script.replace(/\r\n/g, '\n');
+  const fnBody = (sig) => { const k = scriptLF.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return scriptLF.slice(k, scriptLF.indexOf('\n}\n', k)); };
+  const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  // A. 테마 토큰: 밝은 색만, 어두운 바탕 토큰·하드코딩 색이 남지 않는다
+  const root = css.match(/:root\{([^}]*)\}/)?.[1];
+  assert.ok(root, ':root 토큰이 있다');
+  assert.match(root, /color-scheme:light/, 'color-scheme: light');
+  const tok = Object.fromEntries([...root.matchAll(/--([\w-]+):(#[0-9a-f]{3,8})/gi)].map((m) => [m[1], m[2]]));
+  const lum = (hex) => {
+    const h = hex.length === 4 ? hex.replace(/^#(.)(.)(.)$/, '#$1$1$2$2$3$3') : hex.slice(0, 7);
+    const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  for (const k of ['bg', 'panel', 'panel2', 'hover', 'sel', 'input', 'btn', 'docBg']) {
+    assert.ok(tok[k], `바탕 토큰 --${k}가 있다`);
+    assert.ok(lum(tok[k]) > 0.6, `--${k}(${tok[k]})는 밝은 바탕이다(어두운 테마 토큰이 남지 않았다)`);
+  }
+  assert.ok(lum(tok.panel) > 0.9, `창 틀(--panel ${tok.panel})은 거의 흰 아이보리다`);
+  assert.ok(lum(tok.docBg) < lum(tok.panel) - 0.15 && lum(tok.docBg) > 0.6, `문서 영역 바탕(--docBg ${tok.docBg})은 흰 쪽이 또렷한 옅은 회색이다`);
+  for (const [fg, bgs] of [['fg', ['panel', 'panel2', 'hover', 'sel']], ['mut', ['panel', 'panel2', 'hover', 'input']], ['accText', ['panel', 'panel2', 'hover', 'sel', 'input']], ['badText', ['panel', 'input']]]) {
+    for (const b of bgs) assert.ok(contrast(tok[fg], tok[b]) >= 4.5, `--${fg} 글자 on --${b}: 대비 ${contrast(tok[fg], tok[b]).toFixed(2)} ≥ 4.5`);
+  }
+  assert.ok(contrast('#ffffff', tok.accStrong) >= 4.5, '주 버튼(흰 글자 on --accStrong) 대비 ≥ 4.5');
+  assert.match(css, /button\.pri\{background:var\(--accStrong\)/, '주 버튼은 진한 강조색 바탕');
+  assert.match(css, /\.pdf\{[^}]*background:var\(--docBg\)/, 'PDF 쪽 뒤 바탕은 옅은 회색(--docBg)');
+  assert.match(css, /\.pdfPage\{[^}]*background:var\(--paper\)[^}]*box-shadow:/, '쪽은 흰 종이에 부드러운 그림자');
+  const darkHex = /#(1b1b1f|232329|1f1f25|2c2c34|34343e|2e2e37|3a3a45|33333b|3a3a40|2b2b33|4a4a55|2f2f38|4a3418|6b4c22)\b|#000[0-9a-f]\b|#000[0-9a-f]{2}\b|#f4b9a2|#f0a0a0/i;
+  assert.doesNotMatch(html, darkHex, '어두운 테마의 하드코딩 색(#1b1b1f·#2e2e37·#000a 등)이 index.html에 남지 않는다');
+  // :root 밖의 CSS는 색을 토큰으로 쓴다(종이 흰색·검색 강조·의미 색 등 몇 가지 예외만)
+  const outside = css.replace(/:root\{[^}]*\}/, '').match(/#[0-9a-f]{3,8}\b/gi) || [];
+  for (const c of outside) assert.ok(['#fff', '#ccc', '#e6e3dc', '#2f74c0', '#1d5fa8'].includes(c.toLowerCase()), `토큰 밖 하드코딩 색 ${c}는 허용 목록에 있다`);
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  assert.match(mainSrc, /backgroundColor: '#fbf9f4'/, '창 배경(시작할 때 깜빡임)도 아이보리');
+  assert.strictEqual(mainSrc.match(/backgroundColor: '([^']+)'/)[1], tok.panel, '창 배경색 = --panel');
+
+  // B. 쪽 기준 보기: PDF를 열면 쪽 전체 보기, 맞춤 방식이면 크기가 바뀔 때 다시 맞추고, %를 고르면 그 문서 동안 유지
+  assert.match(script, /let zoomMode = 'fitPage';/, '확대 방식 기본 = 쪽 전체 보기');
+  assert.match(fnBody('async function open(name)'), /zoomMode = 'fitPage';/, '문서를 열 때마다 쪽 전체 보기로 시작한다');
+  assert.match(fnBody('async function renderPdfDoc(name)'), /if \(zoomMode !== 'manual' && pdfPages\.length\) pdfScale = fitScale\(zoomMode, keepPage\);[\s\S]*buildPages\(name, pdfScale\)/, '그리기 전에 맞춤 배율을 잰다');
+  assert.match(fnBody('function fitScale('), /Math\.min\(w \/ p\.w, h \/ p\.h\)/, '쪽 전체 보기 = 폭·높이가 모두 들어가는 배율');
+  assert.match(fnBody('function fitScale('), /Math\.floor\(s \* 100\) \/ 100/, '맞춤 배율은 내려서(쪽 아래가 잘리지 않게)');
+  assert.match(script, /new ResizeObserver\([\s\S]{0,200}if \(zoomMode === 'manual'\) return;[\s\S]{0,300}fitPage\(true\); else fitWidth\(\);[\s\S]{0,40}\.observe\(\$\('#pdf'\)\)/, '맞춤 방식이면 문서 영역 크기가 바뀔 때 다시 맞춘다');
+  assert.match(fnBody('function zoomTo('), /zoomMode = 'manual'; applyZoom\(next, anchor\)/, '%로 바꾸면 맞춤을 끄고 그 배율을 유지한다');
+  for (const re of [/zoomTo\(\+v\)/, /if \(next != null\) zoomTo\(next\)/, /e\.preventDefault\(\);\s*zoomTo\(pdfScale \* Math\.max\(0\.8/, /zoomTo\(pdfScale \* 1\.1\)/, /zoomTo\(pdfScale \/ 1\.1\)/]) assert.match(script, re, `% 확대 경로는 zoomTo를 거친다: ${re}`);
+  assert.doesNotMatch(script, /retextpdf\.zoom/, '확대 비율을 실행 사이에 기억하지 않는다(문서마다 쪽 전체 보기로 시작)');
+  assert.match(fnBody('function showZoom()'), /if \(zoomMode === 'fitPage' \|\| zoomMode === 'fitWidth'\) \{ sel\.value = zoomMode;/, '확대 목록은 "쪽 전체 보기"·"폭 맞춤"을 그대로 보인다');
+  assert.match(html, /<select id="zoomSelect"[^>]*>\s*<option value="fitPage">쪽 전체 보기<\/option><option value="fitWidth">폭 맞춤<\/option>/, '확대 목록 맨 위에 쪽 전체 보기 · 폭 맞춤');
+  assert.match(fnBody('function goToPage(idx)'), /el\.scrollTop = pageTop\(/, '쪽 이동은 그 쪽 맨 위를 위 여백 바로 아래에 맞춘다');
+  assert.match(css, /\.pdf\{[^}]*overflow-y:scroll/, '세로 스크롤 막대를 늘 두어 맞춤 폭이 흔들리지 않는다');
+  assert.match(css, /\.pdfPage\{[^}]*display:block;margin:0 auto 20px/, '쪽은 한 줄에 한 장, 쪽 사이 간격 = 위 여백');
+  // 확대 묶음은 상태줄 오른쪽 끝(도구줄 이름이 1366px에서 다 보이게)
+  const sb = html.slice(html.indexOf('<div class="statusbar" id="statusbar">'), html.indexOf('<div id="dropOverlay"'));
+  assert.ok(sb.includes('id="pdfZoom"') && sb.indexOf('id="pdfZoom"') < sb.indexOf('id="ver"'), '확대 묶음(− 목록 +)은 상태줄 오른쪽 끝, 버전 앞');
+  assert.ok(!html.slice(html.indexOf('id="toolbar"'), html.indexOf('id="ctxbar"')).includes('id="zoomSelect"'), '도구줄에는 확대 목록이 없다');
+
+  // C. 암호 걸기: [암호] 버튼 → 창(암호·확인·보기·제한·소유자 암호) → saveAs → /api/pdf/protect. 암호는 어디에도 남기지 않는다
+  assert.match(html, /<button type="button" class="tb" id="protectBtn" data-icon="lock" data-modes="pdf"[^>]*><span class="tl">암호<\/span><\/button>/, '[암호] 버튼(자물쇠)');
+  const groupFile = html.slice(html.indexOf('id="groupFile"'), html.indexOf('</div>', html.indexOf('id="groupFile"')));
+  assert.ok(groupFile.includes('id="protectBtn"'), '[암호]는 파일 묶음에 있다');
+  assert.match(html, /<dialog id="protectDialog" class="panel"/, '암호 걸기 창');
+  for (const id of ['protectPw', 'protectPw2', 'protectOwner']) assert.match(html, new RegExp(`<input id="${id}" type="password" autocomplete="off"`), `#${id}는 type=password, 자동 완성 없음`);
+  for (const [id, label] of [['protectPrint', '인쇄 허용'], ['protectCopy', '글자 복사 허용'], ['protectModify', '수정 허용']]) assert.match(html, new RegExp(`<input type="checkbox" id="${id}" checked>${label}`), `제한: ${label}(기본 켜짐)`);
+  assert.match(html, /<legend>제한 \(선택\)<\/legend>/, '제한 (선택) 묶음');
+  assert.match(html, /id="protectOwnerRow" hidden[\s\S]{0,500}비우면 임의로 만듭니다/, '소유자 암호 칸(제한을 풀 때만, 비우면 임의로)');
+  assert.match(html, /id="protectShow" class="eyeBtn" data-icon="eye"/, '암호 보기 단추');
+  assert.match(html, /id="protectError" class="bad" role="alert" hidden>두 암호가 다릅니다</, '두 암호가 다르면 창 안에 알린다');
+  assert.match(html, /id="protectOk" class="pri" type="submit">암호 걸어 저장…</, '[암호 걸어 저장…]');
+  assert.match(html, /id="protectCancel" type="button">취소</, '[취소]');
+  assert.match(html, /id="protectNameRow" hidden[\s\S]{0,200}id="protectName" type="text"/, '브라우저 화면용 파일 이름 칸');
+  assert.match(script, /\$\('#protectBtn'\)\.onclick = openProtectDialog/, '[암호] → 암호 걸기 창');
+  const submitStart = scriptLF.indexOf("$('#protectForm').onsubmit");
+  const submit = scriptLF.slice(submitStart, scriptLF.indexOf('\n};\n', submitStart));
+  assert.ok(submit.length > 300, '암호 걸기 제출 처리가 있다');
+  assert.match(submit, /if \(pw !== \$\('#protectPw2'\)\.value\) \{ showProtectError\('두 암호가 다릅니다'\)/, '두 암호가 다르면 보내지 않는다');
+  assert.match(submit, /window\.retextPdf\.saveAs\(`\$\{dirOf\(name\)\}\$\{base\}_암호\.pdf`, \{ suggestDocFolder: curTemp \|\| curReadOnly \}\)/, '앱: 같은 폴더의 "<이름>_암호.pdf"로 저장 위치를 묻는다');
+  assert.match(submit, /const payload = \{ name, to, userPassword: pw, allow \};[\s\S]{0,120}payload\.ownerPassword = owner/, '요청 본문: name·to·userPassword·allow(·ownerPassword)');
+  assert.match(submit, /apiPost\('\/api\/pdf\/protect', payload/, '→ POST /api/pdf/protect');
+  assert.match(submit, /toast\(`암호를 건 사본을 저장했습니다: \$\{basename\(to\)\}`/, '성공 알림');
+  assert.match(submit, /if \(samePath\(to, name\)\) toast\(`이 파일은 이제 암호가 걸려 있습니다[^`]*`, \{ kind: 'warning'/, '지금 연 파일에 걸었으면 경고로 알린다');
+  assert.match(script, /\$\('#protectDialog'\)\.addEventListener\('close', clearProtectFields\)/, '창을 닫으면(성공·취소·Esc) 입력칸을 비운다');
+  assert.match(fnBody('function clearProtectFields()'), /for \(const id of PROTECT_FIELDS\) \{ \$\(id\)\.value = ''; \$\(id\)\.type = 'password'; \}/, '암호 칸을 비우고 다시 가린다');
+  const protectCode = scriptLF.slice(scriptLF.indexOf('// ---- 암호 걸기'), scriptLF.indexOf('\n};\n', submitStart)) + '\n};\n';
+  assert.doesNotMatch(protectCode.replace(/^\s*\/\/.*$/gm, ''), /localStorage|sessionStorage|console\.|indexedDB|document\.cookie/, '암호 걸기 코드는 저장소·로그를 건드리지 않는다(주석 제외)');
+  assert.doesNotMatch(script, /(localStorage|sessionStorage)\.setItem\([^)]*(protect|userPassword|ownerPassword)/i, '암호 걸기 값을 저장소에 쓰지 않는다');
+  assert.doesNotMatch(script, /console\.\w+\([^)]*(protect|userPassword|ownerPassword)/i, '암호 걸기 값을 로그에 남기지 않는다');
+
+  // 실제로 흐름을 돌려 본다: 가짜 DOM·apiPost·saveAs로 제출 → 요청 본문, 저장소·로그에 암호가 닿지 않는지, 닫으면 칸이 비는지
+  const PW = 'Pw-7#unique-secret', OWN = 'Owner-9#unique';
+  const els = {}, listeners = {};
+  const el = (id) => (els[id] ||= { id, value: '', type: 'password', checked: true, hidden: false, disabled: false, open: false, textContent: '', title: '', attrs: {},
+    setAttribute(k, v) { this.attrs[k] = String(v); }, getAttribute(k) { return this.attrs[k] ?? null; }, focus() {},
+    showModal() { this.open = true; }, close() { this.open = false; (listeners[`${id}:close`] || []).forEach((f) => f()); },
+    addEventListener(t, f) { (listeners[`${id}:${t}`] ||= []).push(f); } });
+  const fire = (id, type) => (listeners[`${id}:${type}`] || []).forEach((f) => f());
+  const store = { ls: [], ss: [], log: [] }, fetched = [], toasts = [];
+  const sandbox = {
+    $: (s) => el(s.replace(/^#/, '')), cur: 'C:\\docs\\계약서.pdf', curTemp: false, curReadOnly: false, basename: (p) => p.split(/[\\/]/).pop(),
+    pdfOpen: () => true, toast: (t, o) => toasts.push([t, o && o.kind]), pdfDirty: true, securityNoted: null, showDirty: () => {},
+    apiPost: async (p, body) => { fetched.push([p, JSON.parse(JSON.stringify(body))]); return { ok: true, path: body.to }; },
+    window: { retextPdf: { saveAs: async (def) => { sandbox.asked = def; return 'C:\\docs\\계약서_암호.pdf'; } } },
+    localStorage: { setItem: (...a) => store.ls.push(a) }, sessionStorage: { setItem: (...a) => store.ss.push(a) },
+    console: { log: (...a) => store.log.push(a), error: (...a) => store.log.push(a) },
+  };
+  const api = new Function(...Object.keys(sandbox), `${protectCode}\nreturn { openProtectDialog };`)(...Object.values(sandbox));
+  const submitForm = () => el('protectForm').onsubmit({ preventDefault() {} });
+  (async () => {
+    api.openProtectDialog();
+    assert.ok(el('protectDialog').open, '창이 열린다');
+    assert.strictEqual(el('protectOk').textContent, '암호 걸어 저장…', '앱에서는 [암호 걸어 저장…]');
+    assert.ok(el('protectNameRow').hidden, '앱에서는 파일 이름 칸을 숨긴다(저장 위치 창을 쓴다)');
+    el('protectPw').value = PW; el('protectPw2').value = PW + 'x'; fire('protectForm', 'input');
+    assert.ok(!el('protectError').hidden && el('protectError').textContent === '두 암호가 다릅니다', '확인이 다르면 바로 "두 암호가 다릅니다"');
+    await submitForm();
+    assert.strictEqual(fetched.length, 0, '두 암호가 다르면 요청하지 않는다');
+    el('protectPw2').value = PW; el('protectCopy').checked = false; fire('protectForm', 'change');
+    assert.ok(el('protectError').hidden, '같으면 알림이 사라진다');
+    assert.ok(!el('protectOwnerRow').hidden, '제한을 하나 풀면 소유자 암호 칸이 보인다');
+    el('protectOwner').value = OWN;
+    await submitForm();
+    assert.strictEqual(sandbox.asked, 'C:\\docs\\계약서_암호.pdf', '저장 위치 기본값 = 같은 폴더의 <이름>_암호.pdf');
+    assert.deepStrictEqual(fetched, [['/api/pdf/protect', { name: 'C:\\docs\\계약서.pdf', to: 'C:\\docs\\계약서_암호.pdf', userPassword: PW, allow: { print: true, copy: false, modify: true }, ownerPassword: OWN }]], '요청 본문');
+    assert.deepStrictEqual(toasts, [['암호를 건 사본을 저장했습니다: 계약서_암호.pdf', 'info']], '사본 저장 알림');
+    assert.ok(!el('protectDialog').open, '성공하면 창을 닫는다');
+    for (const id of ['protectPw', 'protectPw2', 'protectOwner']) assert.strictEqual(el(id).value, '', `닫으면 #${id}를 비운다`);
+    // 지금 연 파일에 그대로 걸면 경고
+    sandbox.window.retextPdf.saveAs = async () => 'c:/docs/계약서.pdf';
+    api.openProtectDialog(); el('protectPw').value = PW; el('protectPw2').value = PW;
+    await submitForm();
+    assert.strictEqual(toasts[1][1], 'warning', '지금 연 파일 경로면 경고 알림');
+    assert.match(toasts[1][0], /^이 파일은 이제 암호가 걸려 있습니다/, '지금 연 파일 경로면 "이 파일은 이제 암호가 걸려 있습니다"');
+    // 취소(닫기)해도 칸을 비운다
+    api.openProtectDialog(); el('protectPw').value = PW; el('protectCancel').onclick();
+    assert.strictEqual(el('protectPw').value, '', '[취소]로 닫아도 암호 칸을 비운다');
+    // 브라우저 화면(window.retextPdf 없음): 창의 파일 이름 칸 → 같은 폴더에 쓴다. 잘못된 이름은 보내지 않는다
+    const browser = { ...sandbox, window: {}, cur: '독서모임_안내.pdf' };
+    const api2 = new Function(...Object.keys(browser), `${protectCode}\nreturn { openProtectDialog };`)(...Object.values(browser));
+    fetched.length = 0;
+    api2.openProtectDialog();
+    assert.ok(!el('protectNameRow').hidden && el('protectName').value === '독서모임_안내_암호.pdf' && el('protectOk').textContent === '암호 걸어 저장', '브라우저 화면: 파일 이름 칸(기본 <이름>_암호.pdf)');
+    el('protectPw').value = PW; el('protectPw2').value = PW; el('protectName').value = '../밖.pdf';
+    await submitForm();
+    assert.strictEqual(fetched.length, 0, '폴더를 넘는 파일 이름은 보내지 않는다');
+    el('protectName').value = '사본.pdf';
+    await submitForm();
+    assert.strictEqual(fetched[0]?.[1].to, '사본.pdf', '브라우저 화면: 같은 폴더(작업 폴더)의 그 이름으로 쓴다');
+    const leaked = JSON.stringify(store);
+    assert.ok(!leaked.includes(PW) && !leaked.includes(OWN), '암호가 localStorage·sessionStorage·console에 닿지 않는다');
+    console.log('OK — 밝은 테마·쪽 전체 보기·암호 걸기 단언 통과');
+  })().catch((error) => { console.error(error); process.exit(1); });
+}
+
+// 떠 있는 패널 밖 빈 곳 클릭 → 닫기(줄 고치기는 고친 글이 있으면 적용). 다른 상자·패널 안·문서 밖 클릭은 그대로 둔다
+{
+  assert.ok(/document\.addEventListener\('mousedown', closePanelsOnOutside\)/.test(html), '문서 전체 mousedown에서 패널 밖 클릭을 본다');
+  const fn = html.slice(html.indexOf('function closePanelsOnOutside'), html.indexOf("document.addEventListener('mousedown', closePanelsOnOutside)"));
+  assert.ok(fn.includes(".closest('.pdfEditor, .pdfBox, .searchHit, .textDraft')"), '패널 안·다른 상자 클릭은 제외');
+  assert.ok(fn.includes("$('#pdf').contains(e.target)"), '문서 영역 밖(도구줄·대화상자) 클릭은 제외');
+  assert.ok(/panel\.onOutside = \(\) => \(ta\.value !== selectedObj\?\.text \? commit\(\) : close\(\)\)/.test(html), '줄 고치기: 고쳤으면 적용, 아니면 닫기');
+  console.log('OK — 패널 밖 클릭으로 닫기 단언 통과');
 }

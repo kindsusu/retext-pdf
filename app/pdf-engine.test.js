@@ -951,5 +951,291 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     d.close();
   }
 
+  // ── P7: 암호 PDF · 쪽 작업 · 쪽 번호 · 글상자 · 투명 이미지 ─────────────────
+  const { buildPdf } = require('./pdf-test-fixtures');
+  const pageTexts = (d) => Array.from({ length: d.pageCount }, (_, i) => d.pageText(i));
+  // 렌더 비트맵(보이는 방향)에서 흰색이 아닌 픽셀의 범위 — 쪽 번호·글상자가 보이는 자리를 잰다
+  const inkBox = (d, i) => {
+    const r = d._renderRaw(i, 1);
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) {
+      const p = y * r.stride + x * 4;
+      if (r.data[p] + r.data[p + 1] + r.data[p + 2] < 600) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    }
+    return { x0, y0, x1, y1, w: r.w, h: r.h };
+  };
+
+  // --- 암호 PDF: 여는 암호(틀림/없음 구분) · 소유자 암호만(권한 제한) · 저장하면 암호가 풀린다 ---
+  {
+    const locked = buildPdf({ pages: [{}, { w: 600, h: 300 }], encrypt: { user: 'pw1234', owner: 'own', P: -4 } });
+    await assert.rejects(open(locked), (e) => e.code === 'PASSWORD_REQUIRED' && /암호/.test(e.message), '암호 없이 열면 PASSWORD_REQUIRED');
+    await assert.rejects(open(locked, 'nope'), (e) => e.code === 'PASSWORD_WRONG', '틀린 암호면 PASSWORD_WRONG');
+    const d = await open(locked, 'pw1234');
+    assert.deepStrictEqual(d.security, { encrypted: true, openPassword: true, restricted: false });
+    assert.deepStrictEqual(pageTexts(d), ['Page 1', 'Page 2']);
+    assert.strictEqual(d.setText(0, 0, 'Unlocked edit').ok, true);
+    const saved = d.save();
+    d.close();
+    const d2 = await open(saved); // 암호 없이 열린다
+    assert.deepStrictEqual(d2.security, { encrypted: false, openPassword: false, restricted: false }, '저장본은 암호가 풀린 문서');
+    assert.deepStrictEqual(pageTexts(d2), ['Unlocked edit', 'Page 2'], '내용 그대로');
+    assert.deepStrictEqual([d2.pageSize(1).w, d2.pageSize(1).h], [600, 300]);
+    d2.close();
+    const byOwner = await open(locked, 'own');
+    assert.deepStrictEqual(byOwner.security, { encrypted: true, openPassword: true, restricted: false }, '소유자 암호로 열어도 여는 암호가 필요한 문서');
+    byOwner.close();
+
+    const restricted = buildPdf({ pages: [{}], encrypt: { user: '', owner: 'own', P: -3904 } }); // 인쇄·복사·수정 금지
+    const r = await open(restricted); // 빈 암호로 열린다(PDFium 기본 동작 유지)
+    assert.deepStrictEqual(r.security, { encrypted: true, openPassword: false, restricted: true });
+    assert.strictEqual(r.setText(0, 0, 'Edited').ok, true);
+    const rs = r.save(); r.close();
+    const r2 = await open(rs);
+    assert.deepStrictEqual([r2.security.encrypted, r2.security.restricted, r2.pageText(0)], [false, false, 'Edited'], '권한 제한도 풀려 저장된다');
+    r2.close();
+    await assert.rejects(merge([buildPdf({ pages: [{}] }), locked]), /암호/, '병합: 암호 걸린 파일은 거절');
+    console.log('암호 PDF OK');
+  }
+
+  // --- 빈 쪽 끼우기 · 복제 · 다른 PDF 끼우기 · 떨어진 여러 쪽 순서 변경 ---
+  {
+    const d = await open(buildPdf({ pages: [{}, { w: 600, h: 300 }, {}] }));
+    let r = d.insertBlankPage(2); // 크기를 안 주면 옆 쪽(1쪽, 600×300)
+    assert.deepStrictEqual([r.ok, r.at, r.pageCount], [true, 2, 4]);
+    assert.deepStrictEqual([d.pageSize(2).w, d.pageSize(2).h], [600, 300]);
+    r = d.insertBlankPage(0, 100, 200);
+    assert.deepStrictEqual([d.pageSize(0).w, d.pageSize(0).h, d.pageCount], [100, 200, 5]);
+    assert.throws(() => d.insertBlankPage(0, 0.5, 100), /쪽 크기/);
+    assert.deepStrictEqual(pageTexts(d), ['', 'Page 1', 'Page 2', '', 'Page 3']);
+    const d2 = await open(d.save()); d.close();
+    assert.deepStrictEqual([d2.pageCount, d2.pageSize(3).w, d2.pageSize(3).h], [5, 600, 300], '저장·재열기 뒤에도 그대로');
+    d2.close();
+  }
+  {
+    const d = await open(buildPdf({ pages: [{}, {}, {}] }));
+    const r = d.duplicatePages([2, 0, 0, 9]); // 중복·범위 밖은 무시
+    assert.deepStrictEqual([r.ok, r.pages, r.pageCount], [true, [1, 4], 5], '사본은 원래 쪽 바로 뒤');
+    assert.deepStrictEqual(pageTexts(d), ['Page 1', 'Page 1', 'Page 2', 'Page 3', 'Page 3']);
+    // 사본을 고쳐도 원본은 그대로(콘텐츠 스트림을 함께 쓰지 않는다)
+    const ti = d.objects(1).findIndex((o) => o.type === 'text');
+    assert.strictEqual(d.setText(1, ti, 'Copy edited').ok, true);
+    const d2 = await open(d.save()); d.close();
+    assert.deepStrictEqual(pageTexts(d2), ['Page 1', 'Copy edited', 'Page 2', 'Page 3', 'Page 3']);
+    assert.deepStrictEqual(d2.duplicatePages([]), { ok: false, pages: [], pageCount: 5 });
+    d2.close();
+  }
+  {
+    const d = await open(buildPdf({ pages: [{}, {}, {}] }));
+    const other = buildPdf({ pages: [{ content: 'BT /F1 20 Tf 40 40 Td (Other A) Tj ET' }, { w: 500, h: 250, content: 'BT /F1 20 Tf 40 40 Td (Other B) Tj ET' }] });
+    const r = d.insertPdf(1, other);
+    assert.deepStrictEqual([r.ok, r.at, r.inserted, r.pageCount], [true, 1, 2, 5]);
+    assert.deepStrictEqual(pageTexts(d), ['Page 1', 'Other A', 'Other B', 'Page 2', 'Page 3']);
+    const locked = buildPdf({ pages: [{}], encrypt: { user: 'x', owner: 'y', P: -4 } });
+    assert.throws(() => d.insertPdf(0, locked), (e) => e.code === 'SOURCE_ENCRYPTED' && /암호/.test(e.message));
+    assert.strictEqual(d.pageCount, 5, '거절하면 쪽 수 그대로');
+    const restricted = buildPdf({ pages: [{ content: 'BT /F1 20 Tf 40 40 Td (Restricted) Tj ET' }], encrypt: { user: '', owner: 'y', P: -3904 } });
+    d.insertPdf(5, restricted); // 권한만 걸린 문서는 빈 암호로 열려 들어간다
+    const d2 = await open(d.save()); d.close(); // 원본 버퍼는 이미 0xAB로 덮였다 — 가져온 객체가 복사본이어야 통과
+    assert.deepStrictEqual(pageTexts(d2), ['Page 1', 'Other A', 'Other B', 'Page 2', 'Page 3', 'Restricted']);
+    assert.deepStrictEqual([d2.pageSize(2).w, d2.pageSize(2).h], [500, 250]);
+    // 떨어진 두 쪽(1·3)을 맨 앞으로: 전체 순서 배열 하나로 된다
+    d2.reorderPages([1, 3, 0, 2, 4, 5]);
+    assert.deepStrictEqual(pageTexts(d2), ['Other A', 'Page 2', 'Page 1', 'Other B', 'Page 3', 'Restricted']);
+    d2.close();
+    console.log('쪽 끼우기·복제·PDF 끼우기·순서 변경 OK');
+  }
+
+  // --- 쪽 번호: 형식·위치·회전·CropBox·다시 매기기·지우기 ---
+  if (process.platform === 'win32') { // 숫자 글꼴은 맑은 고딕(대체 글꼴)
+    const blank = ' ';
+    const d = await open(buildPdf({ pages: [
+      { w: 400, h: 600, content: blank }, { w: 400, h: 600, content: blank, extra: '/Rotate 90' }, { w: 600, h: 400, content: blank },
+      { w: 400, h: 600, content: blank, extra: '/CropBox [50 50 350 550]' }, { w: 400, h: 600, content: blank, extra: '/Rotate 180' },
+      { w: 400, h: 600, content: blank, extra: '/Rotate 270' },
+    ] }));
+    let r = d.addPageNumbers({ format: 'n/N', size: 12, margin: 24 });
+    assert.deepStrictEqual([r.ok, r.numbered, r.removed, r.last], [true, 6, 0, 6]);
+    for (let i = 0; i < 6; i++) {
+      const b = inkBox(d, i), cx = (b.x0 + b.x1) / 2;
+      assert.ok(Math.abs(cx - b.w / 2) < 3, `${i}쪽: 보이는 가운데 (${cx} / ${b.w / 2})`);
+      assert.ok(b.y1 <= b.h - 24 + 3 && b.y1 >= b.h - 24 - 4 && b.y0 > b.h - 24 - 16, `${i}쪽: 보이는 아래 여백 24pt 위 (${b.y0}~${b.y1} / ${b.h})`);
+      assert.ok(b.x1 - b.x0 > b.y1 - b.y0, `${i}쪽: 글자가 가로로 놓였다(똑바로)`);
+      assert.match(d.pageText(i), new RegExp(`${i + 1}\\s*/\\s*6`));
+    }
+    assert.strictEqual(inkBox(d, 3).w, 300, 'CropBox 기준 쪽');
+    // 다시 매기면 바뀌고 쌓이지 않는다 / 표지 건너뛰기·시작 번호·오른쪽 위·한국어 형식·색
+    r = d.addPageNumbers({ format: 'ko', position: 'top-right', skipFirst: true, startAt: 5, color: '#ff0000', margin: 30 });
+    assert.deepStrictEqual([r.numbered, r.removed, r.last], [5, 6, 9]);
+    const nums = (dd) => Array.from({ length: dd.pageCount }, (_, i) => dd.objects(i).filter((o) => o.pageNum).map((o) => o.text));
+    assert.deepStrictEqual(nums(d), [[], ['5쪽'], ['6쪽'], ['7쪽'], ['8쪽'], ['9쪽']]);
+    const top = inkBox(d, 2);
+    assert.ok(top.y0 >= 30 - 3 && top.y0 < 30 + 4 && top.x1 <= top.w - 30 + 2 && top.x1 > top.w - 30 - 4, `오른쪽 위 여백 30 (${JSON.stringify(top)})`);
+    assert.deepStrictEqual(d.objects(2).find((o) => o.pageNum).color, [255, 0, 0, 255]);
+    const d2 = await open(d.save()); d.close();
+    assert.deepStrictEqual(nums(d2), [[], ['5쪽'], ['6쪽'], ['7쪽'], ['8쪽'], ['9쪽']], '마크가 저장 뒤에도 남는다');
+    d2.addPageNumbers({ format: 'dash' });
+    assert.deepStrictEqual(nums(d2).flat(), ['- 1 -', '- 2 -', '- 3 -', '- 4 -', '- 5 -', '- 6 -'], '저장본에서 다시 매겨도 하나씩');
+    assert.deepStrictEqual(d2.removePageNumbers(), { ok: true, removed: 6 });
+    assert.deepStrictEqual(nums(d2).flat(), []);
+    assert.deepStrictEqual(d2.removePageNumbers(), { ok: false, removed: 0 });
+    assert.throws(() => d2.addPageNumbers({ format: 'roman' }), /형식/);
+    assert.throws(() => d2.addPageNumbers({ position: 'middle' }), /위치/);
+    d2.close();
+    console.log('쪽 번호 OK');
+  }
+
+  // --- 글상자: 한글 여러 줄 · 색 · 줄 편집 · 회전 쪽 ---
+  if (process.platform === 'win32') {
+    const d = await open(buildPdf({ pages: [{ w: 400, h: 400, content: ' ' }, { w: 400, h: 600, content: ' ', extra: '/Rotate 90' }] }));
+    const r = d.addTextBox(0, { x: 50, y: 300, text: '안녕하세요 글상자\nsecond line', size: 14, color: '#0000ff' });
+    assert.ok(r.ok && r.idxs.length === 2 && r.group, JSON.stringify(r));
+    const objs = d.objects(0), [a, b] = r.idxs.map((k) => objs[k]);
+    assert.deepStrictEqual([a.text, b.text], ['안녕하세요 글상자', 'second line']);
+    assert.deepStrictEqual([a.group, a.color], [r.group, [0, 0, 255, 255]]);
+    assert.ok(Math.abs(a.bounds.x0 - 50) < 3 && a.bounds.y1 <= 300 + 1 && a.bounds.y1 > 300 - 14, `첫 줄 상자 ${JSON.stringify(a.bounds)}`);
+    assert.ok(Math.abs((a.origin.y - b.origin.y) - 17.5) < 0.01, '행간 1.25배');
+    // 기존 줄 편집 흐름으로 고칠 수 있다
+    assert.strictEqual(d.setText(0, r.idx, '고친 글상자').ok, true);
+    assert.strictEqual(d.objects(0)[r.idx].text, '고친 글상자');
+    // 회전 쪽: (x, y)가 보이는 상자의 왼쪽 위 — 보이는 방향으로 오른쪽으로 쓴다
+    const rr = d.addTextBox(1, { x: 100, y: 100, text: 'Rotated text', size: 20 });
+    const ink = inkBox(d, 1);
+    assert.ok(Math.abs(ink.x0 - 100) < 4 && ink.y0 >= 100 && ink.y0 < 100 + 8 && ink.x1 - ink.x0 > 3 * (ink.y1 - ink.y0), `회전 쪽 글상자 ${JSON.stringify(ink)}`);
+    assert.throws(() => d.addTextBox(0, { x: 0, y: 0, text: '  ' }), /글상자 내용/);
+    assert.throws(() => d.addTextBox(0, { x: 0, y: 0, text: 'emoji \u{1F600}' }), /대체 글꼴/);
+    const d2 = await open(d.save()); d.close();
+    assert.deepStrictEqual(d2.objects(0).filter((o) => o.type === 'text').map((o) => o.text), ['고친 글상자', 'second line']);
+    assert.strictEqual(d2.objects(1)[rr.idx].text, 'Rotated text');
+    d2.close();
+    console.log('글상자 OK');
+  }
+
+  // --- 투명 PNG(도장): 알파가 남아 밑 글자·색이 비친다 ---
+  {
+    const d = await open(buildPdf({ pages: [{ content: '1 0 0 rg 0 0 400 400 re f' }] })); // 빨간 바탕
+    const w = 8, h = 8, data = Buffer.alloc(w * h * 4);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) data.set(x < 4 ? [0, 255, 0, 0] : [0, 0, 255, 255], (y * w + x) * 4); // 왼쪽 투명, 오른쪽 파랑
+    const r = d.insertImage(0, { kind: 'rgba', data, width: w, height: h }, { x: 0, y: 0, w: 400, h: 400 });
+    assert.ok(r.ok);
+    const d2 = await open(d.save()); d.close();
+    const raw = d2._renderRaw(0, 1), px = (x, y) => [...raw.data.subarray(y * raw.stride + x * 4, y * raw.stride + x * 4 + 3)];
+    assert.deepStrictEqual(px(100, 200), [255, 0, 0], '투명한 칸은 밑의 빨강이 보인다');
+    assert.deepStrictEqual(px(300, 200), [0, 0, 255], '불투명 칸은 이미지 색');
+    assert.strictEqual(d2.imageStats(0)[0].hasAlpha, true);
+    assert.ok(d2.resizeObject(0, r.idx, { x: 10, y: 10, w: 100, h: 100 }).ok, '크기 조절도 된다');
+    d2.close();
+    console.log('투명 이미지 OK');
+  }
+
+  // --- PDF 암호 걸기(pdf-encrypt.js, AES-256 R6): 암호 없이 거절 · 여는/권한 암호로 열면 쪽 수·글자·픽셀 그대로 · 권한 비트 ---
+  {
+    const crypto = require('crypto');
+    const { encryptPdf, parsePdf, permissionBits, normalizePassword, passwordProblem } = require('./pdf-encrypt');
+    const F = require('./pdf-test-fixtures');
+    const texts = (d) => Array.from({ length: d.pageCount }, (_, i) => d.pageText(i));
+    const pixels = (d) => Array.from({ length: d.pageCount }, (_, i) => crypto.createHash('sha256').update(d._renderRaw(i, 1).data).digest('hex'));
+    const look = (d) => ({ pages: d.pageCount, texts: texts(d), pixels: pixels(d), title: d.metaText('Title') });
+    // plain을 암호화해 원본과 같은지 본다. 돌려주는 값은 암호화한 바이트
+    const roundTrip = async (label, plain, opts) => {
+      const ref = await open(plain), want = look(ref); ref.close();
+      const out = encryptPdf(plain, opts);
+      await assert.rejects(open(out), (e) => e.code === 'PASSWORD_REQUIRED', `${label}: 암호 없이는 열리지 않는다`);
+      await assert.rejects(open(out, 'wrong-password'), (e) => e.code === 'PASSWORD_WRONG', `${label}: 틀린 암호`);
+      for (const pw of [opts.userPassword, opts.ownerPassword].filter(Boolean)) {
+        const d = await open(out, pw);
+        assert.strictEqual(d.securityRevision, 6, `${label}: AES-256(R6)`);
+        assert.deepStrictEqual(look(d), want, `${label}: ${pw === opts.userPassword ? '여는' : '권한'} 암호로 열면 쪽 수·글자·픽셀·제목 그대로`);
+        d.close();
+      }
+      return out;
+    };
+
+    // 1) 여러 쪽 글자 문서 — 평문 글자가 파일에 남지 않는다
+    const multi = F.buildPdf({ pages: [{}, { w: 600, h: 300 }, { content: 'BT /F1 30 Tf 50 200 Td (Third page) Tj ET' }] });
+    let out = await roundTrip('여러 쪽', multi, { userPassword: 'pw', ownerPassword: 'owner-pw' });
+    assert.ok(!out.includes('Third page') && !out.includes('Page 2'), '콘텐츠 스트림이 암호화된다');
+    assert.ok(out.includes('/V 5 /R 6') && out.includes('/AESV3') && out.includes('/EncryptMetadata true'));
+
+    // 2) 엔진으로 편집한 문서(투명 PNG 이미지 + 한글 글상자 = 내장 글꼴) — 실제 저장 경로(entry.doc.save())의 바이트
+    {
+      const d = await open(F.buildPdf({ pages: [{}, {}] }));
+      const { decodePng } = require('./image-util');
+      const px = decodePng(F.makePng(16, 16, (x, y) => [x * 16, y * 16, 128, x < 8 ? 255 : 90]));
+      assert.ok(d.insertImage(0, { kind: 'rgba', data: px.data, width: px.width, height: px.height }, { x: 100, y: 100, w: 120, h: 120 }).ok);
+      assert.ok(d.addTextBox(1, { x: 40, y: 300, text: '암호 걸기 시험\n둘째 줄', size: 18 }).ok);
+      const saved = d.save(); d.close();
+      assert.ok(saved.includes('/FontFile'), '글꼴이 내장돼 있다');
+      await roundTrip('이미지·글꼴', saved, { userPassword: 'pw' });
+    }
+
+    // 3) 객체 스트림 + xref 스트림. PDFium 저장은 객체 스트림을 펼쳐 고전 xref로 쓰지만 옛 xref 스트림 객체(/Type/XRef)를
+    //    보통 객체로 남긴다(실측 2026-10-14) → 원본·저장본 둘 다 암호화해 보고, 남은 xref 스트림 객체는 버린다
+    {
+      const src = F.buildObjStmPdf({ pages: [{}, { text: 'Second (objstm)', w: 500 }] });
+      const d = await open(src), saved = d.save(); d.close();
+      assert.ok(!saved.includes('/Type/ObjStm') && saved.includes('/Type/XRef') && saved.includes('\nxref'), 'PDFium 저장본: 객체 스트림은 펼치고 xref 스트림 객체는 남긴다');
+      for (const b of [src, saved]) {
+        out = await roundTrip('객체 스트림', b, { userPassword: 'pw', ownerPassword: 'o' });
+        assert.ok(!out.includes('/ObjStm') && !out.includes('/XRef'), '객체 스트림·xref 스트림은 펼쳐서 버린다');
+      }
+    }
+
+    // 4) 증분 저장: 나중 구간의 객체가 이긴다
+    {
+      const base = F.buildPdf({ pages: [{}] }); // 1 카탈로그 · 2 쪽 트리 · 3 글꼴 · 4 콘텐츠 · 5 쪽
+      const upd = F.appendUpdate(base, { objs: [{ n: 4, stream: 'BT /F1 24 Tf 40 40 Td (Updated) Tj ET' }], root: 1, size: 6 });
+      assert.strictEqual(parsePdf(upd).get(4).data.toString('latin1'), 'BT /F1 24 Tf 40 40 Td (Updated) Tj ET');
+      out = await roundTrip('증분 저장', upd, { userPassword: 'pw' });
+      const d = await open(out, 'pw'); assert.strictEqual(d.pageText(0), 'Updated'); d.close();
+    }
+
+    // 5) 까다로운 문법: 주석 · 이름 #xx · 문자열 이스케이프 · 16진 문자열 · 간접 /Length · 틀린 /Length · 이진 이미지 데이터
+    {
+      out = await roundTrip('까다로운 문법', F.buildTrickyPdf(), { userPassword: 'pw' });
+      const d = await open(out, 'pw');
+      assert.deepStrictEqual([d.metaText('Title'), d.metaText('Author'), d.metaText('Subject')], ['Café (nested (ok)) \\ backslashA', 'Hi', 'line1\r\nline2'], '문서 정보 문자열이 그대로 풀린다');
+      assert.strictEqual(d.pageText(0), 'Tricky (text)\r\nSecond');
+      d.close();
+      assert.ok(!out.includes('nested'), '문서 정보 문자열도 암호화된다');
+    }
+
+    // 6) 동봉 샘플(읽기만)
+    await roundTrip('동봉 샘플', fs.readFileSync(path.join(WS, '독서모임_안내.pdf')), { userPassword: 'sample-pw', ownerPassword: 'sample-owner' });
+
+    // 7) 한글 암호 + 권한 제한(인쇄·복사 금지, 수정 허용). 권한 암호를 주지 않으면 임의 값이라 여는 암호로는 제한된 채로 열린다
+    {
+      out = await roundTrip('한글 암호', multi, { userPassword: '비밀번호123', allow: { print: false, copy: false } });
+      const d = await open(out, '비밀번호123'), p = d.permissions;
+      assert.deepStrictEqual([p & 4, p & 2048, p & 16, p & 8, p & 32], [0, 0, 0, 8, 32], '인쇄·고품질 인쇄·복사 꺼짐, 수정·주석 켜짐');
+      assert.deepStrictEqual(d.security, { encrypted: true, openPassword: true, restricted: true });
+      d.close();
+      const o = await open(encryptPdf(multi, { userPassword: 'u', ownerPassword: 'own', allow: { print: false, copy: false, modify: false } }), 'own');
+      assert.strictEqual(o.security.restricted, false, '권한 암호로 열면 제한이 없다');
+      o.close();
+      const u = await open(encryptPdf(multi, { userPassword: 'u', allow: { modify: false } }), 'u');
+      assert.deepStrictEqual([u.permissions & 8, u.permissions & 32, u.permissions & 4, u.permissions & 16], [0, 0, 4, 16]);
+      u.close();
+    }
+
+    // 8) 암호 규칙 · 거절
+    assert.strictEqual(permissionBits(), -4, '모두 허용 = -4');
+    assert.strictEqual(permissionBits({ print: false, copy: false, modify: false }) >>> 0, 0xfffff2c0);
+    assert.strictEqual(normalizePassword('ＡＢＣ１­'), 'ABC1', 'NFKC + 없앨 글자');
+    assert.strictEqual(normalizePassword('비밀번호123'), '비밀번호123', '한글은 그대로');
+    (await open(encryptPdf(multi, { userPassword: 'ＡＢＣ' }), 'ABC')).close(); // 정규화한 UTF-8로 암호를 만든다
+    assert.strictEqual(passwordProblem(''), '암호를 입력하세요.');
+    assert.strictEqual(passwordProblem('가'.repeat(42)), null, '한글 42자 = 126바이트');
+    assert.match(passwordProblem('가'.repeat(43)), /127바이트/);
+    assert.match(passwordProblem('a'.repeat(128)), /127바이트/);
+    assert.throws(() => encryptPdf(multi, { userPassword: '' }), (e) => e.code === 'BAD_PASSWORD');
+    assert.throws(() => encryptPdf(F.buildPdf({ encrypt: { user: 'x', owner: 'y' } }), { userPassword: 'pw' }), (e) => e.code === 'ALREADY_ENCRYPTED', '이미 암호화된 입력은 거절');
+    assert.throws(() => encryptPdf(Buffer.from('not a pdf'), { userPassword: 'pw' }), /PDF 파일이 아닙니다/);
+    const a = encryptPdf(multi, { userPassword: 'same' }), b = encryptPdf(multi, { userPassword: 'same' });
+    const field = (buf, k) => new RegExp(`/${k} <([0-9a-f]+)>`).exec(buf.latin1Slice(0, buf.length))[1];
+    assert.notStrictEqual(field(a, 'O'), field(b, 'O'), '권한 암호가 없으면 매번 임의 값(여는 암호에서 끌어내지 않는다)');
+    assert.notStrictEqual(field(a, 'U'), field(b, 'U'), '솔트가 매번 다르다');
+    console.log('PDF 암호 걸기 OK');
+  }
+
   console.log('\nOK — 모든 검사 통과');
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });
