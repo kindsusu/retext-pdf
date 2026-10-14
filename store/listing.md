@@ -1,6 +1,6 @@
 # Microsoft Store 제출서 문안 (Partner Center에 붙여 넣을 내용)
 
-작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영) · 기준 버전 4.0.0 · 언어: 한국어(ko-KR), 영어(en-US)
+작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영, 2026-10-14 5.0.0 기능 반영) · 기준 버전 5.0.0 · 언어: 한국어(ko-KR), 영어(en-US)
 
 ## 기본 정보
 
@@ -12,7 +12,7 @@
 | 개인정보 처리방침 URL | https://github.com/kindsusu/retext-pdf/blob/main/PRIVACY.md |
 | 웹 사이트 | https://github.com/kindsusu/retext-pdf |
 | 지원 연락처 | https://github.com/kindsusu/retext-pdf/issues |
-| 스크린샷 | `store/screenshot-1-pdf.png`, `-2-edit.png`, `-3-markdown.png` (1366×768, 가상 문서만 표시) |
+| 스크린샷 | `store/screenshot-1-pdf.png`, `-2-edit.png`, `-3-redact.png`, `-4-markdown.png` (1366×768, 가상 문서만 표시) |
 | 앱 타일 아이콘 | 패키지에 포함(`build/appx/`). 목록용 300×300 로고가 따로 필요하면 `build/icon.png` 사용 |
 
 ## 제한된 기능(runFullTrust) 사용 사유
@@ -59,7 +59,7 @@ Retext PDF는 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 �
 
 가리기는 글자를 검은 상자로 덮기만 하지 않습니다. PDF에서 글자를 실제로 지우고, 페이지 텍스트를 다시 읽어 지워졌는지 확인합니다. 주민등록번호나 연락처처럼 남으면 안 되는 정보를 다룰 때 쓰세요.
 
-페이지 정리·회전·순서 바꾸기·분할·병합, 이미지로 내보내기, 이미지 삽입, 용량 줄이기를 한 화면에서 할 수 있습니다. 긴 작업은 진행 창에서 취소할 수 있고, 거의 모든 편집은 실행 취소할 수 있습니다.
+쪽 정리·회전·순서 바꾸기·분할·병합, 이미지로 내보내기, 이미지 삽입, 용량 줄이기를 한 화면에서 할 수 있습니다. 쪽 번호 넣기, 도장·서명 보관함, 글 상자, 인쇄도 지원합니다. 암호가 걸린 PDF를 열 수 있고, 암호를 걸어 저장할 수도 있습니다(AES-256). 긴 작업은 진행 창에서 취소할 수 있고, 거의 모든 편집은 실행 취소할 수 있습니다.
 
 Markdown 문서는 왼쪽에서 고치고 오른쪽에서 바로 결과를 봅니다.
 
@@ -82,6 +82,18 @@ Markdown 문서는 왼쪽에서 고치고 오른쪽에서 바로 결과를 봅�
 11. Markdown 편집과 실시간 미리보기
 12. 긴 작업 진행 표시와 취소, 실행 취소·다시 실행
 13. 문서는 PC 안에서만 처리, 데이터 수집 없음
+14. 암호 PDF 열기와 암호 걸어 저장(AES-256, 인쇄·복사·수정 제한 선택)
+15. 쪽 번호 넣기 — 모양 4가지, 위치 5곳
+16. 도장·서명 보관함 — 투명 PNG는 그대로 투명하게
+17. 글 상자로 빈 곳에 새 글 넣기
+18. 인쇄 — 저장하지 않은 수정도 반영, 고른 쪽만 인쇄
+19. 여러 쪽 골라 끌어 옮기기, 빈 쪽·쪽 복제·PDF 끼워 넣기
+
+### 이 버전의 새로운 기능 (5.0.0)
+
+새 화면: 밝은 아이보리 화면, 모든 기능을 아이콘 버튼으로, PDF를 열면 왼쪽에 쪽 목록과 쪽 전체 보기.
+새 기능: 암호 PDF 열기와 암호 걸어 저장, 인쇄, 쪽 번호, 도장·서명 보관함, 글 상자, 여러 쪽 끌어 옮기기·빈 쪽·쪽 복제·PDF 끼워 넣기, 단축키 도움말(Ctrl+/).
+고친 점: 투명 PNG를 넣으면 흰 배경이 생겨 밑의 글자를 가리던 문제.
 
 ### 검색어 (최대 7개)
 
@@ -103,7 +115,7 @@ Click a line and the whole line opens in the editor. Edited text is redrawn in t
 
 Redaction does more than draw a black box. It removes the characters from the PDF and re-extracts the page text to confirm they are gone. Use it for information that must not remain, such as ID numbers or phone numbers.
 
-Extract, delete, rotate and reorder pages, split and merge PDFs, export pages as images, insert images and reduce file size, all in one window. Long operations show progress and can be cancelled, and almost every edit can be undone.
+Extract, delete, rotate and reorder pages, split and merge PDFs, export pages as images, insert images and reduce file size, all in one window. Add page numbers, keep a stamp and signature library, add text boxes and print. Open password-protected PDFs and save copies with a password (AES-256). Long operations show progress and can be cancelled, and almost every edit can be undone.
 
 Markdown documents are edited on the left with a live preview on the right.
 
@@ -126,6 +138,18 @@ Free for personal, non-commercial use. Work use by companies or institutions req
 11. Markdown editing with live preview
 12. Progress and cancel for long operations, undo and redo
 13. Documents stay on your PC; no data collection
+14. Open password-protected PDFs and save copies with a password (AES-256, optional print, copy and edit limits)
+15. Add page numbers in 4 styles and 5 positions
+16. Stamp and signature library; transparent PNGs stay transparent
+17. Add new text anywhere with text boxes
+18. Print, including unsaved edits or only the selected pages
+19. Drag several pages to reorder, add blank pages, duplicate pages or add pages from another PDF
+
+### What's new in this version (5.0.0)
+
+New look: light ivory theme, every feature as an icon button, and PDFs open with the page list on the left in fit-page view.
+New: open password-protected PDFs and save with a password, print, page numbers, stamp and signature library, text boxes, drag several pages to reorder, blank pages, duplicate pages, insert another PDF, and shortcut help (Ctrl+/).
+Fixed: transparent PNG images were flattened onto white and hid the text underneath.
 
 ### Search terms (up to 7)
 
