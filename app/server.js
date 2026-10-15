@@ -13,7 +13,11 @@ const pdfEngine = require('./pdf-engine');
 const pdfEncrypt = require('./pdf-encrypt');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
-const { applyEdits, verifyEdits, maskParts } = require('./pdf-edit-service');
+const { applyEdits, verifyEdits, maskParts, redactRanges, redactArea, editRuns, verifyRuns } = require('./pdf-edit-service');
+const pdfRewrite = require('./pdf-rewrite');
+const pii = require('./pii');
+const { parsePageRange } = require('./page-range');
+const { parseOutlineText } = require('./outline-text');
 const { jpegSize, decodePng, sniff, MIME } = require('./image-util');
 const stamps = require('./stamp-store');
 const { buildPrintHtml } = require('./print-html');
@@ -156,14 +160,19 @@ async function mutate(entry, i, fn) {
 // (재열기는 고아 스트림도 떨군다). 실패하면 변경 전 바이트로 되돌리고 스택·dirty는 그대로 둔다.
 // 비용: 저장 2회 + 열기 1회. 예전(사본 열기 + 저장 3회 + 열기 2회)은 290MB 문서에서 WASM 힙(2GB)을 넘겨 엔진이 죽었다.
 async function editTransaction(entry, i, edits, options = {}) {
+  return textTransaction(entry, i, (doc) => applyEdits(doc, i, edits, options),
+    (persisted, result) => verifyEdits(persisted, i, edits, result.results, options)); // 지운 곁가지 조각만큼 인덱스를 고쳐 둔다
+}
+// 편집 트랜잭션 본체: apply(doc)로 살아 있는 문서를 고치고, 저장·재열기한 문서에 verify(persisted, result)를 돌린다(2단계 조각별 편집도 같은 틀)
+async function textTransaction(entry, i, apply, verify) {
   const doc = entry.doc, before = doc.save(); // before = 실행 취소 스냅샷
   let persisted = null, result;
   try {
-    result = batch(doc, () => applyEdits(doc, i, edits, options));
+    result = batch(doc, () => apply(doc));
     persisted = await pdfEngine.open(doc.save());
     // 열기는 await라 이론상 다른 요청이 끼어들 수 있다 — 그새 문서가 바뀌었으면(실행 취소 등) 덮어쓰지 않는다
     if (entry.doc !== doc) throw new Error('파일이 변경됐습니다. 다시 편집하세요.');
-    batch(persisted, () => verifyEdits(persisted, i, edits, result.results, options)); // 지운 곁가지 조각만큼 인덱스를 고쳐 둔다
+    batch(persisted, () => verify(persisted, result));
   } catch (error) {
     if (persisted) persisted.close();
     if (entry.doc === doc) await restore(entry, i, before);
@@ -347,6 +356,36 @@ function defaultBox(doc, i, imgW, imgH, frac) {
   const boxW = pw * frac, boxH = boxW * (imgH / imgW);
   return { x: (pw - boxW) / 2, y: (ph - boxH) / 2, w: boxW, h: boxH };
 }
+// P9 공용: 쪽 범위 글 → 0 기준 쪽 배열(page-range.js, 잘못되면 400) · 쪽 번호 하나 검사 · 가리기 덮개 색 · 주석 작성자 기본값
+const PII_LIMIT = 2000; // 개인정보 찾기 결과 상한(넘으면 truncated)
+function pageRange(spec, count) {
+  try { return parsePageRange(spec, count); } catch (e) { throw httpError(400, e.message); }
+}
+function pageIndex(doc, i) {
+  const n = Number(i);
+  if (i === null || i === '' || !Number.isInteger(n) || n < 0 || n >= doc.pageCount) throw httpError(400, `쪽 번호(i)가 잘못됐습니다: ${i}`);
+  return n;
+}
+// 'black'(기본) · 'auto'(그 자리 배경색) · '#rrggbb'
+function maskColorOf(color) {
+  if (color == null || color === '' || color === 'black') return [0, 0, 0, 255];
+  if (color === 'auto') return 'auto';
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(color));
+  if (!m) throw httpError(400, `덮개 색이 잘못됐습니다: ${color} ('black'·'auto'·'#rrggbb')`);
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, 255];
+}
+function defaultAuthor() {
+  try { return os.userInfo().username || 'Retext PDF'; } catch { return 'Retext PDF'; }
+}
+// 지운 것이 파일에 남지 않게 다시 쓰기: 저장 바이트에서 문서 카탈로그·/Info에서 닿는 객체만 남겨(pdf-rewrite.writePdf) 그 바이트로 다시 연다.
+// 실측 2026-10-14: 이 세션에서 만든 주석을 지우면 /Annots에서는 빠져도 PDFium 저장본에 주석 사전(메모 글 포함)이 고아 객체로 그대로 쓰였다
+// (파일에서 읽어 온 주석은 지우면 저장본에 남지 않는다). 세션 중 바꿔 넣은 그림의 옛 스트림도 같은 처지다.
+// 그래서 진짜 가리기(개인정보·영역)·주석 지우기·숨은 데이터 지우기 뒤에는 이것을 부른다. 실패하면 false(문서는 그대로 — 가린 결과는 화면·글자에서 이미 유효)
+async function compactDoc(entry) {
+  try { await swapDoc(entry, pdfRewrite.writePdf(pdfRewrite.parsePdf(entry.doc.save()))); return true; }
+  catch (e) { console.error('compact:', e.message); return false; }
+}
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 // 요청 본문을 Buffer로 모은다. 조각마다 따로 UTF-8로 풀면 조각 경계에 걸린 한글이 깨진다(U+FFFD) → 다 모아 한 번에 푼다.
 // 상한을 넘으면 413, 연결이 끊기면 거절해 라우트가 멈춰 있지 않게 한다
@@ -385,6 +424,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
     if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
     if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
+    // P9: 쪽 범위 해석기·목차 글 형식은 화면과 서버가 같은 파일을 쓴다(window.parsePageRange · window.parseOutlineText)
+    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION }); // 화면 머리줄의 앱 버전(#ver)이 읽는다
@@ -821,6 +862,14 @@ const server = http.createServer(async (req, res) => {
       const result = await editTransaction(entry, i, edits, { primary: edits?.at(-1)?.idx, remove: [].concat(remove || []), align });
       return json(res, 200, { ...result, lineIdxs: result.primaryResult.lineIdxs || [result.primaryResult.idx], ...stacks(entry) });
     }
+    // 2단계: 글꼴·색이 섞인 줄(조각별 모양 보존)·문단 다시 흘리기·객체 안 부분(15d) 편집 — pdf-edit-service.editRuns. 한 요청 = 스냅샷 하나(실행 취소 한 번)
+    if (url.pathname === '/api/pdf/edit-runs' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      if (typeof q.oldText === 'string' && q.newText === q.oldText.replace(/­/g, '')) return json(res, 200, { ok: true, unchanged: true, lineIdxs: [], ...stacks(entry) });
+      const r = await textTransaction(entry, q.i, (doc) => editRuns(doc, q.i, q), (persisted, result) => verifyRuns(persisted, q.i, result));
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
     if (url.pathname === '/api/pdf/group' && req.method === 'POST') { // 상자 묶기(id 생략→새 그룹) / 풀기(id:null)
       const { name, i, idxs, id } = await readJson(req);
       const entry = await getEditableDoc(name);
@@ -874,8 +923,11 @@ const server = http.createServer(async (req, res) => {
       const entry = await getEditableDoc(name);
       // 글자 제거 + 줄마다 덮개 하나(pdf-edit-service.maskParts). 하나라도 가렸으면 성공(건너뛴 조각은 skipped로 알린다).
       // 아무것도 못 가렸으면 ok:false — mutate가 문서를 되돌리고 스택은 그대로. 서버 라우트 하나 = 스냅샷 하나라 실행 취소 한 번
-      const r = await mutate(entry, i, () => maskParts(entry.doc, i, parts, { color, fallbackRects }));
-      return json(res, 200, { ok: r.ok, rects: r.ok ? r.rects : [], skipped: r.skipped, textLeft: entry.doc.pageText(i), ...stacks(entry) });
+      // P9: 덮개와 겹치는 주석(메모·형광펜·도형, 링크·양식 칸 제외)도 같은 스냅샷 안에서 지운다 — 가린 글자가 주석 메모로 남지 않게.
+      // 지운 주석이 있으면 저장본에 고아 객체로 남지 않게 다시 쓴다(compactDoc)
+      const r = await mutate(entry, i, () => { const m = maskParts(entry.doc, i, parts, { color, fallbackRects }); if (m.ok) m.annots = entry.doc.removeAnnotsIn ? entry.doc.removeAnnotsIn(i, m.rects) : 0; return m; });
+      if (r.annots) await compactDoc(entry);
+      return json(res, 200, { ok: r.ok, rects: r.ok ? r.rects : [], skipped: r.skipped, annots: r.annots || 0, textLeft: entry.doc.pageText(i), ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/undo' && req.method === 'POST') {
       const { name } = await readJson(req);
@@ -953,6 +1005,283 @@ const server = http.createServer(async (req, res) => {
         entry.password = userPassword; // 디스크 파일이 바뀌어 다시 열 때 쓴다(메모리에만)
       }
       return json(res, 200, { ok: true, path: to });
+    }
+    // ── P9: 개인정보 일괄 가리기 · 영역 가리기 · 숨은 데이터 지우기 · 워터마크 · 머리말·꼬리말 · 주석 · 목차 · 문서 정보 · 이미지 PDF ──
+    // 쪽 범위(pages)는 사람이 쓰는 1 기준 글('all'·'odd'·'even'·'1,3,5-7'·'-3'·'5-', page-range.js). 잘못된 범위는 400
+    // 문서를 바꾸는 라우트는 모두 요청 하나 = 스냅샷 하나(실행 취소 한 번). 여러 쪽을 바꾸는 것은 page:null 스냅샷이라 응답·undo가 reloadAll
+    if (url.pathname === '/api/pdf/pii/find' && req.method === 'POST') { // 문서를 바꾸지 않는다
+      const { name, kinds, regex, pages } = await readJson(req);
+      const want = kinds == null ? pii.KINDS : [].concat(kinds);
+      const unknown = want.find((k) => !pii.KINDS.includes(k));
+      if (unknown) return json(res, 400, { error: `알 수 없는 종류입니다: ${unknown} (${pii.KINDS.join('·')})` });
+      const custom = pii.compileCustom(regex); // 문법 오류·빈 일치 패턴은 400
+      if (!want.length && !custom) return json(res, 400, { error: '찾을 종류를 하나 이상 고르거나 정규식을 입력하세요' });
+      const { doc } = await getPdfDoc(name);
+      const list = pageRange(pages, doc.pageCount);
+      const matches = [];
+      let truncated = false;
+      for (const i of list) {
+        const { text, map } = doc.pageChars(i);
+        const hits = pii.findPii(text, { kinds: want, regex: custom, limit: PII_LIMIT - matches.length + 1 });
+        for (const h of hits) {
+          if (matches.length >= PII_LIMIT) { truncated = true; break; }
+          const start = map[h.start], end = map[h.end - 1] + 1; // 문자열 위치 → 텍스트 페이지 글자 번호(BMP 밖 글자는 두 칸이 한 글자)
+          matches.push({ id: `${i}:${start}:${end}`, i, kind: h.kind, text: h.text, start, end, ...(h.valid !== undefined ? { valid: h.valid } : {}), rects: doc.charRangeRects(i, start, end) });
+        }
+        if (truncated) break;
+      }
+      return json(res, 200, { matches, truncated });
+    }
+    // 고른 일치(글자 번호 범위)를 진짜로 가린다: 글자를 객체에서 지우고 줄마다 덮개, 덮개와 겹치는 주석도 지운다(pdf-edit-service.redactRanges).
+    // 확인: 가리기 전후의 쪽 글자에서 고른 글(공백 무시)이 고른 수만큼 줄었는지 센다 — 덜 줄었으면 그 일치는 failed. 하나도 못 가렸으면 되돌리고 ok:false
+    if (url.pathname === '/api/pdf/pii/redact' && req.method === 'POST') {
+      const { name, matches, color } = await readJson(req);
+      if (!Array.isArray(matches) || !matches.length) return json(res, 400, { error: '가릴 항목을 고르세요' });
+      if (matches.length > PII_LIMIT * 2) return json(res, 400, { error: '한 번에 가릴 수 있는 항목이 너무 많습니다' });
+      const col = maskColorOf(color);
+      const entry = await getEditableDoc(name), doc0 = entry.doc;
+      const byPage = new Map();
+      for (const m of matches) {
+        const i = Number(m?.i), start = Number(m?.start), end = Number(m?.end);
+        if (!Number.isInteger(i) || i < 0 || i >= doc0.pageCount || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start) {
+          return json(res, 400, { error: '가릴 항목의 위치(i·start·end)가 잘못됐습니다' });
+        }
+        if (!byPage.has(i)) byPage.set(i, []);
+        byPage.get(i).push({ i, start, end });
+      }
+      // 고른 글: 가리기 전 쪽 글자에서 그 범위의 문자열(공백 뺀 것)
+      const squeeze = (s) => s.replace(/\s+/g, '');
+      const occurrences = (hay, needle) => { let n = 0; for (let k = hay.indexOf(needle); needle && k >= 0; k = hay.indexOf(needle, k + needle.length)) n++; return n; };
+      const textOf = ({ text, map }, s, e) => { let out = ''; for (let k = 0; k < map.length; k++) if (map[k] >= s && map[k] < e) out += text[k]; return out; };
+      const beforeChars = new Map([...byPage.keys()].map((i) => [i, doc0.pageChars(i)]));
+      for (const [i, list] of byPage) for (const m of list) m.text = squeeze(textOf(beforeChars.get(i), m.start, m.end));
+      const before = doc0.save();
+      const pagesOut = [];
+      try {
+        batch(doc0, () => {
+          for (const [i, list] of byPage) pagesOut.push({ i, ...redactRanges(doc0, i, list.map((m) => [m.start, m.end]), { color: col }) });
+        });
+      } catch (e) { await restore(entry, null, before); throw e; }
+      const failed = [];
+      let redacted = 0;
+      for (const [i, list] of byPage) {
+        const was = squeeze(beforeChars.get(i).text), now = squeeze(doc0.pageChars(i).text);
+        const groups = new Map();
+        for (const m of list) { if (!groups.has(m.text)) groups.set(m.text, []); groups.get(m.text).push(m); }
+        for (const [t, ms] of groups) {
+          const gone = t ? occurrences(was, t) - occurrences(now, t) : 0;
+          if (t && gone >= ms.length) redacted += ms.length;
+          else for (const m of ms) failed.push({ i, start: m.start, end: m.end, text: m.text, reason: '가린 뒤에도 글자가 남아 있습니다(그림·양식 안 글자이거나 글자 대응이 어긋남)' });
+        }
+      }
+      if (!redacted) { await restore(entry, null, before); return json(res, 200, { ok: false, redacted: 0, failed, ...stacks(entry) }); }
+      const compacted = await compactDoc(entry);
+      snapshot(entry, null, before);
+      entry.dirty = true;
+      const annots = pagesOut.reduce((n, p) => n + (p.annots || 0), 0);
+      return json(res, 200, { ok: true, redacted, failed, annots, compacted, pages: pagesOut.map((p) => ({ i: p.i, rects: p.rects, annots: p.annots })), reloadAll: true, ...stacks(entry) });
+    }
+    // 영역 진짜 가리기(여러 쪽): rect [l,b,r,t](기준 쪽의 PDF 사용자 좌표 — 모든 쪽에 같은 좌표로) 안의 글자 제거 · 그림 픽셀 칠하기 · 도형·주석 빼기 + 덮개
+    if (url.pathname === '/api/pdf/redact-area' && req.method === 'POST') {
+      const { name, rect, pages, color } = await readJson(req);
+      if (!Array.isArray(rect) || rect.length !== 4 || !rect.every((v) => Number.isFinite(Number(v)))) return json(res, 400, { error: 'rect는 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다' });
+      const [l, b, r, t] = rect.map(Number);
+      const box = { x0: Math.min(l, r), y0: Math.min(b, t), x1: Math.max(l, r), y1: Math.max(b, t) };
+      if (box.x1 - box.x0 < 1 || box.y1 - box.y0 < 1) return json(res, 400, { error: '가릴 영역이 너무 작습니다' });
+      const col = maskColorOf(color);
+      const entry = await getEditableDoc(name);
+      const list = pageRange(pages, entry.doc.pageCount);
+      const out = await mutate(entry, null, () => ({ ok: true, pages: list.map((i) => ({ i, ...redactArea(entry.doc, i, box, { color: col }) })) }));
+      const compacted = await compactDoc(entry); // 같은 스냅샷 안 — 실행 취소는 한 번
+      return json(res, 200, { ok: true, compacted, pages: out.pages.map((p) => ({ i: p.i, rects: p.rects, unmapped: p.unmapped, annots: p.annots, paths: p.paths, images: p.images, skipped: p.skipped.length })), reloadAll: true, ...stacks(entry) });
+    }
+    // 숨은 데이터 지우기: 문서 정보는 EPDF_SetMetaText(빈 값)로 비운 뒤, 저장 바이트를 pdf-rewrite.sanitizePdf로 다시 써서(XMP·첨부·자바스크립트·주석·목차·/Info)
+    // 그 바이트로 문서를 다시 연다. 다시 쓸 때 닿지 않는 객체는 버리므로 지운 것이 파일에 남지 않는다. 기본: info·xmp·attachments·javascript는 켜고 annotations·bookmarks는 끈다
+    if (url.pathname === '/api/pdf/sanitize' && req.method === 'POST') {
+      const q = await readJson(req);
+      const opts = { info: q.info !== false, xmp: q.xmp !== false, attachments: q.attachments !== false, annotations: q.annotations === true, bookmarks: q.bookmarks === true, javascript: q.javascript !== false };
+      if (!Object.values(opts).some(Boolean)) return json(res, 400, { error: '지울 항목을 하나 이상 고르세요' });
+      const entry = await getEditableDoc(q.name);
+      const before = entry.doc.save();
+      let removed;
+      try {
+        const cleared = opts.info ? entry.doc.clearMeta() : 0;
+        const out = pdfRewrite.sanitizePdf(entry.doc.save(), opts);
+        removed = { ...out.removed, info: Math.max(cleared, out.removed.info) };
+        if (!Object.values(removed).some((n) => n > 0)) { await restore(entry, null, before); return json(res, 200, { ok: false, removed, ...stacks(entry) }); }
+        await swapDoc(entry, out.bytes);
+      } catch (e) { await restore(entry, null, before); throw e; }
+      snapshot(entry, null, before);
+      entry.dirty = true;
+      return json(res, 200, { ok: true, removed, reloadAll: true, ...stacks(entry) });
+    }
+    // 워터마크: 다시 부르면 모든 쪽의 옛 워터마크를 바꿔 끼운다(RetextPdfWatermark). 그림은 보관함 도장(imageStampId) 또는 파일(imagePath, PNG/JPEG)
+    if (url.pathname === '/api/pdf/watermark' && req.method === 'POST') {
+      const q = await readJson(req);
+      const kind = q.kind || 'text';
+      let image = null;
+      if (kind === 'image') {
+        let data;
+        if (q.imageStampId) data = stamps.get(q.imageStampId).data;
+        else if (q.imagePath) {
+          const file = safe(q.imagePath);
+          if (!/\.(png|jpe?g)$/i.test(file)) return json(res, 400, { error: '지원하지 않는 이미지 형식입니다 (PNG/JPEG만 가능)' });
+          if (!fs.existsSync(file)) return json(res, 404, { error: '그림 파일을 찾을 수 없습니다' });
+          data = fs.readFileSync(file);
+        } else return json(res, 400, { error: '워터마크 그림을 고르세요(imageStampId 또는 imagePath)' });
+        image = imageForPdf(data).image;
+      }
+      const entry = await getEditableDoc(q.name);
+      const pages = pageRange(q.pages, entry.doc.pageCount);
+      const r = await mutate(entry, null, () => entry.doc.addWatermark({ kind, text: q.text, fontId: q.font, size: q.size, color: q.color, opacity: q.opacity,
+        rotation: q.rotation, position: q.position, margin: q.margin, pages, layer: q.layer, image, scale: q.scale }));
+      // 그림은 쪽마다 사본이 생긴다 → 같은 그림 스트림을 하나로 합쳐 다시 연다(같은 스냅샷 안 — 실행 취소는 여전히 한 번)
+      if (r.ok && image && pages.length > 1) { try { await swapDoc(entry, pdfRewrite.writePdf(pdfRewrite.parsePdf(entry.doc.save()), { dedupe: true })); } catch (e) { console.error('watermark dedupe:', e.message); } }
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/watermark/remove' && req.method === 'POST') { // 지울 것이 없으면 ok:false(스냅샷도 없음)
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.removeWatermark());
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    // 머리말·꼬리말: slots { tl, tc, tr, bl, bc, br } — {page} {pages} {date} {file} {title}. 쪽 번호와 같은 자리 계산(placeText). 다시 부르면 교체
+    if (url.pathname === '/api/pdf/header-footer' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const pages = q.pages == null || q.pages === '' ? undefined : pageRange(q.pages, entry.doc.pageCount);
+      const file = path.basename(String(q.name || '')).replace(/\.pdf$/i, '');
+      const r = await mutate(entry, null, () => entry.doc.addHeaderFooter({ slots: q.slots, fontId: q.font, size: q.size, color: q.color, margin: q.margin, pages, startAt: q.startAt, skipFirst: q.skipFirst, file }));
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/header-footer/remove' && req.method === 'POST') {
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.removeHeaderFooter());
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    // 주석 목록: 한 쪽(i) 또는 문서 전체(/all — 항목마다 i). 좌표는 objects와 같은 회전 전 페이지 좌표
+    if (url.pathname === '/api/pdf/annots' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, doc.annots(pageIndex(doc, url.searchParams.get('i'))));
+    }
+    if (url.pathname === '/api/pdf/annots/all' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      const all = [];
+      for (let i = 0; i < doc.pageCount; i++) for (const a of doc.annots(i)) all.push({ i, ...a });
+      return json(res, 200, all);
+    }
+    if (url.pathname === '/api/pdf/annot/create' && req.method === 'POST') { // 작성자 기본값: OS 사용자 이름(없으면 'Retext PDF'). author로 바꿀 수 있다
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const i = pageIndex(entry.doc, q.i);
+      const { name: _n, i: _i, ...spec } = q;
+      const r = await mutate(entry, i, () => entry.doc.createAnnot(i, { ...spec, author: q.author || defaultAuthor() }));
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/annot/update' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const i = pageIndex(entry.doc, q.i);
+      const r = await mutate(entry, i, () => entry.doc.updateAnnot(i, Number(q.index), { contents: q.contents, author: q.author, color: q.color, fill: q.fill, opacity: q.opacity, width: q.width, rect: q.rect }));
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/annot/delete' && req.method === 'POST') {
+      const { name, i: pi, index } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const i = pageIndex(entry.doc, pi);
+      const r = await mutate(entry, i, () => entry.doc.deleteAnnot(i, Number(index)));
+      if (r.ok) r.compacted = await compactDoc(entry); // 지운 메모 글이 고아 객체로 저장되지 않게
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    // 주석 고정(평면화): indices [{i, index}]를 주면 그것만, 아니면 pages(1 기준 범위 글, 생략 = 전체)의 모든 주석(링크·팝업 제외)
+    if (url.pathname === '/api/pdf/annot/flatten' && req.method === 'POST') {
+      const { name, pages, indices } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const plan = new Map();
+      if (Array.isArray(indices) && indices.length) {
+        for (const x of indices) { const i = pageIndex(entry.doc, x?.i); if (!plan.has(i)) plan.set(i, []); plan.get(i).push(Number(x?.index)); }
+      } else for (const i of pageRange(pages, entry.doc.pageCount)) plan.set(i, null);
+      const r = await mutate(entry, null, () => {
+        let flattened = 0, skipped = 0, failed = 0;
+        for (const [i, list] of plan) { const x = entry.doc.flattenAnnots(i, list); flattened += x.flattened; skipped += x.skipped; failed += x.failed; }
+        return { ok: flattened > 0, flattened, skipped, failed };
+      });
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    // 목차(책갈피): 읽기 / 통째로 바꾸기. items [{ title, page(0 기준|null), children }] 또는 text('제목<TAB>쪽번호', 들여쓰기 = 단계, outline-text.js)
+    if (url.pathname === '/api/pdf/outline' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, { items: doc.outline() });
+    }
+    if (url.pathname === '/api/pdf/outline' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      let items = q.items;
+      if (typeof q.text === 'string') {
+        const parsed = parseOutlineText(q.text, entry.doc.pageCount);
+        if (parsed.errors.length) return json(res, 400, { error: `목차 글에 고칠 곳이 ${parsed.errors.length}군데 있습니다 (${parsed.errors[0].line}번째 줄: ${parsed.errors[0].message})`, errors: parsed.errors });
+        items = parsed.items;
+      }
+      if (!Array.isArray(items)) return json(res, 400, { error: 'items(배열) 또는 text를 보내세요' });
+      const r = await mutate(entry, null, () => entry.doc.setOutline(items));
+      return json(res, 200, { ...r, items: entry.doc.outline(), ...stacks(entry) });
+    }
+    // 문서 정보: 읽기 { Title, Author, Subject, Keywords, Creator, Producer, CreationDate, ModDate(ISO) } / 쓰기 fields { Title?, Author?, Subject?, Keywords? }(빈 글자 = 지우기)
+    // PDFium은 /Info가 없던 문서의 값을 저장하지 않는다 → 저장본을 다시 열어 확인하고, 다르면 pdf-rewrite.setInfoPdf로 /Info를 직접 넣은 바이트로 바꿔 끼운다
+    if (url.pathname === '/api/pdf/meta' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, doc.meta());
+    }
+    if (url.pathname === '/api/pdf/meta' && req.method === 'POST') {
+      const { name, fields } = await readJson(req);
+      if (!fields || typeof fields !== 'object' || !Object.keys(fields).length) return json(res, 400, { error: '바꿀 문서 정보(fields)를 보내세요' });
+      const entry = await getEditableDoc(name);
+      const before = entry.doc.save();
+      try {
+        const { fields: applied } = entry.doc.setMeta(fields);
+        const same = (d) => Object.entries(applied).every(([k, v]) => k === 'ModDate' || d.metaText(k) === v);
+        const check = await pdfEngine.open(entry.doc.save());
+        const ok = (() => { try { return same(check); } finally { check.close(); } })();
+        if (!ok) {
+          await swapDoc(entry, pdfRewrite.setInfoPdf(entry.doc.save(), applied));
+          if (!same(entry.doc)) throw new Error('문서 정보를 저장하지 못했습니다.');
+        }
+      } catch (e) { await restore(entry, null, before); throw e; }
+      snapshot(entry, null, before);
+      entry.dirty = true;
+      return json(res, 200, { ok: true, meta: entry.doc.meta(), ...stacks(entry) });
+    }
+    // 이미지 PDF로 저장: 쪽마다 렌더한 JPEG만 담은 새 PDF(글자 없음)를 to에 쓴다. 열린 문서는 그대로. 긴 작업(쪽 1장 = 진행 1, 저장 1)
+    if (url.pathname === '/api/pdf/rasterize' && req.method === 'POST') {
+      const { name, to, dpi, quality, pages, jobId } = await readJson(req);
+      if (typeof to !== 'string' || !to) return json(res, 400, { error: '저장할 파일을 고르세요' });
+      if (!/\.pdf$/i.test(to)) return json(res, 400, { error: '저장할 파일 이름은 .pdf로 끝나야 합니다' });
+      if (docKey(to) === docKey(name)) return json(res, 400, { error: '지금 문서와 다른 파일 이름을 고르세요(이미지 PDF는 글자를 없앤 사본입니다)' });
+      const d = dpi == null ? 150 : Number(dpi), qv = quality == null ? 0.85 : Number(quality);
+      if (!(d >= 36 && d <= 600)) return json(res, 400, { error: '해상도는 36~600dpi로 지정하세요' });
+      if (!(qv >= 0.1 && qv <= 1)) return json(res, 400, { error: '품질은 0.1~1 사이로 지정하세요' });
+      const out = safe(to);
+      const entry = await getEditableDoc(name), { doc } = entry;
+      const list = pageRange(pages, doc.pageCount);
+      const job = startJob(jobId, 'rasterize', list.length + 1); // 진행 단위: 쪽 1장 + 저장 1
+      entry.busy = true;
+      const raster = doc.rasterizer();
+      try {
+        for (let k = 0; k < list.length; k++) {
+          await tick();
+          if (!progress(job, { message: `${list[k] + 1}쪽 그리는 중`, done: k })) return json(res, 200, { cancelled: true });
+          raster.addPage(list[k], d, qv);
+        }
+        await tick();
+        if (!progress(job, { message: '저장하는 중', done: list.length })) return json(res, 200, { cancelled: true });
+        const bytes = raster.finish();
+        dropDoc(to); // 같은 이름으로 열려 있었으면 버린다(긴 작업 중이면 409)
+        writeAtomic(out, bytes);
+        progress(job, { done: list.length + 1 });
+        return json(res, 200, { ok: true, path: to, pageCount: list.length, bytes: bytes.length });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { raster.close(); entry.busy = false; endJob(job); }
     }
     if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
       const { name } = await readJson(req);

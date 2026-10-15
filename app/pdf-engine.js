@@ -8,6 +8,10 @@ const fontRegistry = require('./pdf-fonts');
 
 const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
+const MARK_HF = 'RetextPdfHeaderFooter'; // 머리말·꼬리말 글자(다시 넣으면 교체)
+const MARK_WM = 'RetextPdfWatermark';    // 워터마크 글자·그림(다시 넣으면 모든 쪽에서 교체)
+const META_KEYS = ['Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer', 'CreationDate', 'ModDate'];
+const META_EDITABLE = ['Title', 'Author', 'Subject', 'Keywords'];
 
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
@@ -593,6 +597,331 @@ async function open(buffer, password) {
     return { font, entry };
   };
 
+  // 사용자가 고칠 수 있는 입력 오류 — 서버가 400으로 응답한다(e.status). 그 밖의 실패는 500
+  const bad = (message) => Object.assign(new Error(message), { status: 400 });
+
+  // ── 놓기 공용(쪽 번호·머리말·꼬리말·워터마크) ─────────────────────────────
+  // 보이는 쪽 좌표계의 행렬(a b c d e f) → 페이지 사용자 좌표 행렬. visualFrame의 map은 아핀이라 선형 부분은 L(v) = map(v) − map(0,0)
+  // (회전 0이면 그대로, /Rotate 90이면 [a b c d]가 rotm처럼 돌아간다 — 쪽 번호가 쓰던 [...rotm, e, f]와 같은 값)
+  const toPageMatrix = (f, [a, b, c, d, e, g]) => {
+    const [ox, oy] = f.map(0, 0), L = (x, y) => { const [px, py] = f.map(x, y); return [px - ox, py - oy]; };
+    const [A, B] = L(a, b), [C, D] = L(c, d), [E, F] = f.map(e, g);
+    return [A, B, C, D, E, F];
+  };
+  // 글자 한 줄을 보이는 쪽의 정해진 자리에 놓는다(쪽 번호·머리말·꼬리말·글자 워터마크가 같이 쓴다).
+  //   at: { h:'left'|'center'|'right', v:'top'|'middle'|'bottom' }, margin(pt), rotation(도, 보이는 방향에서 반시계),
+  //   baseline: 아래 자리에서 기준선을 margin에 맞춘다(쪽 번호가 예전부터 쓰던 규칙 — 회전이 없을 때만). 아니면 잉크 상자 아래끝을 맞춘다
+  //   mark: 콘텐츠 마크 이름(다시 넣을 때 지우는 표시), back: 맨 아래 z-순서(본문 뒤)에 넣는다
+  // 자리 계산은 원점에 놓인 글자의 잉크 상자(boundsOf)를 rotation만큼 돌린 외곽 상자로 한다 — 회전 0이면 쪽 번호 공식과 같다
+  const placeText = (i, { font, size, text, color, at, margin = 0, rotation = 0, baseline = true, mark, back = false }) => {
+    const p = page(i), f = visualFrame(i);
+    const o = makeText(font, size, text, null, color);
+    const b = boundsOf(o);
+    const t = (Number(rotation) || 0) * Math.PI / 180, cos = Math.cos(t), sin = Math.sin(t);
+    const pts = [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]].map(([x, y]) => [x * cos - y * sin, x * sin + y * cos]);
+    const minX = Math.min(...pts.map((q) => q[0])), maxX = Math.max(...pts.map((q) => q[0]));
+    const minY = Math.min(...pts.map((q) => q[1])), maxY = Math.max(...pts.map((q) => q[1]));
+    const vx = at.h === 'center' ? (f.width - (maxX - minX)) / 2 - minX : at.h === 'right' ? f.width - margin - maxX : margin - minX;
+    const vy = at.v === 'middle' ? (f.height - (maxY - minY)) / 2 - minY
+      : at.v === 'top' ? f.height - margin - maxY : baseline && !t ? margin : margin - minY;
+    setMatrix(o, toPageMatrix(f, [cos, sin, -sin, cos, vx, vy]));
+    if (mark) P.FPDFPageObj_AddMark(o, mark);
+    if (!(back && P.FPDFPage_InsertObjectAtIndex(p, o, 0))) P.FPDFPage_InsertObject(p, o);
+    regen(p);
+    return o;
+  };
+  // 모든 쪽에서 mark가 달린 객체를 뺀다(쪽 번호·머리말·워터마크를 다시 넣거나 지울 때)
+  const removeMarked = (mark) => {
+    let removed = 0;
+    for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
+      const p = page(i);
+      let hit = false;
+      for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o || !findMark(o, mark)) continue;
+        if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; hit = true; }
+      }
+      if (hit) regen(p);
+    }
+    return removed;
+  };
+  // 쪽 목록 검사(0 기준). 서버가 page-range.js로 푼 배열을 그대로 받는다. 없으면 모든 쪽
+  const pageList = (pages) => {
+    const count = P.FPDF_GetPageCount(doc);
+    if (pages == null) return Array.from({ length: count }, (_, k) => k);
+    const list = [...new Set([].concat(pages).map(Number))].sort((a, b) => a - b);
+    if (!list.length) throw bad('쪽을 하나 이상 고르세요.');
+    for (const n of list) if (!Number.isInteger(n) || n < 0 || n >= count) throw bad(`쪽 번호가 범위를 벗어났습니다: ${n + 1}쪽`);
+    return list;
+  };
+  const clamp01 = (v, def) => { const n = v == null || v === '' ? def : Number(v); if (!Number.isFinite(n) || n < 0 || n > 1) throw bad('불투명도는 0~1 사이로 지정하세요.'); return n; };
+  const alphaOf = (opacity) => Math.round(opacity * 255);
+
+  // ── 텍스트 페이지 글자 ↔ 문자열 · 객체 ─────────────────────────────────────
+  // U+0002: PDFium이 줄 끝 하이픈 글자에 붙이는 표시(실측: 11-hyphenation.pdf "internation\u0002"). 화면·편집에는 '-'로 보인다 — 길이가 같아 위치 대응이 그대로다
+  const HYPHEN_MARK = 0x02;
+  const charOf = (u) => (u === HYPHEN_MARK ? '-' : u > 0 && u <= 0x10ffff && !(u >= 0xd800 && u <= 0xdfff) ? String.fromCodePoint(u) : '�');
+  // 쪽 글자를 문자열로: text와 map(문자열 위치 → 텍스트 페이지 글자 번호). BMP 밖 글자는 문자열에서 두 칸이고 둘 다 같은 글자 번호
+  const pageChars = (tp) => {
+    const n = Math.max(0, P.FPDFText_CountChars(tp));
+    let text = ''; const map = [];
+    for (let c = 0; c < n; c++) {
+      const ch = charOf(P.FPDFText_GetUnicode(tp, c));
+      text += ch;
+      for (let k = 0; k < ch.length; k++) map.push(c);
+    }
+    return { text, map };
+  };
+
+  // ── 객체 텍스트: 객체가 직접 그린 글자만 ─────────────────────────────────────
+  // 예전에는 FPDFTextObj_GetText(= PDFium GetTextByObject)를 그대로 썼다. 그 함수는 객체 글자 바로 뒤에 오는 공백 하나를 — PDFium이
+  // 끼운 공백(IsGenerated)이든 다른 객체의 진짜 공백이든 — 객체 텍스트에 덧붙인다. 그래서 Chromium 한 글자 조각은 "월 "이 되고
+  // 뒤의 공백 조각까지 이으면 두 칸, 자간 넓은 줄은 "자 간 이", 지시선 점은 ". . . .", 글자별 객체는 "S A L E"가 됐다(tmp/grouping 말뭉치 실측).
+  // 이제 텍스트 페이지 글자 중 그 객체 것(FPDFText_GetTextObject)만 쓴다:
+  //   · 진짜 글자(IsGenerated 0)는 모두 — 진짜 공백이 여러 개 이어져도 그대로 둔다
+  //   · PDFium이 객체 "안"에 끼운 공백(TJ 간격 −250처럼 글자 사이를 띄운 자리)은 그 틈이 객체의 보통 글자 간격(중앙값)보다
+  //     GEN_SPACE_MIN_EM 넘게 넓을 때만 남긴다 — 낱말 사이 TJ(−250·−278)는 남고 자간용 TJ(모든 글자 사이 같은 간격)는 버린다
+  //   · 객체 "사이"에 PDFium이 끼운 공백·줄바꿈은 객체 것이 아니라 들어가지 않는다 — 조각 사이 공백은 줄 묶기(text-grouping.js)가 틈을 보고 넣는다
+  // 이 텍스트와 charBoxes()·rangesToParts()의 글자 대응은 모두 이 함수 하나에서 나오므로 가리기 위치가 어긋나지 않는다.
+  const GEN_SPACE_MIN_EM = 0.15;
+  // 쪽의 글자를 객체 포인터별로 모은다: Map(포인터 → [{ c: 글자 번호, u: 유니코드, gen: PDFium이 끼운 글자 }])
+  // 유니코드가 없는 글자(0)는 뺀다 — 예전 객체 텍스트(GetTextByObject)도 건너뛰었다
+  const charsByObject = (tp) => {
+    const by = new Map();
+    for (let c = 0, n = Math.max(0, P.FPDFText_CountChars(tp)); c < n; c++) {
+      const o = P.FPDFText_GetTextObject(tp, c);
+      if (!o) continue; // 객체 사이에 PDFium이 끼운 공백·\r\n
+      const u = P.FPDFText_GetUnicode(tp, c);
+      if (!u) continue;
+      let list = by.get(o);
+      if (!list) by.set(o, (list = []));
+      list.push({ c, u, gen: !!P.FPDFText_IsGenerated(tp, c) });
+    }
+    return by;
+  };
+  // 글자 하나의 기준선 시작점(x,y)과 진행 폭 w(쪽 단위, 글자 방향으로). s: 32바이트 이상 scratch, m: 객체 행렬 [a,b,c,d,e,f]
+  // 진행 폭은 느슨한 글자 상자(FPDFText_GetLooseCharBox = 진행 폭 × 올림~내림을 행렬로 돌린 상자의 외접 사각형)에서 푼다:
+  //   외접 폭 Wx = w|a| + h|c|, 높이 Wy = w|b| + h|d| (w: 진행, h: 글자 높이) → 2×2 연립. 기울임(합성 이탤릭)·회전 글자도 기준선에서의 진행 폭이 나온다.
+  //   45°처럼 풀리지 않으면 외접 폭을 쓴다(드물다).
+  const glyphGeo = (tp, c, m, s) => {
+    P.FPDFText_GetCharOrigin(tp, c, s, s + 8);
+    const x = f64(s), y = f64(s + 8);
+    let w = 0;
+    if (P.FPDFText_GetLooseCharBox(tp, c, s)) { // FS_RECTF left, top, right, bottom
+      const Wx = Math.abs(f32(s + 8) - f32(s)), Wy = Math.abs(f32(s + 4) - f32(s + 12));
+      const a = Math.abs(m[0]), b = Math.abs(m[1]), cc = Math.abs(m[2]), d = Math.abs(m[3]), len = Math.hypot(m[0], m[1]);
+      const det = a * d - cc * b;
+      w = Math.abs(det) > 1e-3 * (len * len + 1e-9) ? Math.max(0, (Wx * d - cc * Wy) / det) * len : Math.max(Wx, Wy);
+    }
+    return { x, y, w };
+  };
+  // 객체 하나의 글자 목록 → { text, at, geo }
+  //   at[k]: 텍스트 위치 k를 그린 텍스트 페이지 글자 번호(BMP 밖 글자는 두 칸 모두 같은 번호)
+  //   geo[k]: [x, y, w] 위치 k 글자의 기준선 시작점과 진행 폭(wantGeo일 때만, 아니면 null)
+  // o: 객체 포인터, s: 32바이트 scratch
+  const objText = (tp, o, list, s, wantGeo) => {
+    const needGeo = wantGeo || list.some((x) => x.gen);
+    let m = [1, 0, 0, 1, 0, 0], em = 1;
+    if (needGeo) {
+      if (P.FPDFPageObj_GetMatrix(o, s)) m = [0, 1, 2, 3, 4, 5].map((k) => f32(s + k * 4));
+      em = (P.FPDFTextObj_GetFontSize(o, s) ? f32(s) : 1) * Math.hypot(m[0], m[1]) || 1;
+    }
+    const geos = needGeo ? list.map((x) => glyphGeo(tp, x.c, m, s)) : null;
+    // PDFium이 객체 안에 끼운 공백을 남길지: 앞뒤 진짜 글자 사이 틈(진행 폭 기준, em 단위)이 객체의 보통 글자 간격 + GEN_SPACE_MIN_EM보다 넓으면 남긴다
+    let keep = null;
+    if (list.some((x) => x.gen)) {
+      const cos = m[0] / (Math.hypot(m[0], m[1]) || 1), sin = m[1] / (Math.hypot(m[0], m[1]) || 1);
+      const u = (g) => g.x * cos + g.y * sin;
+      const real = list.map((x, k) => k).filter((k) => !list[k].gen);
+      const gaps = real.slice(1).map((k, j) => (u(geos[k]) - (u(geos[real[j]]) + geos[real[j]].w)) / em);
+      const sorted = gaps.slice().sort((p, q) => p - q), base = sorted.length ? sorted[sorted.length >> 1] : 0;
+      keep = new Set();
+      for (let j = 0; j < real.length - 1; j++) {
+        const between = [];
+        for (let k = real[j] + 1; k < real[j + 1]; k++) between.push(k);
+        const space = between.find((k) => list[k].u === 0x20);
+        if (space != null && gaps[j] > base + GEN_SPACE_MIN_EM) keep.add(space);
+      }
+    }
+    let text = ''; const at = [], geo = wantGeo ? [] : null;
+    list.forEach((x, k) => {
+      if (x.gen && !(keep && keep.has(k))) return;
+      const ch = charOf(x.u);
+      text += ch;
+      for (let q = 0; q < ch.length; q++) {
+        at.push(x.c);
+        if (geo) { const g = geos[k]; geo.push(q ? [g.x + g.w, g.y, 0] : [g.x, g.y, g.w]); }
+      }
+    });
+    return { text, at, geo };
+  };
+  // 글자 범위 [start, end)의 사각형(줄마다 하나, FPDFText_CountRects/GetRect) → [[l,b,r,t], …] 회전 전 페이지 좌표
+  const rangeRects = (tp, start, end) => {
+    const out = [], s = mal(32);
+    try {
+      for (let k = 0, n = P.FPDFText_CountRects(tp, start, Math.max(0, end - start)); k < n; k++) {
+        if (!P.FPDFText_GetRect(tp, k, s, s + 8, s + 16, s + 24)) continue; // left, top, right, bottom
+        const l = f64(s), t = f64(s + 8), r = f64(s + 16), b = f64(s + 24);
+        if (r > l && t > b) out.push([l, b, r, t]);
+      }
+    } finally { free(s); }
+    return out;
+  };
+  // 텍스트 페이지 글자 번호 범위들 → 가리기 조각 [{ idx, from, to }] (객체 텍스트 안의 위치, to 미포함).
+  // 객체마다 그 객체가 그린 글자 번호를 차례로 모아(charsByObject) 객체 텍스트(objText — objects()·charBoxes()와 같은 함수)의 위치로 바꾼다.
+  // 객체 텍스트에서 뺀 PDFium 공백(IsGenerated)은 지울 글자가 없으므로 범위에 들어 있어도 건너뛴다.
+  // 쪽의 객체 목록에 없는 객체(양식 XObject 안 글자)의 글자는 unmapped로 센다(지울 수 없다 — 덮기만 된다)
+  const rangesToParts = (i, ranges) => {
+    const p = page(i), tp = P.FPDFText_LoadPage(p), s = mal(32);
+    try {
+      const ptrIdx = new Map();
+      for (let k = 0, n = P.FPDFPage_CountObjects(p); k < n; k++) ptrIdx.set(P.FPDFPage_GetObject(p, k), k);
+      const want = (c) => ranges.some(([a, b]) => c >= a && c < b);
+      let unmapped = 0;
+      const parts = [];
+      for (const [o, list] of charsByObject(tp)) {
+        const idx = ptrIdx.get(o);
+        if (idx === undefined) { unmapped += list.filter((x) => want(x.c)).length; continue; }
+        if (!list.some((x) => want(x.c))) continue;
+        const { at } = objText(tp, o, list, s, false);
+        // 원하는 범위마다 연속 구간으로
+        for (const [a, b] of ranges) {
+          let from = -1, to = -1;
+          at.forEach((c, k) => { if (c >= a && c < b) { if (from < 0) from = k; to = k + 1; } });
+          if (from >= 0) parts.push({ idx, from, to });
+        }
+      }
+      return { parts, unmapped };
+    } finally { free(s); P.FPDFText_ClosePage(tp); }
+  };
+
+  // ── 주석 ───────────────────────────────────────────────────────────────────
+  // FPDF_ANNOT_* 번호 ↔ 이름. 만들 수 있는 것은 ANNOT_CREATE에 있는 것만
+  const ANNOT_NAMES = { 1: 'text', 2: 'link', 3: 'freetext', 4: 'line', 5: 'square', 6: 'circle', 7: 'polygon', 8: 'polyline', 9: 'highlight', 10: 'underline',
+    11: 'squiggly', 12: 'strikeout', 13: 'stamp', 14: 'caret', 15: 'ink', 16: 'popup', 17: 'fileattachment', 18: 'sound', 19: 'movie', 20: 'widget',
+    21: 'screen', 22: 'printermark', 23: 'trapnet', 24: 'watermark', 25: '3d', 26: 'richmedia', 27: 'xfawidget', 28: 'redact' };
+  const ANNOT_CREATE = { text: 1, line: 4, square: 5, circle: 6, highlight: 9, underline: 10, squiggly: 11, strikeout: 12, ink: 15 };
+  const MARKUP = new Set([9, 10, 11, 12]);
+  const ANNOT_FLAG_PRINT = 4, ANNOT_FLAG_NOZOOM = 8, ANNOT_FLAG_NOROTATE = 16;
+  const BLEND_MULTIPLY = 1; // EPDFAnnot_GenerateAppearanceWithBlend — 형광펜은 곱하기로 그려 밑 글자가 비친다(Acrobat과 같은 방식)
+  const LE_NONE = 0, LE_CLOSED_ARROW = 5; // EPDFAnnot_SetLineEndings
+  const hexColor = (c) => '#' + c.slice(0, 3).map((v) => (v & 255).toString(16).padStart(2, '0')).join('');
+  // PDF 날짜 문자열(D:YYYYMMDDHHmmSS+09'00') ↔ ISO
+  const pdfDate = (d = new Date()) => {
+    const z = (n, l = 2) => String(Math.abs(n)).padStart(l, '0'), off = -d.getTimezoneOffset();
+    return `D:${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`
+      + (off === 0 ? 'Z' : `${off > 0 ? '+' : '-'}${z(Math.floor(Math.abs(off) / 60))}'${z(Math.abs(off) % 60)}'`);
+  };
+  const isoDate = (s) => {
+    const m = /^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?([Zz+-])?(\d{2})?'?(\d{2})?'?/.exec(String(s || '').trim());
+    if (!m) return null;
+    const [y, mo = '01', d = '01', h = '00', mi = '00', se = '00'] = m.slice(1, 7).map((v) => v ?? undefined);
+    const sign = m[7] === '-' ? -1 : m[7] === '+' ? 1 : 0;
+    const offMin = sign ? sign * (Number(m[8] || 0) * 60 + Number(m[9] || 0)) : 0;
+    const t = Date.UTC(+y, +mo - 1, +d, +h, +mi, +se) - offMin * 60000;
+    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+  };
+  const annotStr = (a, key) => {
+    const n = P.FPDFAnnot_GetStringValue(a, key, 0, 0);
+    if (!(n > 2)) return '';
+    const b = mal(n);
+    try { P.FPDFAnnot_GetStringValue(a, key, b, n); return M.UTF16ToString(b); } finally { free(b); }
+  };
+  const setAnnotStr = (a, key, value) => { const u = utf16(String(value ?? '')); try { return !!P.FPDFAnnot_SetStringValue(a, key, u); } finally { free(u); } };
+  // FS_RECTF { left, top, right, bottom }
+  const annotRect = (a) => {
+    const b = mal(16);
+    try { if (!P.FPDFAnnot_GetRect(a, b)) return null; const l = f32(b), t = f32(b + 4), r = f32(b + 8), bt = f32(b + 12); return [Math.min(l, r), Math.min(bt, t), Math.max(l, r), Math.max(bt, t)]; } finally { free(b); }
+  };
+  const setAnnotRect = (a, [l, b, r, t]) => {
+    const m = mal(16);
+    try { [Math.min(l, r), Math.max(b, t), Math.max(l, r), Math.min(b, t)].forEach((v, k) => M.setValue(m + k * 4, v, 'float')); return !!P.FPDFAnnot_SetRect(a, m); } finally { free(m); }
+  };
+  const annotColor = (a, type) => {
+    const b = mal(16);
+    try {
+      if (P.EPDFAnnot_GetColor(a, type, b, b + 4, b + 8)) return [i32(b) & 255, i32(b + 4) & 255, i32(b + 8) & 255];
+      return null;
+    } finally { free(b); }
+  };
+  const withAnnot = (i, index, fn) => {
+    const p = page(i), n = P.FPDFPage_GetAnnotCount(p);
+    if (!Number.isInteger(index) || index < 0 || index >= n) throw Object.assign(new Error('주석을 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 고르세요.'), { status: 404 });
+    const a = P.FPDFPage_GetAnnot(p, index);
+    if (!a) throw new Error('주석을 읽지 못했습니다.');
+    try { return fn(a, p); } finally { P.FPDFPage_CloseAnnot(a); }
+  };
+  // 외형(/AP /N) 다시 만들기. 형광펜은 곱하기 섞기
+  const regenAppearance = (a) => (P.FPDFAnnot_GetSubtype(a) === 9 ? P.EPDFAnnot_GenerateAppearanceWithBlend(a, BLEND_MULTIPLY) : P.EPDFAnnot_GenerateAppearance(a));
+  const readAnnot = (a, index, rotation) => {
+    const st = P.FPDFAnnot_GetSubtype(a), b = mal(64);
+    try {
+      const item = { index, subtype: ANNOT_NAMES[st] || `unknown${st}`, rect: annotRect(a), color: null, opacity: 1,
+        contents: annotStr(a, 'Contents'), author: annotStr(a, 'T'), modified: isoDate(annotStr(a, 'M')), rotation };
+      const c = annotColor(a, 0);
+      if (c) item.color = hexColor(c);
+      const ic = annotColor(a, 1);
+      if (ic) item.fill = hexColor(ic);
+      if (P.EPDFAnnot_GetOpacity(a, b)) item.opacity = Math.round((i32(b) & 255) / 255 * 1000) / 1000;
+      // 선 굵기: /BS /W(EPDFAnnot_GetBorderStyle — 스타일 번호를 돌려주고 굵기를 쓴다, 0이면 /BS 없음) → 없으면 옛 /Border [가로 세로 굵기]
+      M.setValue(b, 0, 'float');
+      if (P.EPDFAnnot_GetBorderStyle(a, b) > 0) item.width = Math.round(f32(b) * 1000) / 1000;
+      else if (P.FPDFAnnot_GetBorder(a, b, b + 4, b + 8)) item.width = f32(b + 8);
+      const nq = P.FPDFAnnot_CountAttachmentPoints(a);
+      if (nq > 0) {
+        item.quads = [];
+        for (let k = 0; k < nq; k++) if (P.FPDFAnnot_GetAttachmentPoints(a, k, b)) item.quads.push([0, 1, 2, 3, 4, 5, 6, 7].map((q) => f32(b + q * 4)));
+      }
+      if (st === 15) {
+        item.inkPaths = [];
+        for (let k = 0, n = P.FPDFAnnot_GetInkListCount(a); k < n; k++) {
+          const cnt = P.FPDFAnnot_GetInkListPath(a, k, 0, 0);
+          if (!(cnt > 0)) continue;
+          const buf = mal(cnt * 8);
+          try { P.FPDFAnnot_GetInkListPath(a, k, buf, cnt); item.inkPaths.push(Array.from({ length: cnt }, (_, q) => [f32(buf + q * 8), f32(buf + q * 8 + 4)])); } finally { free(buf); }
+        }
+      }
+      if (st === 4 && P.FPDFAnnot_GetLine(a, b, b + 8)) {
+        item.line = { from: [f32(b), f32(b + 4)], to: [f32(b + 8), f32(b + 12)] };
+        if (P.EPDFAnnot_GetLineEndings(a, b + 16, b + 20)) item.line.arrow = i32(b + 20) !== LE_NONE;
+      }
+      item.hasAppearance = !!P.EPDFAnnot_HasAppearanceStream(a, 0);
+      return item;
+    } finally { free(b); }
+  };
+  // 사각형 두 개가 겹치는가([l,b,r,t] / {x0,y0,x1,y1} 둘 다 받는다)
+  const asBox = (r) => (Array.isArray(r) ? { x0: Math.min(r[0], r[2]), y0: Math.min(r[1], r[3]), x1: Math.max(r[0], r[2]), y1: Math.max(r[1], r[3]) } : r);
+  const overlaps = (a, b) => { a = asBox(a); b = asBox(b); return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1; };
+  // 주석 지우기(index들, 내림차순으로). 딸린 팝업(/Popup)도 함께 지운다 — 팝업만 남으면 지운 메모 내용이 다른 뷰어에 계속 보인다
+  const removeAnnots = (p, indices) => {
+    const all = new Set(indices);
+    for (const index of indices) {
+      const a = P.FPDFPage_GetAnnot(p, index);
+      if (!a) continue;
+      const pop = P.FPDFAnnot_GetLinkedAnnot(a, 'Popup');
+      if (pop) { const k = P.FPDFPage_GetAnnotIndex(p, pop); if (k >= 0) all.add(k); P.FPDFPage_CloseAnnot(pop); }
+      P.FPDFPage_CloseAnnot(a);
+    }
+    let removed = 0;
+    for (const k of [...all].sort((x, y) => y - x)) if (P.FPDFPage_RemoveAnnot(p, k)) removed++;
+    return removed;
+  };
+  // 가린 영역과 겹치는 주석을 지운다(진짜 가리기의 일부 — 메모·형광펜·도형에 가린 글자가 남지 않게). 링크·양식 칸은 남긴다
+  const removeAnnotsIn = (i, rects) => {
+    if (!rects.length) return 0;
+    const p = page(i), hits = [];
+    for (let k = 0, n = P.FPDFPage_GetAnnotCount(p); k < n; k++) {
+      const a = P.FPDFPage_GetAnnot(p, k);
+      if (!a) continue;
+      try {
+        const st = P.FPDFAnnot_GetSubtype(a), r = annotRect(a);
+        if (st === 2 || st === 20 || st === 16 || !r) continue; // 링크·양식 칸·팝업(팝업은 부모와 함께 지운다)
+        if (rects.some((x) => overlaps(r, x))) hits.push(k);
+      } finally { P.FPDFPage_CloseAnnot(a); }
+    }
+    return hits.length ? removeAnnots(p, hits) : 0;
+  };
+
   const api = {
     get pageCount() { return P.FPDF_GetPageCount(doc); },
 
@@ -738,12 +1067,17 @@ async function open(buffer, password) {
       });
     },
 
+    // 텍스트 객체에는 glyphs도 싣는다: 텍스트 위치마다 [x, y, w] — 그 글자의 기준선 시작점(회전 전 쪽 좌표)과 글자 방향 진행 폭.
+    // 줄 묶기(text-grouping.js)가 낱말 틈·자간·칸 사이 빈 띠를 글자 단위로 재는 데 쓴다(객체 상자는 뒤 공백·기울임 때문에 넓다).
     objects(i) {
       const p = page(i), n = P.FPDFPage_CountObjects(p);
       const tp = P.FPDFText_LoadPage(p);
       const scratch = mal(32); // float 4개(bounds) + uint 4개(color) 공용
       const mbuf = mal(24);    // FS_MATRIX {a,b,c,d,e,f} — 텍스트 객체의 기준선 원점(e,f)을 읽는다
+      const gbuf = mal(32);    // objText(글자 원점·느슨한 상자) 전용
+      const r2 = (v) => Math.round(v * 100) / 100;
       try {
+        const byObj = charsByObject(tp);
         const list = [];
         for (let idx = 0; idx < n; idx++) {
           const o = P.FPDFPage_GetObject(p, idx);
@@ -756,6 +1090,8 @@ async function open(buffer, password) {
           };
           item.mask = !!findMark(o, MARK_MASK);
           if (findMark(o, MARK_PAGENUM)) item.pageNum = true; // 쪽 번호 글자(다시 매기기·지우기 대상)
+          if (findMark(o, MARK_HF)) item.headerFooter = true; // 머리말·꼬리말 글자
+          if (findMark(o, MARK_WM)) item.watermark = true;    // 워터마크 글자·그림
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) {
             const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7;
@@ -773,13 +1109,10 @@ async function open(buffer, password) {
           }
           if (t === OBJ_TEXT && item.color[3] === 0) item.hidden = true; // 알파 0도 투명 글자
           if (t === OBJ_TEXT) {
-            const need = P.FPDFTextObj_GetText(o, tp, 0, 0); // 바이트 수(UTF-16, NUL 포함)
-            if (need > 0) {
-              const buf = mal(need);
-              P.FPDFTextObj_GetText(o, tp, buf, need);
-              item.text = M.UTF16ToString(buf);
-              free(buf);
-            } else item.text = '';
+            // 객체가 직접 그린 글자만(objText 참고). 텍스트 페이지가 중복으로 보고 뺀 사본(가짜 굵게)은 글자가 없어 ''
+            const info = objText(tp, o, byObj.get(o) || [], gbuf, true);
+            item.text = info.text;
+            item.glyphs = info.geo.map((g) => [r2(g[0]), r2(g[1]), r2(g[2])]);
             P.FPDFTextObj_GetFontSize(o, scratch);
             item.size = f32(scratch);
             const font = P.FPDFTextObj_GetFont(o);
@@ -800,7 +1133,7 @@ async function open(buffer, password) {
           list.push(item);
         }
         return list;
-      } finally { free(scratch); free(mbuf); P.FPDFText_ClosePage(tp); }
+      } finally { free(scratch); free(mbuf); free(gbuf); P.FPDFText_ClosePage(tp); }
     },
 
     // 줄바꿈 지원: PDF 텍스트 객체는 한 줄이라 '\n'을 넣으면 □로 그려진다.
@@ -1012,6 +1345,113 @@ async function open(buffer, password) {
       } finally { free(u16); free(scratch); }
     },
 
+    // ── 2단계(조각별 모양 보존 편집·문단 다시 흘리기, pdf-edit-service.editRuns)가 쓰는 도구 ─────────────
+    // 편집 뒤 이 객체(또는 이 객체를 본뜬 새 객체)가 text를 그릴 글꼴 — _setOneRaw와 같은 규칙:
+    // 지정 폰트가 있으면 그것, 원래 글꼴로 그릴 수 있으면(대체 글꼴 "Untitled"는 제외) 원래 글꼴, 아니면 굵기에 맞춘 대체 글꼴
+    _fontFor(o, text, size) {
+      const entry = chosenFont(o);
+      if (entry) return { font: customFont(entry, text), entry, fallback: false };
+      const nb = mal(256); const fname = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) ? M.UTF8ToString(nb) : ''; free(nb);
+      if (fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), text, size)) return { font: P.FPDFTextObj_GetFont(o), entry: null, fallback: false };
+      return { font: fallbackFont(isBold(o), text), entry: null, fallback: true };
+    },
+    // 글자별 진행 폭 추정(쪽 단위, UTF-16 위치마다 — 서로게이트 쌍의 둘째 칸은 0). 줄 나누기 판단용이다:
+    // 실제 위치는 고쳐 쓴 뒤 objects()의 글자 위치로 다시 잰다. 폭 = 글리프 폭(FPDFFont_GetGlyphWidth, 유니코드 기준) × 행렬 배율.
+    // 자간(Tc)·장평(Tz)은 반영하지 않는다 — 호출 쪽이 원래 글의 실측 폭으로 보정한다(calib)
+    measureText(i, idx, text) {
+      const o = P.FPDFPage_GetObject(page(i), idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: '텍스트 상자를 다시 선택하세요.' };
+      const s = mal(24);
+      try {
+        P.FPDFTextObj_GetFontSize(o, s); const size = f32(s);
+        const scale = P.FPDFPageObj_GetMatrix(o, s) ? Math.hypot(f32(s), f32(s + 4)) : 1;
+        const { font, fallback } = api._fontFor(o, text, size);
+        if (!font) return { ok: false, reason: noGlyphReason(font, text, size) };
+        const adv = [];
+        for (let k = 0; k < text.length; k++) {
+          const cp = text.codePointAt(k);
+          adv.push(P.FPDFFont_GetGlyphWidth(font, cp, size, s) ? f32(s) * scale : 0.5 * size * scale);
+          if (cp > 0xffff) { adv.push(0); k++; }
+        }
+        return { ok: true, adv, fallback };
+      } finally { free(s); }
+    },
+    // 객체 idx를 본뜬 새 텍스트 객체(글꼴·크기·행렬·색·그리기 방식·마크 그대로)를 맨 뒤(가장 위 z-순서)에 넣는다 — 앞 인덱스는 그대로다.
+    // 줄을 나눠 다음 줄로 넘기는 조각·한 객체를 둘로 가르는 뒷부분에 쓴다. 위치는 원래 행렬 그대로(호출 쪽이 move로 옮긴다)
+    cloneText(i, idx, text) {
+      const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: '텍스트 상자를 다시 선택하세요.' };
+      if (!text) text = ' ';
+      const s = mal(24), u16 = utf16(text);
+      try {
+        P.FPDFTextObj_GetFontSize(o, s); const size = f32(s);
+        const { font, entry, fallback } = api._fontFor(o, text, size);
+        if (!font || !canRender(font, text, size)) return { ok: false, reason: noGlyphReason(font, text, size) };
+        const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
+        if (!neo || !P.FPDFText_SetText(neo, u16)) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 텍스트 객체를 만들지 못했습니다.' }; }
+        if (P.FPDFPageObj_GetMatrix(o, s)) P.FPDFPageObj_SetMatrix(neo, s);
+        if (P.FPDFPageObj_GetFillColor(o, s, s + 4, s + 8, s + 12)) P.FPDFPageObj_SetFillColor(neo, i32(s), i32(s + 4), i32(s + 8), i32(s + 12));
+        copyTextStyle(o, neo);
+        if (entry) tagFont(neo, entry);
+        const gid = groupOf(o); if (gid) tagGroup(neo, gid);
+        P.FPDFPage_InsertObject(p, neo);
+        regen(p);
+        return { ok: true, idx: P.FPDFPage_CountObjects(p) - 1, fallbackFont: fallback };
+      } finally { free(u16); free(s); }
+    },
+    // 한 객체를 글자 위치 cuts(오름차순, 0 < k < 글자 수)에서 여러 객체로 가른다(15d: TJ 안의 큰 점프로 두 칸이 된 객체).
+    // 앞 조각은 제자리(같은 인덱스), 뒤 조각들은 원래 글꼴로 새 객체를 만들어 그 글자의 기준선 시작점에 놓고 맨 뒤에 넣는다.
+    // 원래 글꼴로 다시 그릴 수 없는 글자(글자 대응이 없는 서브셋)면 가르지 않는다 — 모양이 바뀌면 안 되는 "고치지 않은" 글자다
+    splitText(i, idx, cuts) {
+      return api.batch(() => {
+        const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: '텍스트 상자를 다시 선택하세요.' };
+        const item = api.objects(i)[idx], text = item.text || '';
+        const ks = [...new Set(cuts)].filter((k) => k > 0 && k < text.length).sort((a, b) => a - b);
+        if (!ks.length) return { ok: true, idxs: [idx] };
+        if (item.glyphs.length !== text.length || !item.matrix || Math.abs(item.matrix[1]) > 1e-3) return { ok: false, reason: '이 글자 조각은 나눌 수 없습니다(회전·글자 대응 문제).' };
+        const bounds = [0, ...ks, text.length], segs = bounds.slice(0, -1).map((a, j) => text.slice(a, bounds[j + 1]));
+        const font = P.FPDFTextObj_GetFont(o), size = item.size;
+        if (segs.some((t) => !canRender(font, t, size))) return { ok: false, reason: '이 글자 조각은 원래 글꼴로 나눌 수 없습니다.' };
+        const s = mal(24), idxs = [idx];
+        try {
+          if (!P.FPDFPageObj_GetMatrix(o, s)) return { ok: false, reason: 'matrix' };
+          const m = [0, 4, 8, 12, 16, 20].map((k) => f32(s + k));
+          for (let j = 1; j < segs.length; j++) {
+            const neo = P.FPDFPageObj_CreateTextObj(doc, font, size), u = utf16(segs[j]);
+            const ok = neo && P.FPDFText_SetText(neo, u); free(u);
+            if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '나눈 조각을 만들지 못했습니다.' }; }
+            const g = item.glyphs[bounds[j]];
+            m.forEach((v, k) => M.setValue(s + k * 4, k === 4 ? g[0] : k === 5 ? g[1] : v, 'float'));
+            P.FPDFPageObj_SetMatrix(neo, s);
+            P.FPDFPageObj_SetFillColor(neo, item.color[0], item.color[1], item.color[2], item.color[3]);
+            copyTextStyle(o, neo);
+            const fm = findMark(o, 'RetextPdfFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
+            P.FPDFPage_InsertObject(p, neo);
+            idxs.push(P.FPDFPage_CountObjects(p) - 1);
+          }
+          const u = utf16(segs[0]); const ok = P.FPDFText_SetText(o, u); free(u);
+          if (!ok) return { ok: false, reason: '앞 조각을 고치지 못했습니다.' };
+          regen(p);
+          return { ok: true, idxs };
+        } finally { free(s); }
+      });
+    },
+    // 객체들을 점 (cx, cy)를 중심으로 s배(글자 크기·간격 모두) — 줄 하나를 통째로 줄일 때(넘치면: 글자 축소)
+    scaleAbout(i, idxs, s, cx, cy) {
+      const p = page(i), n = P.FPDFPage_CountObjects(p);
+      let done = 0;
+      for (const idx of [].concat(idxs)) {
+        if (!(idx >= 0 && idx < n)) continue;
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o) continue;
+        P.FPDFPageObj_Transform(o, s, 0, 0, s, cx * (1 - s), cy * (1 - s));
+        done++;
+      }
+      if (done) regen(p);
+      return { ok: done > 0, scaled: done };
+    },
+
     // ── H: 글자 상자 / 이동 / 사각형 / 마스킹 ──────────────────────────────
     // 텍스트 페이지의 글자 인덱스는 페이지 전체 기준이라 객체별로 나눠야 한다.
     // FPDFText_GetTextObject(tp, c)가 그 글자를 그린 페이지 객체 포인터를 그대로 준다
@@ -1024,37 +1464,27 @@ async function open(buffer, password) {
       const tp = P.FPDFText_LoadPage(p);
       const s = mal(32); // double 4개: left, right, bottom, top
       try {
-        const out = [];
+        // objects()의 text와 같은 함수(objText)로 글자를 고른다 → 인덱스가 텍스트(UTF-16)와 1:1
+        const list = [];
         for (let c = 0, n = P.FPDFText_CountChars(tp); c < n; c++) {
           if (P.FPDFText_GetTextObject(tp, c) !== o) continue;
-          const u = P.FPDFText_GetUnicode(tp, c), ch = u <= 0x10ffff ? String.fromCodePoint(u) : '\ufffd'; // BMP 밖 글자는 UTF-16 두 칸
-          // 공백은 PDFium이 빈 상자(0,0,0,0)를 줄 수 있다. 문자열과 길이를 맞춰야 하므로 그대로 담는다.
-          const ok = P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24);
-          out.push(ok
-            ? { ch, x0: f64(s), y0: f64(s + 16), x1: f64(s + 8), y1: f64(s + 24) }
-            : { ch, x0: 0, y0: 0, x1: 0, y1: 0 });
+          const u = P.FPDFText_GetUnicode(tp, c);
+          if (u) list.push({ c, u, gen: !!P.FPDFText_IsGenerated(tp, c) });
         }
-        // 객체 텍스트와 길이를 맞춘다. Word/Excel 출력물은 객체 텍스트 끝에 공백을 달고 있고(계약서 PDF 97개 중 50개),
-        // Chromium 출력물은 한 글자 조각마다 뒤 공백이 붙는데, 텍스트 페이지는 그 공백을 내놓지 않는다.
-        // 빠진 공백 자리에 0폭 합성 상자를 끼워 넣어 인덱스가 텍스트와 1:1이 되게 한다. 공백이 아닌 글자가 안 맞으면 원래 목록을 돌려준다(호출자가 길이 불일치로 판단).
-        const need = P.FPDFTextObj_GetText(o, tp, 0, 0);
-        let text = '';
-        if (need > 0) { const b = mal(need); P.FPDFTextObj_GetText(o, tp, b, need); text = M.UTF16ToString(b); free(b); }
-        const aligned = []; let j = 0;
+        const { text, at } = objText(tp, o, list, s, false);
+        const gen = new Set(list.filter((x) => x.gen).map((x) => x.c));
+        const out = [];
         for (let k = 0; k < text.length; k++) {
-          const ch = text[k];
-          if (j < out.length && out[j].ch && text.startsWith(out[j].ch, k)) {
-            const b = out[j++]; aligned.push(b);
-            // BMP 밖 글자 하나가 문자열에서는 두 칸(서로게이트 쌍) → 0폭 빈 상자를 하나 더 넣어 인덱스를 objects()의 text(UTF-16)와 맞춘다
-            if (b.ch.length === 2) { aligned.push({ ch: '', x0: b.x1, y0: b.y0, x1: b.x1, y1: b.y1 }); k++; }
-            continue;
-          }
-          if (!/\s/.test(ch)) return out;
-          const prev = aligned[aligned.length - 1], next = out[j];
-          const x = prev ? prev.x1 : next ? next.x0 : 0, ref = prev || next || { y0: 0, y1: 0 };
-          aligned.push({ ch, x0: x, y0: ref.y0, x1: x, y1: ref.y1 });
+          const c = at[k], prev = out[out.length - 1];
+          // BMP 밖 글자 하나가 문자열에서는 두 칸(서로게이트 쌍) → 0폭 빈 상자를 하나 더 넣는다
+          if (k && at[k - 1] === c && prev) { out.push({ ch: '', x0: prev.x1, y0: prev.y0, x1: prev.x1, y1: prev.y1 }); continue; }
+          const ch = String.fromCodePoint(text.codePointAt(k));
+          // PDFium이 객체 안에 끼운 공백(남긴 것)은 상자가 비어 있다 → 앞 글자 오른쪽 끝에 0폭 상자. 진짜 공백은 PDFium이 진행 폭만큼의 납작한 상자를 준다
+          const ok = !gen.has(c) && P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24);
+          if (ok) out.push({ ch, x0: f64(s), y0: f64(s + 16), x1: f64(s + 8), y1: f64(s + 24) });
+          else out.push(prev ? { ch, x0: prev.x1, y0: prev.y0, x1: prev.x1, y1: prev.y1 } : { ch, x0: 0, y0: 0, x1: 0, y1: 0 });
         }
-        return j === out.length ? aligned : out;
+        return out;
       } finally { free(s); P.FPDFText_ClosePage(tp); }
     },
 
@@ -1445,18 +1875,11 @@ async function open(buffer, password) {
       return api.batch(() => {
         const removed = api.removePageNumbers().removed;
         let numbered = 0;
+        // 자리 계산은 머리말·꼬리말·워터마크와 같은 placeText(회전 0이면 예전 공식 그대로: 가운데 (W−폭)/2−x0, 오른쪽 W−여백−x1, 아래는 기준선이 여백에, 위는 W−여백−y1)
+        const at = { h: pos.endsWith('center') ? 'center' : pos.endsWith('right') ? 'right' : 'left', v: pos.startsWith('bottom') ? 'bottom' : 'top' };
         for (let i = 0; i < count; i++) {
           if (!labels[i]) continue;
-          const p = page(i), f = visualFrame(i);
-          const o = makeText(font, size, labels[i], null, color);
-          const b = boundsOf(o); // 원점(기준선 시작)에 놓인 글자의 잉크 상자 — 폭과 위끝(대략 글자 높이)
-          const vx = pos.endsWith('center') ? (f.width - (b.x1 - b.x0)) / 2 - b.x0 : pos.endsWith('right') ? f.width - margin - b.x1 : margin - b.x0;
-          const vy = pos.startsWith('bottom') ? margin : f.height - margin - b.y1;
-          const [e, ff] = f.map(vx, vy);
-          setMatrix(o, [...f.rotm, e, ff]);
-          P.FPDFPageObj_AddMark(o, MARK_PAGENUM);
-          P.FPDFPage_InsertObject(p, o);
-          regen(p);
+          placeText(i, { font, size, text: labels[i], color, at, margin, mark: MARK_PAGENUM });
           numbered++;
         }
         return { ok: true, numbered, removed, last: N };
@@ -1465,17 +1888,7 @@ async function open(buffer, password) {
 
     // 쪽 번호 지우기: 모든 쪽에서 RetextPdfPageNum 마크가 달린 객체를 뺀다
     removePageNumbers() {
-      let removed = 0;
-      for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
-        const p = page(i);
-        let hit = false;
-        for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
-          const o = P.FPDFPage_GetObject(p, idx);
-          if (!o || !findMark(o, MARK_PAGENUM)) continue;
-          if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; hit = true; }
-        }
-        if (hit) regen(p);
-      }
+      const removed = removeMarked(MARK_PAGENUM);
       return { ok: removed > 0, removed };
     },
 
@@ -1711,6 +2124,480 @@ async function open(buffer, password) {
         free(buf);
         return s;
       } finally { P.FPDFText_ClosePage(tp); }
+    },
+
+    // ── 머리말·꼬리말 ─────────────────────────────────────────────────────
+    // opts: { slots: { tl, tc, tr, bl, bc, br }(왼쪽 위·가운데 위·오른쪽 위·왼쪽 아래·가운데 아래·오른쪽 아래), fontId, size(기본 9), color '#rrggbb',
+    //         margin(pt, 기본 24), pages(0 기준 배열, 생략 = 전체), startAt(기본 1), skipFirst, file(파일 이름, 확장자 없이), title }
+    // 글자 안의 표시: {page} 쪽 번호 · {pages} 마지막 번호 · {date} 오늘(YYYY-MM-DD) · {file} 파일 이름 · {title} 문서 제목(없으면 파일 이름)
+    // 번호는 쪽 번호(addPageNumbers)와 같은 규칙 — skipFirst면 1쪽(표지)은 비우고 2쪽이 startAt. 자리 계산은 쪽 번호와 같은 placeText(보이는 방향·CropBox 기준)
+    // RetextPdfHeaderFooter 마크를 달아 다시 넣으면 옛것을 모두 지우고 새로 넣는다
+    addHeaderFooter(opts = {}) {
+      const SLOT = { tl: ['left', 'top'], tc: ['center', 'top'], tr: ['right', 'top'], bl: ['left', 'bottom'], bc: ['center', 'bottom'], br: ['right', 'bottom'] };
+      const slots = opts.slots && typeof opts.slots === 'object' ? opts.slots : {};
+      for (const k of Object.keys(slots)) if (!SLOT[k]) throw bad(`알 수 없는 자리입니다: ${k} (tl·tc·tr·bl·bc·br)`);
+      const used = Object.entries(slots).filter(([, v]) => typeof v === 'string' && v.trim());
+      if (!used.length) throw bad('머리말·꼬리말 내용을 한 자리 이상 입력하세요.');
+      for (const [, v] of used) if (v.length > 300 || /[\r\n]/.test(v)) throw bad('머리말·꼬리말은 자리마다 300자 이하의 한 줄로 입력하세요.');
+      const size = opts.size == null ? 9 : Number(opts.size), margin = opts.margin == null ? 24 : Number(opts.margin);
+      if (!(size >= 4 && size <= 72)) throw bad('글자 크기는 4~72pt 범위로 지정하세요.');
+      if (!(margin >= 0 && margin <= 300)) throw bad('여백은 0~300pt 범위로 지정하세요.');
+      const startAt = opts.startAt == null ? 1 : Number(opts.startAt);
+      if (!Number.isInteger(startAt) || startAt < 0 || startAt > 99999) throw bad('시작 번호는 0~99999 정수로 지정하세요.');
+      const color = parseColor(opts.color);
+      const count = P.FPDF_GetPageCount(doc), first = opts.skipFirst ? 1 : 0;
+      const N = startAt + Math.max(0, count - first) - 1;
+      const now = new Date(), z = (n) => String(n).padStart(2, '0');
+      const values = { pages: String(N), date: `${now.getFullYear()}-${z(now.getMonth() + 1)}-${z(now.getDate())}`, file: String(opts.file ?? '') };
+      values.title = String(opts.title ?? (api.metaText('Title') || values.file));
+      const jobs = [];
+      for (const i of pageList(opts.pages)) {
+        if (i < first) continue;
+        for (const [slot, tpl] of used) {
+          const text = tpl.replace(/\{(page|pages|date|file|title)\}/g, (_, k) => (k === 'page' ? String(startAt + i - first) : values[k])).trim();
+          if (text) jobs.push({ i, text, at: { h: SLOT[slot][0], v: SLOT[slot][1] } });
+        }
+      }
+      const font = jobs.length ? newTextFont(opts.fontId, jobs.map((j) => j.text).join(''), size).font : 0;
+      return api.batch(() => {
+        const removed = removeMarked(MARK_HF);
+        for (const j of jobs) placeText(j.i, { font, size, text: j.text, color, at: j.at, margin, mark: MARK_HF });
+        return { ok: true, placed: jobs.length, pages: new Set(jobs.map((j) => j.i)).size, removed, last: N };
+      });
+    },
+    removeHeaderFooter() { const removed = api.batch(() => removeMarked(MARK_HF)); return { ok: removed > 0, removed }; },
+
+    // ── 워터마크 ───────────────────────────────────────────────────────────
+    // opts: { kind:'text'|'image', text, fontId, size(글자 pt, 기본 60), color, opacity(0~1, 기본 0.3), rotation(도, 보이는 방향 반시계 — 글자 기본 45, 그림 기본 0),
+    //         position:'center'|'top'|'bottom', margin(pt, 기본 36), pages(0 기준 배열, 생략 = 전체), layer:'front'(본문 위, 기본)|'back'(본문 뒤),
+    //         image: { kind:'jpeg'|'rgba', data, width, height }, scale(그림 폭 = 보이는 쪽 폭 × scale, 기본 0.5) }
+    // 반투명은 채움 알파로 건다: 글자는 FPDFPageObj_SetFillColor의 알파, 그림도 같은 함수로 객체 알파를 준다 —
+    //   PDFium이 ExtGState(/ca)를 써서 저장하고 저장·재열기 뒤에도 섞인 색으로 그린다(실측 2026-10-14: 파랑 바탕 위 빨강 그림 알파 128 → [127,0,127]).
+    // 쪽 회전·CropBox는 쪽 번호와 같은 보이는 방향 기준. RetextPdfWatermark 마크 — 다시 넣으면 모든 쪽의 옛 워터마크를 지우고 새로 넣는다
+    addWatermark(opts = {}) {
+      const kind = opts.kind || 'text';
+      if (!['text', 'image'].includes(kind)) throw bad(`알 수 없는 워터마크 종류입니다: ${kind}`);
+      const position = opts.position || 'center';
+      const v = { center: 'middle', top: 'top', bottom: 'bottom' }[position];
+      if (!v) throw bad(`알 수 없는 워터마크 위치입니다: ${position} (center·top·bottom)`);
+      if (opts.layer != null && !['front', 'back'].includes(opts.layer)) throw bad(`알 수 없는 층입니다: ${opts.layer} (front·back)`);
+      const back = opts.layer === 'back';
+      const opacity = clamp01(opts.opacity, 0.3), alpha = alphaOf(opacity);
+      const rotation = opts.rotation == null || opts.rotation === '' ? (kind === 'text' ? 45 : 0) : Number(opts.rotation);
+      if (!(rotation >= -360 && rotation <= 360)) throw bad('회전은 -360~360도로 지정하세요.');
+      const margin = opts.margin == null ? 36 : Number(opts.margin);
+      if (!(margin >= 0 && margin <= 300)) throw bad('여백은 0~300pt 범위로 지정하세요.');
+      const targets = pageList(opts.pages);
+      if (kind === 'text') {
+        const text = String(opts.text ?? '').trim();
+        if (!text || text.length > 200 || /[\r\n]/.test(text)) throw bad('워터마크 글자는 200자 이하의 한 줄로 입력하세요.');
+        const size = opts.size == null ? 60 : Number(opts.size);
+        if (!(size >= 4 && size <= 400)) throw bad('글자 크기는 4~400pt 범위로 지정하세요.');
+        const c = parseColor(opts.color || '#888888'), color = [c[0], c[1], c[2], alpha];
+        const { font } = newTextFont(opts.fontId, text, size);
+        return api.batch(() => {
+          const removed = removeMarked(MARK_WM);
+          for (const i of targets) placeText(i, { font, size, text, color, at: { h: 'center', v }, margin, rotation, baseline: false, mark: MARK_WM, back });
+          return { ok: true, placed: targets.length, removed };
+        });
+      }
+      const image = opts.image;
+      if (!image || !(image.width > 0 && image.height > 0)) throw bad('워터마크 그림을 고르세요.');
+      const scale = opts.scale == null ? 0.5 : Number(opts.scale);
+      if (!(scale >= 0.02 && scale <= 1)) throw bad('그림 크기(scale)는 0.02~1 사이로 지정하세요.');
+      const alphaImage = transparent(image), jpegData = alphaImage ? null : toJpeg(image); // 쪽마다 같은 JPEG 바이트를 넣는다(서버가 저장 뒤 같은 그림 스트림을 하나로 합친다)
+      const t = rotation * Math.PI / 180, cos = Math.cos(t), sin = Math.sin(t);
+      return api.batch(() => {
+        const removed = removeMarked(MARK_WM);
+        for (const i of targets) {
+          const p = page(i), f = visualFrame(i);
+          const w = f.width * scale, h = w * (image.height / image.width);
+          const ext = Math.abs(w * sin) + Math.abs(h * cos); // 돌린 그림의 세로 길이
+          const tx = f.width / 2, ty = v === 'middle' ? f.height / 2 : v === 'top' ? f.height - margin - ext / 2 : margin + ext / 2;
+          // 단위 정사각형 → 보이는 쪽: 가로 w·세로 h로 늘리고 t만큼 돌린 뒤 가운데를 (tx, ty)에
+          const vm = [w * cos, w * sin, -h * sin, h * cos, tx - (w * cos - h * sin) / 2, ty - (w * sin + h * cos) / 2];
+          const io = P.FPDFPageObj_NewImageObj(doc);
+          if (!io) throw new Error('이미지 객체를 만들지 못했습니다.');
+          try {
+            if (alphaImage) putBitmap(io, image.data, image.width, image.height); else putJpeg(io, jpegData);
+            setMatrix(io, toPageMatrix(f, vm));
+            if (alpha < 255) P.FPDFPageObj_SetFillColor(io, 255, 255, 255, alpha);
+          } catch (e) { P.FPDFPageObj_Destroy(io); throw e; }
+          P.FPDFPageObj_AddMark(io, MARK_WM);
+          if (!(back && P.FPDFPage_InsertObjectAtIndex(p, io, 0))) P.FPDFPage_InsertObject(p, io);
+          regen(p);
+        }
+        return { ok: true, placed: targets.length, removed };
+      });
+    },
+    removeWatermark() { const removed = api.batch(() => removeMarked(MARK_WM)); return { ok: removed > 0, removed }; },
+
+    // ── 텍스트 페이지 글자 (개인정보 찾기·가리기) ─────────────────────────────
+    // 쪽 글자 전체를 문자열로: { text, map } — map[문자열 위치] = 텍스트 페이지 글자 번호(FPDFText 인덱스)
+    pageChars(i) {
+      const tp = P.FPDFText_LoadPage(page(i));
+      try { return pageChars(tp); } finally { P.FPDFText_ClosePage(tp); }
+    },
+    // 글자 번호 범위 [start, end)의 줄별 사각형 [[l,b,r,t], …](회전 전 페이지 좌표 — objects()와 같다)
+    charRangeRects(i, start, end) {
+      const tp = P.FPDFText_LoadPage(page(i));
+      try { return rangeRects(tp, start, end); } finally { P.FPDFText_ClosePage(tp); }
+    },
+    // 영역(rect: {x0,y0,x1,y1}) 안에 글자 상자 가운데가 드는 글자들 → 연속 범위 [[start, end], …]. 상자 없는 글자(공백)는 양옆이 들면 함께 넣는다
+    charRangesIn(i, rect) {
+      const tp = P.FPDFText_LoadPage(page(i)), s = mal(32);
+      try {
+        const ranges = [];
+        let cur = null; // 열린 범위. 상자 없는 글자는 범위를 닫지도 늘리지도 않는다 — 다음 안쪽 글자가 오면 그 사이까지 이어진다
+        for (let c = 0, n = P.FPDFText_CountChars(tp); c < n; c++) {
+          const ok = P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24); // left right bottom top
+          const l = f64(s), r = f64(s + 8), b = f64(s + 16), t = f64(s + 24);
+          if (!ok || !(r > l) || !(t > b)) continue;
+          const cx = (l + r) / 2, cy = (b + t) / 2;
+          if (cx >= rect.x0 && cx <= rect.x1 && cy >= rect.y0 && cy <= rect.y1) { if (cur) cur[1] = c + 1; else { cur = [c, c + 1]; ranges.push(cur); } }
+          else cur = null;
+        }
+        return ranges;
+      } finally { free(s); P.FPDFText_ClosePage(tp); }
+    },
+    // 글자 번호 범위들 → 가리기 조각 { parts:[{ idx, from, to, whole? }], unmapped }(rangesToParts 참고)
+    partsForRanges(i, ranges) { return rangesToParts(i, [].concat(ranges || []).map(([s, e]) => [Number(s), Number(e)])); },
+
+    // ── 영역 가리기의 그림·도형 부분 ─────────────────────────────────────────
+    // rect와 겹치는 그림: 영역 안에 다 들면 객체를 빼고, 걸치면 원본 픽셀에서 영역에 해당하는 부분을 color로 칠해 다시 넣는다
+    // (행렬의 역변환으로 영역 네 모서리를 그림 픽셀로 옮겨 그 외곽 상자를 칠한다 — 돌린 그림은 조금 더 넓게 칠해진다).
+    // 다시 넣는 그림은 JPEG(품질 92). 투명(SMask) 그림은 원본 픽셀에 마스크가 빠져 있어 불투명 그림으로 다시 들어간다(가린 쪽이 안전하다).
+    // 픽셀을 읽지 못하는 그림은 통째로 뺀다. 양식 XObject 안의 그림은 건드리지 못한다(덮개로만 가려진다)
+    redactImagesIn(i, rect, color = [0, 0, 0, 255]) {
+      const p = page(i);
+      let painted = 0, removed = 0;
+      const inside = (b) => b.x0 >= rect.x0 && b.x1 <= rect.x1 && b.y0 >= rect.y0 && b.y1 <= rect.y1;
+      const m = mal(24);
+      try {
+        for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+          const o = P.FPDFPage_GetObject(p, idx);
+          if (!o || P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+          const b = boundsOf(o);
+          if (!overlaps(b, rect)) continue;
+          const drop = () => { if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; } };
+          if (inside(b)) { drop(); continue; }
+          const px = P.FPDFPageObj_GetMatrix(o, m) ? imagePixels(o) : null;
+          if (!px) { drop(); continue; }
+          const [a, bb, c, d, e, f] = [0, 1, 2, 3, 4, 5].map((k) => f32(m + k * 4));
+          const det = a * d - bb * c;
+          if (!det) { drop(); continue; }
+          const toPx = (x, y) => { const u = (d * (x - e) - c * (y - f)) / det, v = (-bb * (x - e) + a * (y - f)) / det; return [u * px.width, (1 - v) * px.height]; };
+          const q = [toPx(rect.x0, rect.y0), toPx(rect.x1, rect.y0), toPx(rect.x0, rect.y1), toPx(rect.x1, rect.y1)];
+          const X0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[0])))), X1 = Math.min(px.width, Math.ceil(Math.max(...q.map((z) => z[0]))));
+          const Y0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[1])))), Y1 = Math.min(px.height, Math.ceil(Math.max(...q.map((z) => z[1]))));
+          if (X1 <= X0 || Y1 <= Y0) continue;
+          for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) { const k = (y * px.width + x) * 4; px.data[k] = color[0]; px.data[k + 1] = color[1]; px.data[k + 2] = color[2]; px.data[k + 3] = 255; }
+          try { putJpeg(o, encodeJpeg(px.data, px.width, px.height, 92), [p]); painted++; } catch { drop(); }
+        }
+      } finally { free(m); }
+      if (painted || removed) regen(p);
+      return { painted, removed };
+    },
+    // rect 안에 완전히 든 선·도형(경로) 객체를 뺀다(가린 영역 밑에 그림처럼 그린 글자·서명이 남지 않게). 걸친 도형은 덮개로만 가려진다
+    removePathsIn(i, rect) {
+      const p = page(i), E = 0.01;
+      let removed = 0;
+      for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_PATH) continue;
+        const b = boundsOf(o);
+        if (b.x0 >= rect.x0 - E && b.x1 <= rect.x1 + E && b.y0 >= rect.y0 - E && b.y1 <= rect.y1 + E && P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; }
+      }
+      if (removed) regen(p);
+      return removed;
+    },
+    // 가린 영역(rects: [{x0,y0,x1,y1}] 또는 [[l,b,r,t]])과 겹치는 주석(링크·양식 칸 제외)을 딸린 팝업과 함께 지운다 → 지운 수
+    removeAnnotsIn(i, rects) { return removeAnnotsIn(i, [].concat(rects || [])); },
+
+    // ── 주석 ───────────────────────────────────────────────────────────────
+    // 한 쪽의 주석 목록. 좌표는 objects()와 같은 회전 전 페이지 좌표(rotation = 그 쪽의 /Rotate, 0..3 — 화면 변환은 호출자)
+    // { index, subtype, rect:[l,b,r,t], color:'#rrggbb'|null, fill?, opacity, width?, contents, author, modified(ISO|null), quads?, inkPaths?, line?, hasAppearance, rotation }
+    annots(i) {
+      const p = page(i), rot = api.pageSize(i).rotation, out = [];
+      for (let k = 0, n = P.FPDFPage_GetAnnotCount(p); k < n; k++) {
+        const a = P.FPDFPage_GetAnnot(p, k);
+        if (!a) continue;
+        try { out.push(readAnnot(a, k, rot)); } finally { P.FPDFPage_CloseAnnot(a); }
+      }
+      return out;
+    },
+    // 주석 만들기. spec: { subtype, color, opacity, width, contents, author, … 종류별 모양 }
+    //   highlight·underline·strikeout·squiggly: quads [[x1 y1 x2 y2 x3 y3 x4 y4]…](왼쪽 위·오른쪽 위·왼쪽 아래·오른쪽 아래) 또는 chars { start, end }(텍스트 페이지 글자 번호 → 줄마다 사각형)
+    //   text(메모): x, y(아이콘 왼쪽 위) · square·circle: rect [l,b,r,t], fill?(안쪽 색) · line: from [x,y], to [x,y], arrow · ink: strokes [[[x,y]…]…]
+    // 외형(/AP /N)을 EPDFAnnot_GenerateAppearance로 만든다(형광펜은 곱하기 섞기) — 다른 뷰어도 그대로 그린다. 외형을 못 만들면 주석을 지우고 던진다.
+    // /T 작성자 · /Contents · /M · /CreationDate · /NM · /F(인쇄, 메모는 확대·회전 안 함까지)를 쓴다. 돌려주는 index는 그 쪽 /Annots 안의 위치
+    createAnnot(i, spec = {}) {
+      const st = ANNOT_CREATE[spec.subtype];
+      if (!st) throw bad(`만들 수 없는 주석 종류입니다: ${spec.subtype} (highlight·underline·strikeout·squiggly·text·square·circle·line·ink)`);
+      const p = page(i);
+      const defColor = st === 9 || st === 1 ? '#ffd400' : '#e53935';
+      if (spec.color != null && !/^#?[0-9a-f]{6}$/i.test(String(spec.color))) throw bad('색은 #rrggbb 형식으로 지정하세요.');
+      const color = parseColor(spec.color || defColor);
+      const opacity = clamp01(spec.opacity, 1);
+      const width = spec.width == null ? (st === 15 ? 2 : 1) : Number(spec.width);
+      if (!(width >= 0.25 && width <= 50)) throw bad('선 굵기는 0.25~50pt 범위로 지정하세요.');
+      const finite = (...v) => v.every((x) => Number.isFinite(x));
+      const pt = (q, what) => { if (!Array.isArray(q) || q.length !== 2 || !finite(+q[0], +q[1])) throw bad(`${what} 좌표가 잘못됐습니다.`); return [+q[0], +q[1]]; };
+      const bbox = (pts, pad) => [Math.min(...pts.map((q) => q[0])) - pad, Math.min(...pts.map((q) => q[1])) - pad, Math.max(...pts.map((q) => q[0])) + pad, Math.max(...pts.map((q) => q[1])) + pad];
+      let rect, quads = null, line = null, strokes = null;
+      if (MARKUP.has(st)) {
+        if (spec.chars) {
+          const s = Number(spec.chars.start), e = Number(spec.chars.end);
+          if (!Number.isInteger(s) || !Number.isInteger(e) || s < 0 || e <= s) throw bad('글자 범위(chars)가 잘못됐습니다.');
+          quads = api.charRangeRects(i, s, e).map(([l, b, r, t]) => [l, t, r, t, l, b, r, b]);
+        } else {
+          quads = [].concat(spec.quads || []).map((q) => { if (!Array.isArray(q) || q.length !== 8 || !finite(...q.map(Number))) throw bad('quads는 숫자 8개짜리 배열의 목록이어야 합니다.'); return q.map(Number); });
+        }
+        if (!quads.length || quads.length > 500) throw bad('표시할 글자 위치가 없습니다.');
+        rect = bbox(quads.flatMap((q) => [[q[0], q[1]], [q[2], q[3]], [q[4], q[5]], [q[6], q[7]]]), 0);
+      } else if (st === 1) {
+        const [x, y] = pt([spec.x, spec.y], '메모');
+        rect = [x, y - 20, x + 20, y];
+      } else if (st === 5 || st === 6) {
+        const r = spec.rect;
+        if (!Array.isArray(r) || r.length !== 4 || !finite(...r.map(Number))) throw bad('rect는 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다.');
+        rect = [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])].map(Number);
+        if (rect[2] - rect[0] < 1 || rect[3] - rect[1] < 1) throw bad('도형이 너무 작습니다.');
+      } else if (st === 4) {
+        line = { from: pt(spec.from, '선 시작'), to: pt(spec.to, '선 끝'), arrow: !!spec.arrow };
+        if (Math.hypot(line.to[0] - line.from[0], line.to[1] - line.from[1]) < 1) throw bad('선이 너무 짧습니다.');
+        rect = bbox([line.from, line.to], line.arrow ? width * 3 + 6 : width + 2);
+      } else if (st === 15) {
+        strokes = [].concat(spec.strokes || []).map((s) => [].concat(s || []).map((q) => pt(q, '펜'))).filter((s) => s.length);
+        const total = strokes.reduce((n, s) => n + s.length, 0);
+        if (!strokes.length || total > 20000) throw bad('펜 획이 없거나 너무 많습니다(점 20,000개 이하).');
+        rect = bbox(strokes.flat(), width + 1);
+      }
+      if (spec.fill != null && !/^#?[0-9a-f]{6}$/i.test(String(spec.fill))) throw bad('안쪽 색은 #rrggbb 형식으로 지정하세요.');
+      const contents = String(spec.contents ?? ''), author = String(spec.author || 'Retext PDF');
+      if (contents.length > 20000) throw bad('메모는 20,000자 이하로 입력하세요.');
+      const a = P.EPDFPage_CreateAnnot(p, st);
+      if (!a) throw new Error('주석을 만들지 못했습니다.');
+      let ok = true;
+      const step = (v) => { ok = ok && !!v; };
+      const buf = mal(Math.max(64, (strokes ? Math.max(...strokes.map((s) => s.length)) : 0) * 8));
+      try {
+        step(setAnnotRect(a, rect));
+        if (quads) for (const q of quads) { q.forEach((v, k) => M.setValue(buf + k * 4, v, 'float')); step(P.FPDFAnnot_AppendAttachmentPoints(a, buf)); }
+        if (line) {
+          [...line.from, ...line.to].forEach((v, k) => M.setValue(buf + k * 4, v, 'float'));
+          step(P.EPDFAnnot_SetLine(a, buf, buf + 8));
+          step(P.EPDFAnnot_SetLineEndings(a, LE_NONE, line.arrow ? LE_CLOSED_ARROW : LE_NONE));
+        }
+        if (strokes) for (const s of strokes) { s.forEach(([x, y], k) => { M.setValue(buf + k * 8, x, 'float'); M.setValue(buf + k * 8 + 4, y, 'float'); }); step(P.FPDFAnnot_AddInkStroke(a, buf, s.length) >= 0); }
+        if (st === 1) step(P.EPDFAnnot_SetName(a, 0)); // 아이콘 Comment
+        step(P.EPDFAnnot_SetColor(a, 0, color[0], color[1], color[2]));
+        if (spec.fill && (st === 5 || st === 6)) { const fc = parseColor(spec.fill); step(P.EPDFAnnot_SetColor(a, 1, fc[0], fc[1], fc[2])); }
+        if ([4, 5, 6, 15].includes(st)) step(P.EPDFAnnot_SetBorderStyle(a, 1, width)); // 1 = 실선
+        step(P.EPDFAnnot_SetOpacity(a, alphaOf(opacity)));
+        const now = pdfDate();
+        step(setAnnotStr(a, 'T', author)); step(setAnnotStr(a, 'Contents', contents));
+        step(setAnnotStr(a, 'M', now)); step(setAnnotStr(a, 'CreationDate', now));
+        step(setAnnotStr(a, 'NM', 'retext-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)));
+        step(P.FPDFAnnot_SetFlags(a, st === 1 ? ANNOT_FLAG_PRINT | ANNOT_FLAG_NOZOOM | ANNOT_FLAG_NOROTATE : ANNOT_FLAG_PRINT));
+        step(regenAppearance(a));
+        step(P.EPDFAnnot_HasAppearanceStream(a, 0));
+        const index = P.FPDFPage_GetAnnotIndex(p, a);
+        if (!ok || index < 0) {
+          if (index >= 0) P.FPDFPage_RemoveAnnot(p, index);
+          throw new Error('주석을 만들지 못했습니다(속성·외형 쓰기 실패).');
+        }
+        return { ok: true, index, annot: readAnnot(a, index, api.pageSize(i).rotation) };
+      } finally { free(buf); P.FPDFPage_CloseAnnot(a); }
+    },
+    // 주석 고치기: { contents, author, color, fill, opacity, width, rect } 중 준 것만. rect는 메모·사각형·원만(나머지는 모양 좌표가 따로 있어 옮기지 않는다).
+    // /M을 지금으로 바꾸고 외형을 다시 만든다
+    updateAnnot(i, index, patch = {}) {
+      return withAnnot(i, index, (a) => {
+        const st = P.FPDFAnnot_GetSubtype(a);
+        let ok = true;
+        const step = (v) => { ok = ok && !!v; };
+        if (patch.contents != null) { if (String(patch.contents).length > 20000) throw bad('메모는 20,000자 이하로 입력하세요.'); step(setAnnotStr(a, 'Contents', patch.contents)); }
+        if (patch.author != null) step(setAnnotStr(a, 'T', patch.author));
+        for (const [key, type] of [['color', 0], ['fill', 1]]) {
+          if (patch[key] == null) continue;
+          if (!/^#?[0-9a-f]{6}$/i.test(String(patch[key]))) throw bad('색은 #rrggbb 형식으로 지정하세요.');
+          const c = parseColor(patch[key]); step(P.EPDFAnnot_SetColor(a, type, c[0], c[1], c[2]));
+        }
+        if (patch.opacity != null) step(P.EPDFAnnot_SetOpacity(a, alphaOf(clamp01(patch.opacity, 1))));
+        if (patch.width != null) {
+          const w = Number(patch.width);
+          if (!(w >= 0.25 && w <= 50)) throw bad('선 굵기는 0.25~50pt 범위로 지정하세요.');
+          if ([4, 5, 6, 15].includes(st)) step(P.EPDFAnnot_SetBorderStyle(a, 1, w));
+        }
+        if (patch.rect != null) {
+          if (![1, 5, 6].includes(st)) throw Object.assign(new Error('이 주석은 위치를 rect로 바꿀 수 없습니다(메모·사각형·원만).'), { status: 400 });
+          const r = patch.rect;
+          if (!Array.isArray(r) || r.length !== 4 || !r.every((x) => Number.isFinite(Number(x)))) throw bad('rect는 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다.');
+          step(setAnnotRect(a, r.map(Number)));
+        }
+        step(setAnnotStr(a, 'M', pdfDate()));
+        step(regenAppearance(a));
+        if (!ok) throw new Error('주석을 고치지 못했습니다.');
+        return { ok: true, index, annot: readAnnot(a, index, api.pageSize(i).rotation) };
+      });
+    },
+    // 주석 지우기(딸린 팝업도). 링크·양식 칸도 지울 수 있다(사용자가 고른 것이므로)
+    deleteAnnot(i, index) {
+      withAnnot(i, index, () => {});
+      const removed = removeAnnots(page(i), [index]);
+      return { ok: removed > 0, removed };
+    },
+    // 주석 고정(평면화): 외형을 쪽 내용(양식 XObject)으로 옮기고 주석은 뺀다(EPDFAnnot_Flatten). indices를 안 주면 그 쪽 전부.
+    // 링크·팝업은 건너뛴다(링크는 보이는 외형이 없고, 팝업은 부모를 고정할 때 함께 뺀다)
+    flattenAnnots(i, indices) {
+      const p = page(i), n = P.FPDFPage_GetAnnotCount(p);
+      const list = indices == null ? Array.from({ length: n }, (_, k) => k) : [...new Set([].concat(indices).map(Number))];
+      for (const k of list) if (!Number.isInteger(k) || k < 0 || k >= n) throw Object.assign(new Error(`주석을 찾을 수 없습니다: ${k}`), { status: 404 });
+      const flat = new Set(), pops = new Set();
+      let skipped = 0;
+      for (const k of list) {
+        const a = P.FPDFPage_GetAnnot(p, k);
+        if (!a) continue;
+        try {
+          const st = P.FPDFAnnot_GetSubtype(a);
+          if (st === 2 || st === 16) { skipped++; continue; }
+          flat.add(k);
+          const pop = P.FPDFAnnot_GetLinkedAnnot(a, 'Popup');
+          if (pop) { const pk = P.FPDFPage_GetAnnotIndex(p, pop); if (pk >= 0) pops.add(pk); P.FPDFPage_CloseAnnot(pop); }
+        } finally { P.FPDFPage_CloseAnnot(a); }
+      }
+      let flattened = 0, failed = 0;
+      for (const k of [...new Set([...flat, ...pops])].sort((x, y) => y - x)) { // 뒤에서부터 — 앞 주석의 번호가 밀리지 않는다
+        if (!flat.has(k)) { P.FPDFPage_RemoveAnnot(p, k); continue; }
+        const a = P.FPDFPage_GetAnnot(p, k);
+        if (!a) { failed++; continue; }
+        const ok = P.EPDFAnnot_Flatten(p, a);
+        P.FPDFPage_CloseAnnot(a);
+        if (ok) flattened++; else failed++;
+      }
+      if (flattened) regen(p);
+      return { ok: flattened > 0, flattened, skipped, failed };
+    },
+
+    // ── 목차(책갈피) ─────────────────────────────────────────────────────────
+    // 읽기: [{ title, page(0 기준, 목적지가 없거나 다른 파일이면 null), children }]. 순환·과도한 깊이(64)·개수(10,000)에서 멈춘다
+    outline() {
+      const seen = new Set(), tb = mal(2048);
+      let total = 0;
+      const pageOf = (bm) => {
+        let dest = P.FPDFBookmark_GetDest(doc, bm);
+        if (!dest) { const act = P.FPDFBookmark_GetAction(bm); if (act && P.FPDFAction_GetType(act) === 1) dest = P.FPDFAction_GetDest(doc, act); } // 1 = GOTO
+        const k = dest ? P.FPDFDest_GetDestPageIndex(doc, dest) : -1;
+        return k >= 0 ? k : null;
+      };
+      const read = (parent, depth) => {
+        const out = [];
+        for (let bm = P.FPDFBookmark_GetFirstChild(doc, parent); bm && !seen.has(bm) && total < 10000; bm = P.FPDFBookmark_GetNextSibling(doc, bm)) {
+          seen.add(bm); total++;
+          const n = P.FPDFBookmark_GetTitle(bm, tb, 2048);
+          const title = n > 2 ? M.UTF16ToString(tb) : '';
+          out.push({ title, page: pageOf(bm), children: depth < 64 ? read(bm, depth + 1) : [] });
+        }
+        return out;
+      };
+      try { return read(0, 0); } finally { free(tb); }
+    },
+    // 목차 통째로 바꾸기(EPDFBookmark_Clear → EPDFBookmark_AppendChild). 목적지는 그 쪽 보이는 왼쪽 위 XYZ(배율 유지). page:null이면 목적지 없는 제목
+    setOutline(items) {
+      const count = P.FPDF_GetPageCount(doc);
+      let total = 0;
+      const check = (list, depth) => {
+        if (!Array.isArray(list)) throw bad('목차 형식이 잘못됐습니다(items 배열).');
+        if (depth > 32) throw bad('목차는 32단계까지만 넣을 수 있습니다.');
+        for (const it of list) {
+          if (!it || typeof it !== 'object') throw bad('목차 항목 형식이 잘못됐습니다.');
+          const title = String(it.title ?? '').trim();
+          if (!title || title.length > 500) throw bad('목차 제목은 1~500자로 입력하세요.');
+          if (it.page != null && !(Number.isInteger(it.page) && it.page >= 0 && it.page < count)) throw bad(`'${title.slice(0, 30)}'의 쪽 번호가 범위를 벗어났습니다 (1~${count}쪽).`);
+          if (++total > 10000) throw bad('목차 항목은 10,000개까지입니다.');
+          if (it.children != null) check(it.children, depth + 1);
+        }
+      };
+      check(items, 1);
+      if (!P.EPDFBookmark_Clear(doc)) throw new Error('기존 목차를 지우지 못했습니다.');
+      const build = (parent, list) => {
+        for (const it of list) {
+          const u = utf16(String(it.title).trim());
+          let bm;
+          try { bm = P.EPDFBookmark_AppendChild(doc, parent, u); } finally { free(u); }
+          if (!bm) throw new Error('목차 항목을 만들지 못했습니다.');
+          if (it.page != null) {
+            const f = visualFrame(it.page), [x, y] = f.map(0, f.height); // 보이는 쪽의 왼쪽 위
+            const dest = P.EPDFDest_CreateXYZ(page(it.page), true, x, true, y, false, 0);
+            if (!dest || !P.EPDFBookmark_SetDest(doc, bm, dest)) throw new Error('목차 목적지를 만들지 못했습니다.');
+          }
+          if (it.children?.length) build(bm, it.children);
+        }
+      };
+      build(0, items);
+      return { ok: true, count: total };
+    },
+
+    // ── 문서 정보 ──────────────────────────────────────────────────────────
+    // 날짜(CreationDate·ModDate)는 ISO로(읽을 수 없으면 원문). 나머지는 글자 그대로
+    meta() {
+      const out = {};
+      for (const k of META_KEYS) { const v = api.metaText(k); out[k] = /Date$/.test(k) ? (isoDate(v) || v) : v; }
+      return out;
+    },
+    // fields: { Title, Author, Subject, Keywords } 중 준 것만. 빈 글자면 그 키를 지운다. ModDate는 지금으로.
+    // 주의: /Info가 없는 문서는 PDFium이 저장할 때 트레일러에 /Info를 달지 않는다 — 서버가 저장본을 다시 읽어 확인하고 pdf-rewrite.setInfoPdf로 보충한다
+    setMeta(fields = {}) {
+      const applied = {};
+      for (const [k, v] of Object.entries(fields)) {
+        if (!META_EDITABLE.includes(k)) throw bad(`바꿀 수 없는 문서 정보입니다: ${k} (Title·Author·Subject·Keywords)`);
+        const s = String(v ?? '');
+        if (s.length > 2000) throw bad('문서 정보는 항목마다 2,000자 이하로 입력하세요.');
+        applied[k] = s;
+      }
+      applied.ModDate = pdfDate();
+      for (const [k, s] of Object.entries(applied)) {
+        const u = s ? utf16(s) : 0;
+        try { if (!P.EPDF_SetMetaText(doc, k, u)) throw new Error(`문서 정보를 쓰지 못했습니다: ${k}`); } finally { if (u) free(u); }
+      }
+      return { ok: true, fields: applied };
+    },
+    // 문서 정보 키를 모두 비운다(숨은 데이터 지우기). 서버가 저장 뒤 /Info 자체도 떼어 낸다(pdf-rewrite.sanitizePdf) → 지운 키 수
+    clearMeta() {
+      let n = 0;
+      for (const k of [...META_KEYS, 'Trapped']) if (api.metaText(k)) { if (P.EPDF_SetMetaText(doc, k, 0)) n++; }
+      return n;
+    },
+
+    // ── 이미지 PDF(글자 없는 사본) ─────────────────────────────────────────
+    // 새 문서를 만들어 쪽마다 렌더한 JPEG 한 장을 보이는 쪽 크기 그대로 깐다. 지금 문서는 바뀌지 않는다.
+    // 긴 작업이라 서버가 쪽 사이에 진행·취소를 본다: const r = doc.rasterizer(); r.addPage(i, dpi, quality) …; r.finish() → 바이트; 끝나면 r.close()
+    rasterizer() {
+      flush();
+      const dest = P.FPDF_CreateNewDocument();
+      if (!dest) throw new Error('새 PDF를 만들지 못했습니다.');
+      let pages = 0, closed = false;
+      return {
+        addPage(i, dpi = 150, quality = 0.85) {
+          const d = Math.max(36, Math.min(600, Number(dpi) || 150)), q = Math.max(0.1, Math.min(1, Number(quality) || 0.85));
+          const { w, h } = api.pageSize(i); // 보이는 크기(회전 반영)
+          const jpg = api.renderJpeg(i, d / 72, Math.round(q * 100));
+          const pg = P.FPDFPage_New(dest, pages, w, h);
+          if (!pg) throw new Error('새 쪽을 만들지 못했습니다.');
+          try {
+            const io = P.FPDFPageObj_NewImageObj(dest);
+            if (!io) throw new Error('이미지 객체를 만들지 못했습니다.');
+            try { putJpeg(io, jpg); setMatrix(io, [w, 0, 0, h, 0, 0]); } catch (e) { P.FPDFPageObj_Destroy(io); throw e; }
+            P.FPDFPage_InsertObject(pg, io);
+            P.FPDFPage_GenerateContent(pg);
+          } finally { P.FPDF_ClosePage(pg); }
+          pages++;
+          return jpg.length;
+        },
+        finish() { return saveDoc(P, dest); },
+        close() { if (!closed) { closed = true; P.FPDF_CloseDocument(dest); } },
+      };
     },
 
     save() { flush(); return saveDoc(P, doc); },

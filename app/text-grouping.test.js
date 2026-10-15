@@ -153,19 +153,25 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(lines[0].text, '123', '⑭ 상자 글은 입력 글자만');
 }
 
-// ⑮ Chromium PDF: 낱말 끝 조각에 공백이 붙고("월 ") 공백만 든 조각(" ")이 또 있다 → 줄 글은 한 칸, 조각은 objs에 남고 가리기 위치는 맞는다
+// ⑮ Chromium PDF: 낱말 조각("9월") 뒤에 공백만 든 조각(" ")이 있다 → 줄 글은 한 칸, 공백 조각도 objs에 남고 가리기 위치는 맞는다.
+// (엔진 객체 텍스트는 이제 그 객체가 그린 글자뿐이라 PDFium이 붙이던 "월 "의 뒤 공백이 없다 — pdf-engine objText)
+// 진짜 공백이 두 개 이어지면(앞 조각 끝 공백 + 공백 조각) 둘 다 남긴다 — 겹공백을 지우지 않는다(입력 칸 정렬용 공백 등)
 {
-  const a = T('9월 ', { x0: 0, y0: 0, x1: 22, y1: 10 });
+  const a = T('9월', { x0: 0, y0: 0, x1: 22, y1: 10 });
   const sp = T(' ', { x0: 22, y0: 0, x1: 25, y1: 10, originX: 22 });
   const b = T('첫째', { x0: 25, y0: 0, x1: 45, y1: 10, originX: 25 });
   const lines = groupLines([a, sp, b]);
   assert.strictEqual(lines.length, 1, '⑮ 한 상자');
-  assert.strictEqual(lines[0].text, '9월 첫째', '⑮ 중복 공백 조각은 글을 보태지 않는다');
+  assert.strictEqual(lines[0].text, '9월 첫째', '⑮ 공백 조각이 낱말 사이 한 칸');
   assert.deepStrictEqual(lines[0].objs.map((o) => o.idx), [a.idx, sp.idx, b.idx], '⑮ 공백 조각도 objs에 남아 편집·이동 때 함께 처리된다');
   // index.html의 mapRangeToParts와 같은 계산: "첫째"(3~5)를 고르면 b의 0~2만 가린다
   let off = 0; const parts = [];
   for (const o of lines[0].objs) { const s = off, e = off + o.text.length; off = e; const x = Math.max(3, s), y = Math.min(5, e); if (x < y) parts.push({ idx: o.idx, from: x - s, to: y - s }); }
   assert.deepStrictEqual(parts, [{ idx: b.idx, from: 0, to: 2 }], '⑮ 가리기 글자 위치가 어긋나지 않는다');
+  const a2 = T('9월 ', { x0: 0, y0: 20, x1: 22, y1: 30, originY: 20 });
+  const sp2b = T(' ', { x0: 22, y0: 20, x1: 25, y1: 30, originX: 22, originY: 20 });
+  const b2 = T('첫째', { x0: 25, y0: 20, x1: 45, y1: 30, originX: 25, originY: 20 });
+  assert.strictEqual(groupLines([a2, sp2b, b2])[0].text, '9월  첫째', '⑮ 진짜 겹공백은 그대로');
   // 앞 글이 공백으로 끝나지 않으면 공백 조각은 그대로 글에 들어간다(낱말 사이 공백이 그 조각뿐인 PDF)
   const c = T('A', { x0: 0, y0: 50, x1: 9, y1: 60, originY: 50 });
   const sp2 = T(' ', { x0: 9, y0: 50, x1: 12, y1: 60, originX: 9, originY: 50 });
@@ -194,7 +200,105 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(groupLines([a, b, mask(22, 59), rule({ x0: 40, y0: -1, x1: 41, y1: 11 })]).length, 2, '⑯ 세로 괘선이 있으면 두 줄');
 }
 
-console.log('OK — 합성 객체 단위 검사 ①~⑯ 통과');
+// 글자 위치(glyphs)까지 있는 합성 객체 — 엔진 objects()와 같은 모양. 글자마다 진행 폭 w(기본 0.5em), 공백은 0.3em
+function G(text, x, y, { size = 10, w = 0.5, font = 'Helvetica', color = [0, 0, 0, 255], angle = 0 } = {}) {
+  const c = Math.cos(angle * Math.PI / 180), s = Math.sin(angle * Math.PI / 180);
+  const glyphs = []; let u = 0;
+  for (const ch of text) { const adv = (/\s/.test(ch) ? 0.3 : w) * size; glyphs.push([x + u * c, y + u * s, adv]); u += adv; }
+  const ends = [[x, y], [x + u * c, y + u * s], [x - size * s, y + size * c], [x + u * c - size * s, y + u * s + size * c]];
+  const xs = ends.map((p) => p[0]), ys = ends.map((p) => p[1]);
+  const matrix = [c, s, -s, c, x, y];
+  return { idx: nextIdx++, type: 'text', text, size, font, color, hidden: false, group: null, glyphs, matrix, origin: { x, y }, scaledSize: size,
+    bounds: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } };
+}
+// 진행 폭으로 이어 붙인 조각들(앞 조각 끝 + gapEm×크기에서 다음 조각 시작)
+// angle이면 글자 방향으로 이어 붙인다(기준선 시작점 (x0, y))
+function run(parts, y, opts = {}, x0 = 0) {
+  let u = 0; const size = opts.size || 10, a = (opts.angle || 0) * Math.PI / 180;
+  return parts.map(([t, gapEm = 0, o = {}]) => {
+    const g = G(t, x0 + u * Math.cos(a), y + u * Math.sin(a), { ...opts, ...o });
+    u += g.glyphs.reduce((s2, q) => s2 + q[2], 0) + gapEm * size;
+    return g;
+  });
+}
+
+// ⑰ 입력 칸: 공백만 든 조각이 여러 개 이어져도 틈을 잇는 징검다리가 되지 않는다("이름: 김영희␣×10 날짜") → 두 상자
+{
+  const objs = run([['이름:'], [' '], ['김영희'], ...Array.from({ length: 10 }, () => [' ']), ['날짜:'], [' '], ['2026']], 0);
+  const lines = groupLines(objs);
+  assert.deepStrictEqual(lines.map((l) => l.text), ['이름: 김영희', '날짜: 2026'], '⑰ 공백 조각 여러 개 = 칸 경계');
+}
+// ⑱ 공백 글자가 있는 줄의 공백 없는 0.62em 틈 = 칸 경계, 공백 없는 줄의 0.65em 틈 = 낱말 사이(한 줄 + 공백 한 칸)
+{
+  assert.deepStrictEqual(groupLines(run([['Name:'], [' '], ['John', 0.62], ['Date:']], 0)).map((l) => l.text), ['Name: John', 'Date:'], '⑱ 공백 있는 줄');
+  assert.deepStrictEqual(groupLines(run([['Loose', 0.65], ['spacing']], 0)).map((l) => l.text), ['Loose spacing'], '⑱ 공백 없는 줄은 1.5em까지 잇고 한 칸 넣는다');
+  assert.deepStrictEqual(groupLines(run([['A', 0.3], ['B', 0.3], ['C']], 0)).map((l) => l.text), ['ABC'], '⑱ 고른 자간은 공백이 아니다');
+}
+// ⑲ 위·아래 첨자는 본문 줄에 붙는다(크기·기준선이 달라도) — 상자 하나
+{
+  const body = run([['H'], ['2', 0, { size: 7 }], ['O']], 100);
+  body[1].origin.y = 97; body[1].matrix[5] = 97; body[1].glyphs[0][1] = 97; // 아래첨자: 기준선 −0.3em
+  const lines = groupLines(body);
+  assert.deepStrictEqual(lines.map((l) => l.text), ['H2O'], '⑲ 아래첨자');
+}
+// ⑳ 회전 글자: 글자 방향 좌표로 묶는다 — 90° 세로 줄 하나, -20° 줄 하나
+{
+  const v = run([['세'], ['로'], [' '], ['줄']], 0, { angle: 90 });
+  const t = run([['A'], ['p'], ['p'], [' '], ['2'], ['0']], 0, { angle: -20 }, 200);
+  assert.deepStrictEqual(groupLines([...v, ...t]).map((l) => l.text).sort(), ['App 20', '세로 줄'], '⑳ 회전 줄마다 한 상자');
+}
+// ㉑ 색 차이 16 이하(엑셀 "자동" 검정)는 같은 색, 그보다 크면 run 경계(같은 line 번호) — mergeStyledRuns이면 한 상자 + runs
+{
+  const near = run([['black'], [' '], ['near', 0, { color: [5, 5, 5, 255] }]], 0);
+  assert.strictEqual(groupLines(near).length, 1, '㉑ 거의 검정은 같은 색');
+  const red = run([['black'], [' '], ['red', 0, { color: [200, 0, 0, 255] }], [' ', 0, { color: [200, 0, 0, 255] }], ['text']], 20);
+  const plain = groupLines(red);
+  assert.deepStrictEqual(plain.map((l) => l.text), ['black ', 'red ', 'text'], '㉑ 색이 바뀌면 run마다 상자(지금 기본)');
+  assert.ok(plain.every((l) => l.line === plain[0].line), '㉑ 같은 시각적 줄 = 같은 line 번호');
+  const merged = groupLines(red, { mergeStyledRuns: true });
+  assert.strictEqual(merged.length, 1);
+  assert.strictEqual(merged[0].text, 'black red text');
+  assert.deepStrictEqual(merged[0].runs.map((r) => [r.from, r.to]), [[0, 2], [2, 4], [4, 5]], '㉑ runs = objs 범위');
+}
+
+// ㉒ 2단계: 객체 하나 안의 큰 점프(15d) — 글자 위치(glyphs)로 부분을 나눠 두 상자, 낱말 틈뿐이면 원래 객체 그대로 한 상자
+{
+  const mk = (text, jumpAt, jump) => {
+    let x = 10; const glyphs = [...text].map((ch, k) => { if (k === jumpAt) x += jump; const g = [x, 50, 6]; x += 6; return g; });
+    const o = T(text, { x0: 10, y0: 48, x1: x, y1: 58, originX: 10, originY: 50 });
+    o.glyphs = glyphs;
+    return o;
+  };
+  const far = mk('Name Value', 5, 40); // 'V' 앞 40pt(4em) 점프 — 사이 공백은 앞 부분 끝에
+  const boxes = groupLines([far], { mergeStyledRuns: true });
+  assert.deepStrictEqual(boxes.map((b) => b.text), ['Name ', 'Value'], '㉒ 큰 점프 → 부분 두 상자');
+  assert.deepStrictEqual(boxes.map((b) => [b.objs[0].idx, b.objs[0].partFrom]), [[far.idx, 0], [far.idx, 5]], '㉒ 같은 객체의 부분(partFrom)');
+  assert.ok(boxes[1].bounds.x0 >= 60 && boxes[0].bounds.x1 < 60, '㉒ 부분 상자는 제 글자 자리만 덮는다');
+  const near = mk('Name Value', 5, 2); // 낱말 틈 수준 — 나누지 않는다
+  const one = groupLines([near], { mergeStyledRuns: true });
+  assert.strictEqual(one.length, 1, '㉒ 작은 틈은 한 상자');
+  assert.strictEqual(one[0].objs[0], near, '㉒ 다시 이어진 부분은 원래 객체로 되돌린다(partFrom 없음)');
+}
+
+// ㉓ 2단계 문단 묶기: 줄 간격이 고른 같은 크기의 줄 → 한 문단. 문단 사이 여백·글머리 기호·같은 행의 다른 상자(표 칸)·크기 차에서 끊는다
+{
+  const { groupParagraphs } = require('./text-grouping');
+  const line = (text, y, x0 = 40, size = 10) => T(text, { x0, y0: y - 2, x1: x0 + text.length * 5, y1: y + 8, originX: x0, originY: y, size });
+  const objs = [
+    line('Title line in a bigger size', 142, 40, 14),
+    line('First paragraph line one goes here', 120), line('first paragraph line two goes here', 106), line('and the last line.', 92),
+    line('Second paragraph after a gap', 62), line('ends right here.', 48),
+    line('• bullet item one', 20), line('• bullet item two', 6),
+    line('Cell A', -30), line('Cell B', -30, 300), line('Cell C', -44), line('Cell D', -44, 300), rule({ x0: 250, y0: -50, x1: 251, y1: -18 }),
+  ];
+  const paras = groupParagraphs(groupLines(objs, { mergeStyledRuns: true }));
+  assert.deepStrictEqual(paras.slice(0, 3).map((p) => p.text), ['Title line in a bigger size',
+    'First paragraph line one goes here\nfirst paragraph line two goes here\nand the last line.', 'Second paragraph after a gap\nends right here.'], '㉓ 문단 둘(사이 여백에서 끊김), 큰 제목은 따로');
+  assert.deepStrictEqual(paras.slice(3, 5).map((p) => p.text), ['• bullet item one', '• bullet item two'], '㉓ 글머리 기호 줄은 저마다 새 문단');
+  assert.ok(paras.slice(5).every((p) => p.boxes.length === 1) && paras.length === 9, `㉓ 표 칸(같은 행에 다른 상자)은 혼자 문단: ${paras.map((p) => p.boxes.length)}`);
+}
+
+console.log('OK — 합성 객체 단위 검사 ①~㉓ 통과');
 
 // --- 통합 검사: 저장소 표본 PDF ---
 (async () => {

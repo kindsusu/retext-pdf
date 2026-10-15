@@ -456,9 +456,10 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     d2.close();
     console.log('[회의록] 마스킹 저장·재열기 OK', s.length, 'bytes');
 
-    // 회귀: 뒤 공백 조각의 부분 마스킹이 charmap 실패 없이 성공 (깨끗한 문서에서)
+    // 회귀: Chromium 글자 조각의 부분 마스킹이 charmap 실패 없이 성공 (깨끗한 문서에서).
+    // 객체 텍스트는 이제 그 객체가 그린 글자뿐이라 PDFium이 붙이던 뒤 공백("월 ")이 없다 — 공백 아닌 글자로 시작하는 조각이면 된다
     const d3 = await open(koBuf);
-    const tr = d3.objects(0).find((o) => o.type === 'text' && /\s$/.test(o.text) && o.text.trim().length >= 1);
+    const tr = d3.objects(0).find((o) => o.type === 'text' && /^\S/.test(o.text));
     const rr = d3.redact(0, tr.idx, 0, 1);
     assert.strictEqual(rr.ok, true, `뒤 공백 조각 부분 마스킹: ${JSON.stringify(rr)}`);
     console.log('[회의록] 뒤 공백 조각 부분 마스킹 OK');
@@ -1235,6 +1236,35 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     assert.notStrictEqual(field(a, 'O'), field(b, 'O'), '권한 암호가 없으면 매번 임의 값(여는 암호에서 끌어내지 않는다)');
     assert.notStrictEqual(field(a, 'U'), field(b, 'U'), '솔트가 매번 다르다');
     console.log('PDF 암호 걸기 OK');
+  }
+
+  // 2단계 조각별 편집의 엔진 도구: 글자 폭 추정(measureText)·본뜬 새 객체(cloneText)·객체 가르기(splitText)·점 중심 축소(scaleAbout)
+  {
+    const { buildGroupingRawPdfs } = require('./pdf-test-fixtures');
+    const d = await open(buildGroupingRawPdfs()['15-tj-kerning']);
+    const objs = d.objects(0), total = objs.find((o) => o.text === 'Total amount due today'), lf = objs.find((o) => o.text === 'Left field Right field');
+    // 글리프 폭 추정 = 그 낱말의 실제 진행 폭(TJ 낱말 틈 −278은 낱말 사이라 빠진다)
+    const m = d.measureText(0, total.idx, 'amount'), a0 = total.text.indexOf('amount'), a1 = a0 + 5;
+    const real = total.glyphs[a1][0] + total.glyphs[a1][2] - total.glyphs[a0][0];
+    assert.ok(m.ok && !m.fallback && Math.abs(m.adv.reduce((p, q) => p + q, 0) - real) < 0.2, `measureText ${m.adv.reduce((p, q) => p + q, 0)} vs ${real}`);
+    // 본뜬 새 객체: 맨 뒤에, 같은 글꼴·크기·행렬
+    const c = d.cloneText(0, total.idx, 'Copy');
+    const after = d.objects(0), copy = after[c.idx];
+    assert.ok(c.ok && c.idx === objs.length && copy.text === 'Copy' && copy.font === total.font && copy.size === total.size && copy.origin.x === total.origin.x, JSON.stringify(c));
+    assert.strictEqual(after[total.idx].text, total.text, '원래 객체는 그대로');
+    // 가르기: 15d를 'R' 앞에서 — 앞은 제자리, 뒤는 그 글자 자리의 새 객체
+    const k = lf.text.indexOf('Right'), s = d.splitText(0, lf.idx, [k]);
+    const o2 = d.objects(0);
+    assert.ok(s.ok && s.idxs.length === 2 && s.idxs[0] === lf.idx, JSON.stringify(s));
+    assert.strictEqual(o2[lf.idx].text.trim(), 'Left field');
+    assert.ok(o2[s.idxs[1]].text === 'Right field' && Math.abs(o2[s.idxs[1]].glyphs[0][0] - lf.glyphs[k][0]) < 0.01, '뒤 조각은 그 글자 자리에서');
+    // 점 중심 축소: 시작점(기준선) 고정, 크기 절반
+    const b0 = o2[s.idxs[1]];
+    assert.ok(d.scaleAbout(0, [s.idxs[1]], 0.5, b0.origin.x, b0.origin.y).ok);
+    const b1 = d.objects(0)[s.idxs[1]];
+    assert.ok(Math.abs(b1.origin.x - b0.origin.x) < 0.01 && Math.abs(b1.scaledSize - b0.scaledSize / 2) < 0.01, '시작점 고정, 크기 절반');
+    d.close();
+    console.log('2단계 엔진 도구 OK');
   }
 
   console.log('\nOK — 모든 검사 통과');

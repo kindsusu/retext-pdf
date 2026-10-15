@@ -178,4 +178,155 @@ function buildTrickyPdf() {
   return Buffer.concat(parts);
 }
 
-module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf };
+// 객체 본문 목록으로 PDF 한 벌(고전 xref). objs[k]는 k+1번 객체: 문자열(사전 등) 또는 { dict, data }(스트림 — /Length는 dict 안에 직접 쓴다).
+// trailer: 트레일러에 더할 항목(예: '/Info 19 0 R'). 카탈로그는 1번
+function buildRawPdf(objs, trailer = '') {
+  const parts = [Buffer.from('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n', 'latin1')];
+  let size = parts[0].length; const offs = [];
+  const push = (b) => { parts.push(b); size += b.length; };
+  objs.forEach((o, k) => {
+    offs.push(size);
+    if (typeof o === 'string') push(Buffer.from(`${k + 1} 0 obj\n${o}\nendobj\n`, 'latin1'));
+    else { push(Buffer.from(`${k + 1} 0 obj\n${o.dict}\nstream\n`, 'latin1')); push(o.data); push(Buffer.from('\nendstream\nendobj\n', 'latin1')); }
+  });
+  const xref = size;
+  push(Buffer.from(`xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('')
+    + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R ${trailer} >>\nstartxref\n${xref}\n%%EOF\n`, 'latin1'));
+  return Buffer.concat(parts);
+}
+
+// 숨은 데이터가 골고루 든 한 쪽 PDF(숨은 데이터 지우기 시험용). 지워져야 할 표지 글자:
+//   InfoSECRET(/Info) · XMPSECRET(카탈로그 /Metadata) · PAGEXMP(쪽 /Metadata) · JSSECRET(이름 트리 /JavaScript) · JSOPEN(/OpenAction)
+//   AASECRET(카탈로그 /AA) · LINKJS(링크 주석의 /A 자바스크립트) · ATTACHSECRET(첨부 파일 내용) · NOTESECRET(메모 주석) · CHAPTERSECRET(목차 제목)
+// 남아야 할 것: 쪽 글자 'Hidden data sample', 링크 주석 자체(/Link), URI 링크 동작(KEEPURI)
+function buildHiddenDataPdf() {
+  const xmp = Buffer.from('<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><dc:title>XMPSECRET</dc:title></x:xmpmeta><?xpacket end="w"?>', 'latin1');
+  const pageXmp = Buffer.from('<x:xmpmeta xmlns:x="adobe:ns:meta/">PAGEXMP</x:xmpmeta>', 'latin1');
+  const content = Buffer.from('BT /F1 24 Tf 40 300 Td (Hidden data sample) Tj ET', 'latin1');
+  const attach = Buffer.from('ATTACHSECRET file body', 'latin1');
+  return buildRawPdf([
+    '<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R /Names << /JavaScript 7 0 R /EmbeddedFiles 9 0 R >> /OpenAction 11 0 R /Outlines 12 0 R /PageMode /UseOutlines /AA << /WC 20 0 R >> >>', // 1
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', // 2
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 400] /Metadata 21 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R /Annots [14 0 R 15 0 R 16 0 R 22 0 R] >>', // 3
+    { dict: `<< /Length ${content.length} >>`, data: content }, // 4
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', // 5
+    { dict: `<< /Type /Metadata /Subtype /XML /Length ${xmp.length} >>`, data: xmp }, // 6
+    '<< /Names [(init) 8 0 R] >>', // 7
+    "<< /S /JavaScript /JS (app.alert\\('JSSECRET'\\);) >>", // 8
+    '<< /Names [(secret.txt) 10 0 R] >>', // 9
+    '<< /Type /Filespec /F (secret.txt) /UF (secret.txt) /EF << /F 17 0 R >> >>', // 10
+    '<< /S /JavaScript /JS (JSOPEN) >>', // 11
+    '<< /Type /Outlines /First 13 0 R /Last 13 0 R /Count 1 >>', // 12
+    '<< /Title (CHAPTERSECRET) /Parent 12 0 R /Dest [3 0 R /XYZ 0 400 0] >>', // 13
+    '<< /Type /Annot /Subtype /Text /Rect [10 10 30 30] /Contents (NOTESECRET) /F 4 >>', // 14
+    '<< /Type /Annot /Subtype /Link /Rect [50 50 100 70] /Border [0 0 0] /A 18 0 R >>', // 15
+    '<< /Type /Annot /Subtype /FileAttachment /Rect [120 10 140 30] /FS 10 0 R /Contents (attachment) >>', // 16
+    { dict: `<< /Type /EmbeddedFile /Length ${attach.length} >>`, data: attach }, // 17
+    '<< /S /JavaScript /JS (LINKJS) >>', // 18
+    '<< /Title (InfoSECRET) /Author (Someone) /Producer (fixture) >>', // 19
+    '<< /S /JavaScript /JS (AASECRET) >>', // 20
+    { dict: `<< /Type /Metadata /Subtype /XML /Length ${pageXmp.length} >>`, data: pageXmp }, // 21
+    '<< /Type /Annot /Subtype /Link /Rect [150 50 200 70] /Border [0 0 0] /A << /S /URI /URI (https://example.com/KEEPURI) >> >>', // 22
+  ], '/Info 19 0 R');
+}
+
+// 줄 묶기 말뭉치(tmp/grouping 15~20번)의 원시 내용 스트림 PDF — Word·엑셀·한글이 만드는 객체 구조를 손으로 쓴 것.
+// 기대 상자는 app/grouping-corpus.test.js. 반환: { '15-tj-kerning': Buffer, … } (A5 가로 595×420, 회색 7pt 설명 줄 포함)
+function buildGroupingRawPdfs() {
+  // Helvetica AFM 폭(1/1000 em)
+  const W = { ' ': 278, '.': 278, ',': 278, ':': 278, '-': 333, '%': 889, '(': 333, ')': 333 };
+  '0123456789'.split('').forEach((c) => (W[c] = 556));
+  Object.assign(W, { a: 556, b: 556, c: 500, d: 556, e: 556, f: 278, g: 556, h: 556, i: 222, j: 222, k: 500, l: 222, m: 833, n: 556, o: 556, p: 556, q: 556, r: 333, s: 500, t: 278, u: 556, v: 500, w: 722, x: 500, y: 500, z: 500,
+    A: 667, B: 667, C: 722, D: 722, E: 667, F: 611, G: 778, H: 722, I: 278, J: 500, K: 667, L: 556, M: 833, N: 722, O: 778, P: 667, Q: 778, R: 722, S: 667, T: 611, U: 722, V: 667, W: 944, X: 667, Y: 667, Z: 611 });
+  const wid = (s, size) => [...s].reduce((t, c) => t + (W[c] || 556), 0) / 1000 * size;
+  const esc = (s) => s.replace(/([()\\])/g, '\\$1');
+  const label = (txt, y) => `BT /F4 7 Tf 0.53 0.53 0.53 rg 20 ${y} Td (${esc(txt)}) Tj ET 0 0 0 rg\n`;
+  const tj = (font, size, x, y, s, extra = '') => `BT /${font} ${size} Tf ${extra} 1 0 0 1 ${x.toFixed(2)} ${y} Tm (${esc(s)}) Tj ET\n`;
+  const pdf = (content) => {
+    const data = Buffer.from(content, 'latin1');
+    return buildRawPdf([
+      '<< /Type /Catalog /Pages 2 0 R >>',
+      '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 420] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R /F4 8 0 R >> >> /Contents 4 0 R >>',
+      { dict: `<< /Length ${data.length} >>`, data },
+      '<< /Type /Font /Subtype /Type1 /BaseFont /ABCDEF+Helvetica /Encoding /WinAnsiEncoding >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /GHIJKL+Helvetica /Encoding /WinAnsiEncoding >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+      '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>',
+    ]);
+  };
+  // 한 줄의 조각들: [[글, 뒤 틈(em)]] — 조각마다 BT/ET(Tj), 틈 = 진행 폭 뒤에 더 띄우는 간격
+  const frags = (font, size, x, y, parts, extra = '') => {
+    let s = '', cx = x;
+    for (const [t, gapEm = 0] of parts) { s += tj(font, size, cx, y, t, extra); cx += wid(t, size) + gapEm * size; }
+    return s;
+  };
+  const out = {};
+  out['15-tj-kerning'] = pdf(label('15a TJ [(Hel) 20 (lo) -250 (World)] - kerning number acts as space', 395)
+    + 'BT /F1 14 Tf 40 375 Td [(Hel) 20 (lo) -250 (World)] TJ ET\n'
+    + label('15b Word-like TJ, -278 = space width, no space glyph', 345)
+    + 'BT /F1 14 Tf 40 325 Td [(T) 80 (o) -15 (tal) -278 (amount) -278 (due) -278 (today)] TJ ET\n'
+    + label('15c positive kerning tightens one word', 295)
+    + 'BT /F1 14 Tf 40 275 Td [(A) 120 (V) 120 (A) 120 (T) 60 (AR)] TJ ET\n'
+    + label('15d one TJ with -4000 jump = two fields inside one object', 245)
+    + 'BT /F1 14 Tf 40 225 Td [(Left field) -4000 (Right field)] TJ ET\n'
+    + label('15e each word its own TJ, Word-style split at kerning', 195)
+    + frags('F1', 14, 40, 175, [['Each', 0.278], ['word', 0.278], ['separate', 0]]));
+  out['16-space-vs-gap'] = pdf(label('16a explicit space glyph in one object', 395) + tj('F1', 14, 40, 375, 'Hello World')
+    + label('16b two objects, gap = 0.28em, no space glyph', 345) + frags('F1', 14, 40, 325, [['Hello', 0.28], ['World']])
+    + label('16c trailing-space object + space-only object + word', 295) + frags('F1', 14, 40, 275, [['Hello ', 0], [' ', 0], ['World']])
+    + label('16d gap 0.55em without space glyph (wide word gap)', 245) + frags('F1', 14, 40, 225, [['Two', 0.55], ['words']])
+    + label('16e gap 0.65em without space glyph (should still be one line)', 195) + frags('F1', 14, 40, 175, [['Loose', 0.65], ['spacing']])
+    + label('16f per-glyph objects (Chromium/HWP style) with word gap 0.28em', 145)
+    + frags('F1', 14, 40, 125, [...'Eac'].map((c) => [c]).concat([['h', 0.278]], [...'glyp'].map((c) => [c]), [['h']])));
+  out['17-tz-tc'] = pdf(label('17a 50 Tz single object', 395) + 'BT /F1 14 Tf 50 Tz 40 375 Td (Condensed text line) Tj ET\n'
+    + label('17b 50 Tz two objects, gap = one condensed space', 345)
+    + `BT /F1 14 Tf 50 Tz 40 325 Td (Condensed) Tj ET BT /F1 14 Tf 50 Tz ${(40 + wid('Condensed ', 14) * 0.5).toFixed(2)} 325 Td (pair) Tj ET\n`
+    + label('17c 200 Tz two objects, gap = one expanded space (1.1em in device space)', 295)
+    + `BT /F1 14 Tf 200 Tz 40 275 Td (Wide) Tj ET BT /F1 14 Tf 200 Tz ${(40 + wid('Wide ', 14) * 2).toFixed(2)} 275 Td (text) Tj ET\n`
+    + label('17d 3 Tc char spacing, single object', 245) + 'BT /F1 14 Tf 3 Tc 40 225 Td (Spaced letters here) Tj ET\n'
+    + label('17e per-letter objects, +4pt tracking, word gap = space+4pt', 195)
+    + (() => { let s = '', x = 40; for (const c of 'SALE NOW') { if (c !== ' ') s += tj('F1', 14, x, 175, c); x += wid(c, 14) + 4; } return s; })());
+  out['18-fake-bold-shadow'] = pdf(label('18a same text drawn twice, +0.4pt x (shadow bold)', 395) + tj('F1', 14, 40, 375, 'Bold Title Text') + tj('F1', 14, 40.4, 375, 'Bold Title Text')
+    + label('18b drawn 3x with x/y offsets 0.3pt', 345) + tj('F1', 14, 40, 325, 'Grand Total 1,234') + tj('F1', 14, 40.3, 325, 'Grand Total 1,234') + tj('F1', 14, 40.6, 325.3, 'Grand Total 1,234')
+    + label('18c render mode 2 (Word fake bold) mid-line, same font', 295)
+    + frags('F1', 14, 40, 275, [['Normal and ']]) + `BT /F1 14 Tf 2 Tr 0.3 w ${(40 + wid('Normal and ', 14)).toFixed(2)} 275 Td (bold) Tj ET\n`
+    + tj('F1', 14, 40 + wid('Normal and bold', 14), 275, ' text')
+    + label('18d synthetic italic via Tm skew, then upright, same font', 245)
+    + 'BT /F1 14 Tf 1 0 0.21 1 40 225 Tm (Italic words) Tj ET\n' + tj('F1', 14, 40 + wid('Italic words ', 14), 225, 'and upright'));
+  {
+    let c = label('19a words emitted right-to-left (Third, Second, First)', 395);
+    const xs = [40, 40 + wid('First ', 14), 40 + wid('First Second ', 14)];
+    c += tj('F1', 14, xs[2], 375, 'Third') + tj('F1', 14, xs[1], 375, 'Second ') + tj('F1', 14, xs[0], 375, 'First ');
+    c += label('19b glyphs of one word emitted in reverse order', 345);
+    let x = 40; const pos = [...'REVERSED'].map((ch) => { const p = x; x += wid(ch, 14); return [ch, p]; });
+    for (const [ch, p] of pos.reverse()) c += tj('F1', 14, p, 325, ch);
+    c += label('19c lower line emitted before upper line', 295);
+    c += tj('F1', 14, 40, 255, 'Line two comes second.') + tj('F1', 14, 40, 275, 'Line one comes first.');
+    c += label('19d two columns emitted column-major (reading order L1 L2 R1 R2)', 225);
+    c += tj('F1', 12, 40, 205, 'Left col line 1') + tj('F1', 12, 40, 190, 'Left col line 2') + tj('F1', 12, 300, 205, 'Right col line 1') + tj('F1', 12, 300, 190, 'Right col line 2');
+    out['19-out-of-order'] = pdf(c);
+  }
+  out['20-font-boundaries'] = pdf(label('20a ABCDEF+Helvetica then GHIJKL+Helvetica (same base font)', 395)
+    + tj('F1', 14, 40, 375, 'Quarterly ') + tj('F2', 14, 40 + wid('Quarterly ', 14), 375, 'sales report')
+    + label('20b regular / Helvetica-Bold / regular in one sentence', 345)
+    + tj('F1', 14, 40, 325, 'Revenue ') + tj('F3', 14, 40 + wid('Revenue ', 14), 325, 'increased') + tj('F1', 14, 40 + wid('Revenue ', 14) + wid('increased', 14) * 1.06, 325, ' by 12%')
+    + label('20c sizes 12 vs 11.5 (rounding) in one line', 295)
+    + tj('F1', 12, 40, 275, 'Size twelve ') + tj('F1', 11.5, 40 + wid('Size twelve ', 12), 275, 'and eleven point five')
+    + label('20d near-black color 0 0 0 vs 0.02 0.02 0.02 (Excel automatic)', 245)
+    + tj('F1', 14, 40, 225, 'Color black ') + `0.02 0.02 0.02 rg ${tj('F1', 14, 40 + wid('Color black ', 14), 225, 'and near black')} 0 0 0 rg\n`
+    + label('20e two fields: Courier label + Helvetica value, 1 space gap', 195)
+    + tj('F4', 12, 40, 175, 'ID:') + tj('F1', 12, 40 + 3 * 7.2 + 3.3, 175, 'A-1029'));
+  // 2단계 문단(9번): 11pt, 줄 간격 14pt인 문단 둘(사이 30pt). 둘째 문단 첫 줄은 보통/굵게/보통 조각 — 문단 다시 흘리기에서 조각 모양 보존을 본다
+  {
+    let c = label('21 two paragraphs, pitch 14pt, gap 30pt; bold run inside paragraph 2', 395);
+    c += tj('F1', 11, 40, 375, 'The first paragraph has three lines of text') + tj('F1', 11, 40, 361, 'that wrap at a fixed width inside the box') + tj('F1', 11, 40, 347, 'and it ends here.');
+    const a = 'Second paragraph starts after a gap and ', b = 'mixes';
+    c += tj('F1', 11, 40, 317, a) + tj('F3', 11, 40 + wid(a, 11), 317, b) + tj('F1', 11, 40 + wid(a, 11) + wid(b, 11) * 1.1, 317, ' styles in one line.');
+    c += tj('F1', 11, 40, 303, 'Its last line is short.');
+    out['21-paragraphs'] = pdf(c);
+  }
+  return out;
+}
+
+module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs };
