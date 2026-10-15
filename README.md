@@ -8,7 +8,7 @@
 
 A local Windows editor that changes PDF text objects directly and removes sensitive text for real, with Markdown editing on the side. Everything runs on your PC — your documents never leave it.
 
-![Retext PDF 5.1: ribbon, page list, and a PDF at "fit whole page"](store/screenshot-1-pdf.png)
+![Retext PDF 6.0: document tabs, ribbon, page list, and the property panel](store/screenshot-1-pdf.png)
 
 [한국어](README.ko.md) · [Plan](PLAN.md) · [Releases](https://github.com/kindsusu/retext-pdf/releases)
 
@@ -27,39 +27,46 @@ Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or 
 
 **First launch and SmartScreen (Releases installers only).** The Releases builds are not code-signed, so Windows may show "Windows protected your PC". Check that the file came from this repository's Releases page, then choose **More info → Run anyway**. Alternatively, right-click the downloaded file → **Properties** → tick **Unblock** → OK. Do not turn off Microsoft Defender to get past the warning.
 
-## What's new in 5.1
+## What's new in 6.0
 
-> **Security fix — please re-check files you redacted with the rectangle tool.** In versions 4.0.1 to 5.0.0, the rectangle **가리기** (redact) tool only drew a cover box: the text and images underneath stayed in the file and could still be copied or extracted. From 5.1.0 the rectangle tool removes what is under the box — the text is deleted, image pixels under the box are painted over, and overlapping annotations are removed. If you used the rectangle tool in an earlier version, open those files in 5.1 and redact the same areas again. Line-based redaction (**선택 글자 가리기** / **줄 전체 가리기** in the line editor) always removed the text and is not affected.
+> **The 5.1.0 security notice still applies:** in versions 4.0.1 to 5.0.0 the rectangle **가리기** (redact) tool only drew a cover box. If you redacted files with it in those versions, open them again and redact the same areas ([details](https://github.com/kindsusu/retext-pdf/releases/tag/v5.1.0)).
 
-- **Ribbon.** The toolbar is now a ribbon with tabs **홈** (home) · **주석** (annotate) · **쪽** (pages) · **문서** (document) · **보안** (security); every feature is still a visible button with an icon and a label. The left panel has **파일 | 쪽 | 주석 | 목차** tabs (files, pages, annotations, outline). Dragging pages in the page list was rebuilt: several pages at once, a drop line, and auto-scroll near the edges.
-- **Annotations.** Highlight, underline, strikeout, note, rectangle, ellipse, line (optionally an arrow), and pen, with color, opacity, and line width. An annotation list (filter, click to jump) and **모두 고정** (flatten all). Appearance streams are written, so other PDF viewers show the annotations too.
-- **Watermark** (text or image, opacity, rotation, saved presets) and **header/footer** with tokens `{page}` `{pages}` `{date}` `{file}` `{title}`.
-- **Outline (bookmarks) editing**, including editing the whole outline as text (`title<TAB>page`, indent for levels). **Document info** editing (title, author, subject, keywords). **Save as an image-only PDF** (pages become pictures; hidden text, annotations, and metadata are dropped).
-- **Privacy tools** in the **보안** tab: find and redact personal data (email, phone, Korean resident registration number, business registration number, card number, or your own regular expression; numbers with a check digit are validated), redact the same area across several pages, and remove hidden data (document info, XMP metadata, attachments, JavaScript).
-- Deleting an annotation created in the same session no longer leaves orphaned text in the saved file.
-- **Better text grouping.** Form fields separated by spaces stay separate; no fake or doubled spaces; superscripts and subscripts stay in the line; rotated text, line-end hyphens, justified and letter-spaced lines, borderless tables, and two-column gutters are handled; reading order follows columns. A line with mixed styles (bold, italic, color) is one box, and editing it keeps each run's style.
-- **Paragraph editing.** Double-click (or Ctrl+click) a line to edit the whole paragraph; the text reflows to the paragraph's width.
+- **Edit text right on the page.** Click a line and type over it in place, in the page's own font, size, and color. The text reflows as you type, and handles change the box width or move it. When a paragraph grows, the content below it in the same column moves down; if the page runs out of room, the app asks whether to shrink the text, let it overlap, or cancel. `Ctrl+Enter` applies, `Esc` cancels.
+- **Property panel and character styling.** A panel on the right shows the font, size, color, alignment, line pitch, and letter spacing of the line you are editing. Select characters to make them bold, italic, underlined, struck out, superscript or subscript, or to change their font, size, or color — from the panel or from a mini toolbar above the selection. Installed bold and italic faces are used when available.
+- **Find & Replace** (`Ctrl+H`) keeps each run's bold, italic, and color; replace-all is one undo step.
+- **Korean spell check, offline** (Hunspell with Korean and English dictionaries): wavy underlines while you edit, suggestions, your own dictionary, and a whole-document check that fixes words without changing their style.
+- **OCR, offline** (Korean and English) for scanned pages: add an invisible searchable text layer or visible editable text, or read only a dragged area. OCR text works with search, copy, the personal-data finder, export, and redaction.
+- **Text selection tool** (`V`): drag, double-click a word, triple-click a line, `Ctrl+A`, and `Ctrl+C` (line breaks kept, hyphenated words joined); right-click to highlight or redact the selection.
+- **Convert and compare.** Export to Word (`.docx`), 한글 (`.hwpx`), Markdown, or plain text, keeping headings, lists, tables, bold, and color. Compare two PDFs side by side with a list of inserted, deleted, and changed text.
+- **Form filling** (AcroForm): text, checkbox, radio, combo, and list fields, required-field check, reset, data import and export (JSON, FDF, XFDF), and flatten.
+- **Batch processing** of many files with 13 actions: watermark, header/footer, page numbers, Bates numbers, remove hidden data, redact personal data, password, image-only PDF, reduce size, Markdown, Word, 한글, and OCR.
+- **More page and document tools.** Crop pages (drag, margins, or fit to content) and change the page size; links (web address or page) and file attachments; area snapshot to the clipboard or a PNG; Bates numbering that continues across files.
+- **Workspace.** Document tabs (each keeps its own view and unapplied edits), command search (`Ctrl+Q`, also by Korean initial consonants), dark theme or follow the system, a start screen with recent files, single or two-page and reading modes, and a hand tool (`Space`+drag).
+- **Safer output.** Missing characters first use an installed font of the same family, and the save dialog lists any substitutions. Kerning is kept for unchanged text. A rotated line gets one cover per line. Digitally signed PDFs are detected and saved to a copy. True redaction now also removes text, image pixels, and paths inside form XObjects, and transparent images stay transparent after partial redaction.
 
-Full notes: [v5.1.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v5.1.0). Earlier: [v5.0.0](https://github.com/kindsusu/retext-pdf/releases/tag/v5.0.0).
+![Editing a line on the page, with the mini toolbar and the property panel](store/screenshot-2-edit.png)
+
+Full notes: [v6.0.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v6.0.0). Earlier: [v5.1.0](https://github.com/kindsusu/retext-pdf/releases/tag/v5.1.0).
 
 ## Features
 
-- Direct PDF text-object editing with the original embedded font, falling back to a subset Malgun Gothic for missing glyphs
-- Redaction that removes the selected characters from the PDF and verifies the removal by re-extracting text; a search hit can also be masked with "mask the whole line"; the rectangle redact tool removes the text, image pixels, and annotations under the box
+- Edit PDF text objects directly on the page, by line or paragraph, with live reflow and width handles; a growing paragraph pushes the content below it down
+- Style selected characters (bold, italic, underline, strikeout, superscript, subscript, font, size, color) from the property panel or a mini toolbar; the original embedded font is kept, and missing characters use a same-family installed font, then Malgun Gothic
+- Find & Replace that keeps styles, and full-text search (Ctrl+F) with prev/next, a match counter, match-case, and highlights
+- Redaction that removes the selected characters from the PDF and verifies the removal by re-extracting text; the rectangle redact tool removes the text, image pixels, and annotations under the box, also inside form XObjects
 - Privacy tools: find and redact personal data (email, phone, ID, business and card numbers, custom regex), redact the same area on several pages, and remove hidden data (document info, XMP, attachments, JavaScript)
-- Annotations (highlight, underline, strikeout, note, rectangle, ellipse, line/arrow, pen) with an annotation list and flatten-all; other viewers show them
-- Watermarks, headers and footers, outline (bookmark) editing, document info editing, and save as an image-only PDF
-- Full-text search (Ctrl+F) across every page with prev/next navigation, a match counter, match-case, and highlighted results
-- Page tools: extract/delete pages, rotate pages 90° at a time, reorder, duplicate, insert blank pages or another PDF, add page numbers, split into N-page files, merge PDFs, export pages as PNG/JPEG, and reduce file size by downsampling (single document or several files at once, without opening them)
-- Add content: text boxes, stamps and signatures from a stamp library, and JPEG/PNG images
-- Print (Ctrl+P), open password-protected PDFs, and save an AES-256 password-protected copy
-- A status bar with the current page / total pages, a page-number jump box, and zoom presets (쪽 전체 보기 = fit whole page, 폭 맞춤 = fit width, 50–400%); a sidebar with 파일 | 쪽 | 주석 | 목차 tabs (open files, page list, annotations, outline)
-- An empty state with quick tools (merge, reduce several files' size, export images) and a full-window drag-and-drop overlay when no document is open
+- Offline OCR (Korean and English) and offline Korean/English spell check — nothing is sent anywhere
+- Text selection and copy; annotations (highlight, underline, strikeout, note, rectangle, ellipse, line/arrow, pen) with a list and flatten-all; links and file attachments
+- Watermarks, headers and footers, page numbers, Bates numbering, outline (bookmark) editing, document info editing, and save as an image-only PDF
+- Page tools: extract/delete, rotate, reorder, duplicate, insert blank pages or another PDF, crop, change page size, split, merge, export pages as PNG/JPEG, and reduce file size (also for several files at once)
+- Convert and compare: export to Markdown or text, Word (DOCX), and 한글 (HWPX); compare two PDFs side by side; batch processing of many files
+- Form filling (AcroForm) with data import/export and flatten
+- Add content: text boxes, stamps and signatures from a stamp library, JPEG/PNG images; area snapshot to the clipboard
+- Print (Ctrl+P), open password-protected PDFs, save an AES-256 password-protected copy; digitally signed PDFs are detected and saved to a copy
+- Document tabs, command search (Ctrl+Q), dark theme, a start screen with recent files, single/two-page and reading modes, a hand tool, and a status bar with page jump and zoom presets
 - Open PDFs straight from a browser or mail client via the Windows "Open with" association (temp-file downloads show a banner and save with "Save As")
-- Undo/redo, multi-line and paragraph editing (double-click or Ctrl+click; the text reflows to the paragraph width), fit-to-width, and move — one edit is always one undo step, even when alignment is kept
-- Safe editing: every line edit is applied, saved, reopened, and checked before it replaces the document; anything that fails is rolled back
-- A progress dialog with a cancel button for long document tools (size reduction, export, split, merge, page cleanup), which restores the document or reports how many files were saved when cancelled
-- An undo toast after page deletion, size reduction, rotation, or reordering; notifications stack instead of replacing each other
+- Undo/redo for almost every edit; safe editing — every edit is applied, saved, reopened, and checked before it replaces the document, and anything that fails is rolled back
+- A progress dialog with a cancel button for long tools, an undo toast after page changes, and notifications that stack
 - Markdown editing with a sanitized live preview
 
 | Before | After |
@@ -81,45 +88,31 @@ Double-clicking `run-retext-pdf.bat` runs the same source without opening a term
 
 ![Architecture](assets/architecture.svg)
 
-Click a line, edit it, and press Enter to confirm; double-click (or Ctrl+click) to edit the whole paragraph. PDFs exported from Excel, Hangul or Chromium split one line into many text objects (per font run, sometimes per character); fragments that share a baseline and sit next to each other are merged into one editable box, while table cells, space-separated form fields, and columns stay separate (gap size, vertical rules, and column gutters). A line with mixed styles is one box, and editing it keeps each run's bold, italic, and color. Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. When the original font cannot be reused (for example, text drawn as an image), the dialog says so and you choose the closest-looking font yourself; only plain TTF fonts are supported, not OTF or variable fonts.
+Click a line and edit it right on the page; `Ctrl+Enter` (or clicking outside) applies, `Esc` cancels, and `Enter` inserts a line break. Double-click (or Ctrl+click) to edit the whole paragraph; the text reflows to the paragraph's width, and when it grows, the content below it in the same column moves down. The property panel on the right changes the font, size, color, alignment, line pitch, and letter spacing; select characters to style only those. In narrow windows (and for hidden text, grouped boxes, or rotated text) a floating editor opens instead. PDFs exported from Excel, Hangul or Chromium split one line into many text objects (per font run, sometimes per character); fragments that share a baseline and sit next to each other are merged into one editable box, while table cells, space-separated form fields, and columns stay separate (gap size, vertical rules, and column gutters). A line with mixed styles is one box, and editing it keeps each run's bold, italic, and color. Text keeps its original embedded font where possible; characters missing from that font are drawn with an installed font of the same family, then Malgun Gothic, and the save dialog lists these substitutions. The **폰트 맞추기** (font match) dialog lets you pick an installed font or import a TTF, preview the result, and apply with undo support. When the original font cannot be reused (for example, text drawn as an image), the dialog says so and you choose the closest-looking font yourself; only plain TTF fonts are supported, not OTF or variable fonts.
 
 ![Redaction pipeline](assets/redaction.svg)
 
-Text redaction removes the selected characters from the PDF object, adds a covering rectangle, and re-extracts the page text to confirm the removal. The rectangle **가리기** tool (since 5.1.0) deletes the text under the box, paints over the image pixels under it, and removes overlapping annotations before drawing the cover; content inside form XObjects can only be covered, and the app tells you when that happens. Line-based redaction cannot remove text that is part of a scanned image — use the rectangle tool there so the image pixels are painted.
+Text redaction removes the selected characters from the PDF object, adds a covering rectangle, and re-extracts the page text to confirm the removal. The rectangle **가리기** tool deletes the text under the box, paints over the image pixels under it, and removes overlapping annotations before drawing the cover. Since 6.0 this also works inside form XObjects (reused page content), and transparent images keep their transparency; anything that can only be covered, such as a gradient shading crossing the box, is reported. Line-based redaction cannot remove text that is part of a scanned image — use the rectangle tool there so the image pixels are painted, or run OCR first.
 
 ## Privacy and safety
 
 - Documents never leave your PC. There is no account, cloud service, or AI connection; the built-in server listens on `127.0.0.1` only and rejects requests from other sites (host and origin checks).
+- OCR and spell check run on your PC with language data bundled in the app; their worker threads block network access.
 - Markdown links open in your default browser, and remote images in Markdown are not loaded automatically.
 - Redaction removes characters from the file itself, then re-extracts the page text to confirm; for scanned images, the rectangle tool paints over the pixels under the box.
 - **보안** tab: find personal data and redact it in one go, redact the same area on several pages, and remove hidden data (document info, XMP metadata, attachments, JavaScript). **이미지 PDF** saves a copy with no text layer at all.
 
 ## PDF tools
 
-The ribbon tabs **홈** (home), **주석** (annotate), **쪽** (pages), **문서** (document), and **보안** (security) hold these tools (all undoable except image export, split, image-only PDF, and password protection, which write new files and leave the open document untouched):
+The ribbon tabs hold these tools. Everything is undoable except the tools that write new files (image export, split, image-only PDF, password, Markdown/Word/한글 export, and batch processing), which leave the open document untouched.
 
-- **글 상자** (text box, `T`) — click on the page and type; choose font, size, and color in the context bar
-- **도장** (stamp, `S`) — place a PNG/JPEG stamp or signature from the stamp library; drag to move, handle to resize
-- **그림** (image) — insert a JPEG/PNG; drag to move, handle to resize
-- **가리기** (redact, `W`) — drag a rectangle; the text, image pixels, and annotations under it are removed, then covered
-- **주석** tab — 형광펜 (highlight), 밑줄 (underline), 취소선 (strikeout), 메모 (note), 사각형, 원, 선 (line/arrow), 펜 (pen); 주석 목록 (annotation list) and 모두 고정 (flatten all)
-- **왼쪽 / 오른쪽** — rotate the current page (or the pages selected in the page list) 90°
-- **빈 쪽** / **끼워 넣기** — insert a blank page, or another PDF's pages, after the current page
-- **쪽 번호** — add page numbers to every page (format, position, size, margin, start number, skip first page, color); running it again replaces them
-- **머리말·꼬리말** (header/footer) — six slots with `{page}` `{pages}` `{date}` `{file}` `{title}` tokens
-- **워터마크** (watermark) — text or image, opacity, rotation, position, saved presets
-- **목차** (outline) — view and edit bookmarks in the left panel, or as `title<TAB>page` text
-- **쪽 정리…** — extract/delete pages via checkbox thumbnails or a `1,3-5` range
-- **병합** — merge several PDFs in a chosen order
-- **이미지로** — export pages as PNG/JPEG at 96–300 dpi into a folder
-- **용량 줄이기** — downsample images above a dpi threshold, re-encode as JPEG, optional target size (transparent images skipped); with no document open it runs on several PDF files at once and writes `<name>-축소.pdf` next to each
-- **분할** — split the document into N-page files in a chosen folder
-- **문서 정보** (document info) — edit title, author, subject, keywords
-- **이미지 PDF** — save a copy whose pages are images (no text, annotations, or metadata)
-- **암호** — save an AES-256 encrypted copy with an open password and optional print/copy/modify restrictions; the open document is not changed
-- **개인정보 찾기** (find personal data), **여러 쪽 가리기** (same area on several pages), **숨은 데이터 제거** (remove hidden data)
+- **홈** (home) — open, save, save as, print, undo/redo; **글자 고치기** (edit text, `E`), **글자 선택** (select text, `V`), **글 상자** (text box, `T`), **도장** (stamp, `S`), **그림** (image), **가리기** (redact, `W`), **스냅샷** (area snapshot); **찾기** (find, `Ctrl+F`), **바꾸기** (replace, `Ctrl+H`), help
+- **주석** (annotate) — 형광펜 (highlight, `H`), 밑줄 (underline, `U`), 취소선 (strikeout), 메모 (note, `N`), 사각형, 원, 선 (line/arrow), 펜 (pen, `P`); 주석 목록 (annotation list), 모두 고정 (flatten all); 링크 (link), 링크 목록 (link list)
+- **쪽** (pages) — rotate left/right; 빈 쪽 (blank page), 끼워 넣기 (insert PDF), 쪽 정리… (extract/delete pages); 쪽 번호 (page numbers), 머리말·꼬리말 (header/footer with `{page}` `{pages}` `{date}` `{file}` `{title}`), 워터마크 (watermark), 베이츠 번호 (Bates numbers); 자르기 (crop by dragging), 여백 자르기… (crop margins or fit to content), 쪽 크기… (page size); 목차 (outline)
+- **문서** (document) — 병합 (merge), 분할 (split), 이미지로 (export PNG/JPEG at 96–300 dpi), 용량 줄이기 (reduce size; with no document open it runs on several files and writes `<name>-축소.pdf`); 문서 정보 (document info), 이미지 PDF (image-only PDF), 첨부 파일 (attachments); 글자 인식… (OCR), 영역 인식 (OCR an area); forms: 필드 강조, 양식 초기화, 데이터 내보내기 / 가져오기, 양식 고정 (highlight fields, reset, export/import data, flatten); 맞춤법 (spell check); Markdown, Word로, 한글(HWPX)로, 비교 (compare), 일괄 처리… (batch)
+- **보안** (security) — 암호 (AES-256 encrypted copy with an open password and optional print/copy/modify restrictions); 개인정보 찾기 (find personal data), 여러 쪽 가리기 (same area on several pages), 숨은 데이터 제거 (remove hidden data)
 
-In the sidebar's **쪽** tab, Ctrl/Shift-click selects several pages; drag them to reorder (a drop line shows the target, and the list scrolls near its edges), press Delete to remove them, or drop a PDF file onto the list to insert it there. The right-click menu offers rotate left/right, duplicate, blank page before/after, insert PDF, save the selected pages as a new PDF (따로 저장…), and delete.
+The sidebar has **파일 | 쪽 | 주석 | 목차 | 첨부** tabs (files, pages, annotations, outline, attachments). In the **쪽** tab, Ctrl/Shift-click selects several pages; drag them to reorder (a drop line shows the target, and the list scrolls near its edges), press Delete to remove them, or drop a PDF file onto the list to insert it there. The right-click menu offers rotate left/right, duplicate, blank page before/after, insert PDF, save the selected pages as a new PDF (따로 저장…), and delete.
 
 Rotated pages keep their text, redaction, search, and drag-to-move overlays aligned — the UI converts between the PDF's unrotated coordinate space and the rotated on-screen layout for every box and highlight.
 
@@ -132,15 +125,23 @@ Press `Ctrl+/` or `F1` in the app for the full list.
 | `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | Open / save / save as |
 | `Ctrl+P` | Print |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| `Ctrl+F` | Open the search bar |
+| `Ctrl+F` / `Ctrl+H` | Find / find and replace |
+| `Ctrl+Q` | Command search (by name or Korean initial consonants) |
 | `Enter` / `Shift+Enter` (in the search box) | Next / previous match |
-| `E` / `T` / `S` / `W` | 글자 고치기 (edit text) / 글 상자 (text box) / 도장 (stamp) / 가리기 (redact) |
+| `Ctrl+Enter` / `Esc` / `Enter` (in the on-page editor) | Apply / cancel / line break |
+| `Ctrl+B` / `Ctrl+I` / `Ctrl+U` (in the on-page editor) | Bold / italic / underline the selected characters |
+| `E` / `V` / `T` / `S` / `W` | 글자 고치기 (edit text) / 글자 선택 (select text) / 글 상자 (text box) / 도장 (stamp) / 가리기 (redact) |
+| `H` / `U` / `N` / `P` | Highlight / underline / note / pen |
+| `Ctrl+C` (select tool) | Copy the selected text (`Ctrl+A` selects the page) |
 | `Esc` | Back to 글자 고치기, or close the open panel |
 | `PageUp` / `PageDown` / `Home` / `End` | Jump a page / to the first / last page |
 | `Ctrl`+click / `Shift`+click, `Ctrl+A`, `Delete` (in the page list) | Select pages, select all, delete the selected pages |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` / `Ctrl+W` | Next tab / previous tab / close tab |
 | `Ctrl` + mouse wheel | Zoom the PDF around the cursor |
 | `Ctrl+=` / `Ctrl+-` | Zoom in / out |
 | `Ctrl+0` / `Ctrl+1` | Fit page width / fit whole page |
+| `Space`+drag | Hand tool (move the document) |
+| `F11` | Reading mode (full screen; `Esc` exits) |
 | `Ctrl+/` / `F1` | Shortcut help |
 | `F12` | Developer tools |
 
@@ -151,6 +152,12 @@ Press `Ctrl+/` or `F1` in the app for the full list.
 **Some characters changed to Malgun Gothic after editing.** A PDF usually embeds only the characters it already uses. New characters that the embedded font lacks are drawn with Malgun Gothic. Use **폰트 맞추기** to pick a closer installed or TTF font.
 
 **An edit was refused with a reason.** Lines containing math symbols or emoji that no available font can draw, and a few PDFs whose fonts store a different character than the one typed, are refused instead of saving wrong text.
+
+**Does OCR or spell check send my document anywhere?** No. Both run on your PC with language data bundled in the app, and their worker threads block network access.
+
+**Spell check marks a correct word.** Right-click it and add it to your dictionary, or ignore it. The check is word by word: it does not check spacing (띄어쓰기), and some new words and proper nouns are not in the dictionary.
+
+**Why must I "Save As" a signed PDF?** Editing changes the signed content, so the signature becomes invalid. Retext PDF warns you before the first edit and saves the result to a copy, keeping the signed original.
 
 **Can I open a password-protected PDF?** Yes. Retext PDF asks for the password; PDFs that only restrict printing or editing open directly. The first save goes through Save As, and the saved copy has no password — use **암호** to protect it again.
 
@@ -172,12 +179,15 @@ workspace/              fictional test documents
 ## Limits
 
 - Targets Windows 10+ and is verified on Windows 11.
-- Does not directly edit text inside scanned images.
-- Complex CJK ligatures, vertical text, and unusual fonts may require fallback.
+- Text drawn inside scanned images is not editable until you run OCR. OCR is weaker on leader dots (`……`) and vertical text; check the result.
+- Spell check works word by word: it does not check spacing (띄어쓰기) and flags some new words and proper nouns (add them to your dictionary).
+- Word (DOCX) and 한글 (HWPX) export do not create merged table cells, and HWPX writes lists as plain text; the layout is close to the PDF, not identical.
+- Forms: XFA-only forms are not supported (the app tells you); list boxes with Korean values may look different in other viewers.
+- Redaction: a gradient shading that crosses the redaction box is only covered, not removed (the app reports it).
+- Complex CJK ligatures, vertical text, and unusual fonts may require fallback; characters missing from the original font use a same-family installed font, then Malgun Gothic.
 - A stamp placed on a rotated page rotates with the page. Stamps in the library cannot be renamed.
-- Characters missing from the original font are drawn with Malgun Gothic.
-- When an edited paragraph grows, the extra lines are added below it, but content further down is not pushed down; the app warns you if they overlap.
-- Password protection rewrites the file, so existing digital signatures become invalid.
+- Password protection and edits to a signed PDF rewrite the file, so existing digital signatures become invalid (signed originals are saved to a copy).
+- The Releases installers are not code-signed; use the Microsoft Store version to avoid the SmartScreen warning.
 - Review the license before business or commercial use.
 
 ## License

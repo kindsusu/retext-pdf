@@ -1,4 +1,4 @@
-// Microsoft Store 제출용 스크린샷 → store/screenshot-*.png (1366×768, Store 권장 크기) 4장: PDF 보기·줄 편집·가리기·Markdown
+// Microsoft Store 제출용 스크린샷 → store/screenshot-*.png (1366×768, Store 권장 크기) 5장: PDF 보기·쪽 위 편집(속성 창)·가리기·Markdown·어두운 테마와 문서 탭
 // 저장소의 가상 문서(workspace/독서모임_안내.*)만 임시 작업 폴더에 복사해 연다. 회사 문서처럼 보이지 않는 예시를 쓴다
 // (2026-10-06, 이전엔 가상 회의록이라 "회사에 너무 맞춰져 있다"는 의견). 사용자의 설정(~/.retext-pdf.json)과
 // 실행 중인 앱(4747)은 건드리지 않도록 임시 홈 폴더·다른 포트(4849)·메모리 전용 세션(localStorage 비어 있음)을 쓴다.
@@ -19,6 +19,10 @@ fs.writeFileSync(path.join(home, '.retext-pdf.json'), JSON.stringify({ workspace
 const { app, BrowserWindow } = require('electron');
 const W = 1366, H = 768;
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// 화면 스크립트가 실패하면 멈춰 있지 말고 끝낸다(6.0.0 준비 때 옛 선택자로 멈춘 적이 있다)
+const fail = (e) => { console.error(e); try { fs.rmSync(home, { recursive: true, force: true }); } catch {} process.exit(1); };
+process.on('unhandledRejection', fail);
+setTimeout(() => fail(new Error('3분 안에 끝나지 않았습니다')), 180000).unref();
 
 app.whenReady().then(async () => {
   // os.homedir()가 이 값을 쓴다 — 서버를 읽기 직전에 바꾼다(Electron 시작 전에 바꾸면 whenReady가 끝나지 않는다)
@@ -30,6 +34,14 @@ app.whenReady().then(async () => {
     webPreferences: { offscreen: true, partition: 'store-shots', preload: path.join(root, 'app', 'preload.js') } });
   await win.loadURL(`http://localhost:${port}`);
   await wait(1500);
+  // 쪽 위 편집기(contenteditable) 안에서 글자 고르기 — 화면 스크립트는 모듈 안이라 편집기 함수를 밖에서 부를 수 없어 DOM으로 고른다
+  await win.webContents.executeJavaScript(`window.selectIn = (root, needle) => {
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n; (n = w.nextNode());) { const k = n.nodeValue.indexOf(needle); if (k < 0) continue;
+      const r = document.createRange(); r.setStart(n, k); r.setEnd(n, k + needle.length);
+      const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); return true; }
+    throw new Error('편집기에서 글자를 찾지 못했습니다: ' + needle);
+  }; true`);
   const shot = async (name) => {
     await wait(1500);
     const img = await win.webContents.capturePage();
@@ -39,7 +51,11 @@ app.whenReady().then(async () => {
     console.log(`store/${name}`, fitted.getSize());
   };
   // 반환값(DOM 등)은 복제할 수 없어 버린다
-  const js = (code) => win.webContents.executeJavaScript(`Promise.resolve((() => { ${code} })()).then(() => true)`);
+  // 화면에서 난 오류는 메시지를 받아 여기서 던진다(그냥 두면 "Script failed to execute"만 남는다)
+  const js = async (code) => {
+    const r = await win.webContents.executeJavaScript(`Promise.resolve((() => { try { ${code} } catch (e) { return { err: String(e && e.stack || e) }; } })()).then((v) => (v && v.err ? v : true))`);
+    if (r && r.err) throw new Error(r.err);
+  };
   // 첫 실행 안내 등 떠 있는 대화상자는 닫고 찍는다
   const closeDialogs = () => js(`document.querySelectorAll('dialog[open]').forEach((d) => d.close());`);
   const pdf = path.join(ws, '독서모임_안내.pdf'), md = path.join(ws, '독서모임_안내.md');
@@ -65,23 +81,37 @@ app.whenReady().then(async () => {
   // 2·3은 글자가 읽히도록 "폭 맞춤"으로 키운다(5.0.0부터 PDF는 "쪽 전체 보기"로 열려 글자가 작다). 바꾼 뒤 쪽 위쪽으로 돌린다
   await js(`const s = document.querySelector('#zoomSelect'); s.value = 'fitWidth'; s.dispatchEvent(new Event('change')); document.querySelector('#pdf').scrollTop = 0;`);
   await wait(1500);
-  // 2) "일시" 줄을 눌러 날짜를 고치는 중인 장면(17일 → 24일, 적용 전)
+  // 2) "일시" 줄을 눌러 쪽 위에서 날짜를 고치는 중인 장면(17일 → 24일, 적용 전). 6.0부터 넓은 창은 쪽 위 편집기(.ipText)와
+  //    오른쪽 속성 창으로 고친다. 고친 "24일"을 골라 두면 작은 꾸밈 막대와 속성 창이 함께 보인다
   await clickLine('일시:');
-  await js(`const ta = document.querySelector('.pdfEditor textarea'); ta.value = ta.value.replace('10월 17일', '10월 24일'); const p = ta.value.indexOf('24일'); ta.focus(); ta.setSelectionRange(p + 3, p + 3);`);
+  await js(`const tx = document.querySelector('.pdfEditor.inplace .ipText'); tx.focus(); selectIn(tx, '17'); document.execCommand('insertText', false, '24');`);
+  await wait(400);
+  await js(`selectIn(document.querySelector('.pdfEditor.inplace .ipText'), '24일');`);
   await shot('screenshot-2-edit.png');
-  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
-  await wait(500);
-  // 3) "문의" 줄의 연락처를 골라 [선택 글자 가리기] — 글자를 지우고 검은 상자로 덮은 결과
+  await js(`document.querySelector('.pdfEditor.inplace .ipText').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));`);
+  await wait(800);
+  // 3) "문의" 줄의 연락처를 골라 [선택 글자 가리기](속성 창) — 글자를 지우고 검은 상자로 덮은 결과
   await clickLine('문의:');
-  await js(`const ta = document.querySelector('.pdfEditor textarea'); const s = ta.value.indexOf('010-'); ta.focus(); ta.setSelectionRange(s, s + '010-1234-5678'.length); [...document.querySelectorAll('.pdfEditor button')].find((b) => b.textContent === '선택 글자 가리기').click();`);
+  await js(`const tx = document.querySelector('.pdfEditor.inplace .ipText'); tx.focus(); selectIn(tx, '010-1234-5678');`);
+  await wait(400);
+  await js(`document.querySelector('#ppMaskSel').click();`);
   await wait(2500);
   await shot('screenshot-3-redact.png');
-  // 4) Markdown 편집과 미리보기. 가린 PDF는 저장해 둔다(임시 홈의 사본) — 미저장이면 다른 파일을 열 때 confirm()이 떠 멈춘다
+  // 4) Markdown 편집과 미리보기. 가린 PDF는 저장해 둔다(임시 홈의 사본) — 미저장 표시 없이 탭을 옮긴다
   await js(`document.querySelector('#save').click();`);
   await wait(1500);
   await js(`document.querySelector('#files [data-f$=".md"]').click();`);
   await closeDialogs();
   await shot('screenshot-4-markdown.png');
+  // 5) 어두운 테마 + 리본 [문서] 탭(글자 인식·양식·맞춤법·Markdown/Word/한글로·비교·일괄 처리)
+  await js(`document.querySelector('#files [data-f$=".pdf"]').click();`);
+  await wait(2000);
+  await closeDialogs();
+  await js(`window.retextPdfC.setThemePref('dark'); document.querySelector('#rtab-doc').click();`);
+  await wait(800);
+  await js(`const s = document.querySelector('#zoomSelect'); s.value = 'fitWidth'; s.dispatchEvent(new Event('change')); document.querySelector('#pdf').scrollTop = 0;`);
+  await wait(1200);
+  await shot('screenshot-5-dark.png');
 
   win.destroy();
   fs.rmSync(home, { recursive: true, force: true });
