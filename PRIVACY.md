@@ -1,6 +1,6 @@
 # Retext PDF 개인정보 처리방침 / Privacy Policy
 
-시행일 / Effective date: 2026-10-03
+시행일 / Effective date: 2026-10-15
 
 [한국어](#한국어) · [English](#english)
 
@@ -17,14 +17,16 @@ Retext PDF(이하 "앱")은 PC에서 PDF와 Markdown 문서를 편집하는 데�
 - 문서는 사용자의 PC 안에서만 열고 고치고 저장합니다. 문서와 그 내용은 PC 밖으로 전송되지 않습니다.
 - 앱에는 계정, 클라우드 저장소, AI 연동 기능이 없습니다.
 - 앱에 내장된 서버는 같은 PC(`127.0.0.1`)에서만 동작합니다. 다른 사이트에서 온 요청은 Host·Origin 검사로 거부합니다.
-- Markdown 안의 원격 이미지는 자동으로 불러오지 않습니다. 링크는 사용자가 누를 때만 기본 브라우저로 엽니다.
+- Markdown 안의 원격 이미지는 자동으로 불러오지 않습니다. 링크는 사용자가 누를 때만 기본 브라우저로 엽니다. PDF 안의 링크는 주소를 보여 주고 확인을 받은 뒤에만 엽니다.
+- 글자 인식(OCR)과 맞춤법 검사는 앱에 들어 있는 인식 데이터·사전으로 PC 안에서만 동작합니다. 인터넷에서 아무것도 내려받지 않고, 문서 내용을 보내지 않습니다.
 
 ### 3. PC에 저장하는 정보
 
 다음 정보는 사용자의 PC에만 저장됩니다. 외부로 전송되지 않습니다.
 
 - `~/.retext-pdf.json` — 작업 폴더 경로
-- 앱 저장소 — 최근에 연 파일 목록, 정렬·폭 맞춤·확대 설정, 안내 표시 여부
+- 앱 저장소 — 최근에 연 파일 목록, 정렬·폭 맞춤·확대 설정, 안내 표시 여부, 워터마크·쪽 번호 등 마지막으로 쓴 설정
+- 앱 데이터 폴더(`%APPDATA%\Retext PDF`) — 사용자가 추가한 도장·서명 그림(`stamps`), 맞춤법 사용자 사전(`spell-user-dict.json`), 화면 테마 설정
 - 열어 둔 파일 목록은 앱이 실행 중일 때만 유지되고 앱을 끄면 지워집니다
 
 앱을 제거하거나 위 파일을 지우면 함께 삭제됩니다.
@@ -54,14 +56,16 @@ Retext PDF (the "app") is a desktop app for editing PDF and Markdown documents o
 - Documents are opened, edited and saved only on your PC. Documents and their contents are never sent off your PC.
 - The app has no accounts, cloud storage or AI integration.
 - The app's built-in server listens only on the same PC (`127.0.0.1`). Requests from other sites are rejected by Host and Origin checks.
-- Remote images in Markdown are not loaded automatically. Links open in your default browser only when you click them.
+- Remote images in Markdown are not loaded automatically. Links open in your default browser only when you click them. Links inside PDFs open only after the app shows the address and you confirm.
+- Text recognition (OCR) and spell checking run only on your PC with recognition data and dictionaries bundled in the app. Nothing is downloaded from the internet and no document content is sent.
 
 ### 3. Information stored on your PC
 
 The following is stored only on your PC. None of it is transmitted.
 
 - `~/.retext-pdf.json` — the workspace folder path
-- App storage — recently opened files, alignment, fit and zoom settings, and whether hints were shown
+- App storage — recently opened files, alignment, fit and zoom settings, whether hints were shown, and last-used settings such as watermark and page numbers
+- App data folder (`%APPDATA%\Retext PDF`) — stamp and signature images you add (`stamps`), your spell-check dictionary (`spell-user-dict.json`) and the theme setting
 - The list of open files is kept only while the app is running and is cleared when it quits
 
 Uninstalling the app or deleting these files removes them.
