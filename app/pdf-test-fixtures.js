@@ -446,4 +446,83 @@ function buildFormPdf(opts = {}) {
   return buildRawPdf(objs);
 }
 
-module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf, buildFormPdf };
+// v6: 양식 XObject 가리기 시험 PDF(612×792 두 쪽). 양식 X(BBox 0 0 220 110)에 든 것:
+//   글자 '연락처 010-1234-5678'(F1 — ttfPath 한글 CID 서브셋, Identity-H + ToUnicode) · 'mail kim.secret@example.com'(F2 Helvetica — 파일 바이트에 글자 그대로)
+//   불투명 그림 Im(8×4, x 10~50 · y 8~28) · 빨간 사각형(60~90, 5~35) 위 투명 그림 Ia(6×6 초록 + /SMask 원) · 파란 사각형(100~120, 10~30)
+//   안 양식 N(/Matrix [0.8 0 0 0.8 130 40]): '내부 SECRET77' + 그 안 양식 D(깊이 3): '깊은 DEEP99'
+// 배치: 1쪽 A(50, 560) · B(50, 300) — 같은 X 두 번, 2쪽 C — 90° 돌리고 1.5배([0 1.5 −1.5 0 400 150]). 쪽 글자 '첫 쪽 본문'·'둘째 쪽 본문'(F1)
+// ttfPath가 없으면(한글 글꼴 없는 환경) 한글 대신 영문으로 쓴다(F1 = Helvetica). 반환 { bytes, korean, text, email, phone, hex(글 → F1 글자 코드 16진) }
+function buildFormXObjectPdf(ttfPath) {
+  const zlib = require('zlib');
+  const T = { phone: '연락처 010-1234-5678', inner: '내부 SECRET77', deep: '깊은 DEEP99', p1: '첫 쪽 본문', p2: '둘째 쪽 본문' };
+  const korean = !!ttfPath && require('fs').existsSync(ttfPath);
+  if (!korean) Object.assign(T, { phone: 'Tel 010-1234-5678', inner: 'Inner SECRET77', deep: 'Deep DEEP99', p1: 'Page one body', p2: 'Page two body' });
+  let show, fontObjs, hex = (s) => Buffer.from(s, 'latin1').toString('hex');
+  if (korean) {
+    const { _subsetTTF } = require('./pdf-engine');
+    const fontkit = require('fontkit');
+    const all = [...new Set(Object.values(T).join(''))];
+    const ttf = _subsetTTF(ttfPath, new Set(all));
+    const face = fontkit.create(ttf);
+    const gid = (ch) => face.glyphForCodePoint(ch.codePointAt(0)).id;
+    hex = (s) => [...s].map((ch) => gid(ch).toString(16).padStart(4, '0')).join('');
+    show = (s) => '<' + hex(s) + '> Tj';
+    const cmap = ['/CIDInit /ProcSet findresource begin', '12 dict begin', 'begincmap', '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+      '/CMapName /Adobe-Identity-UCS def', '/CMapType 2 def', '1 begincodespacerange', '<0000> <FFFF>', 'endcodespacerange', `${all.length} beginbfchar`,
+      ...all.map((ch) => `<${gid(ch).toString(16).padStart(4, '0')}> <${ch.codePointAt(0).toString(16).padStart(4, '0')}>`),
+      'endbfchar', 'endcmap', 'CMapName currentdict /CMapResource defineresource pop', 'end', 'end'].join('\n');
+    const widths = all.map((ch) => `${gid(ch)} [${Math.round(face.glyphForCodePoint(ch.codePointAt(0)).advanceWidth * 1000 / face.unitsPerEm)}]`).join(' ');
+    fontObjs = (n) => [ // n: 첫 글꼴 객체 번호 → [Type0, CIDFont, 서술자, 글꼴 파일, ToUnicode]
+      `<< /Type /Font /Subtype /Type0 /BaseFont /ABCDEF+RetextKr /Encoding /Identity-H /DescendantFonts [${n + 1} 0 R] /ToUnicode ${n + 4} 0 R >>`,
+      `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /ABCDEF+RetextKr /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${n + 2} 0 R /DW 1000 /W [${widths}] /CIDToGIDMap /Identity >>`,
+      `<< /Type /FontDescriptor /FontName /ABCDEF+RetextKr /Flags 4 /FontBBox [-50 -250 1000 900] /ItalicAngle 0 /Ascent 880 /Descent -210 /CapHeight 720 /StemV 80 /FontFile2 ${n + 3} 0 R >>`,
+      { dict: `<< /Length ${ttf.length} /Length1 ${ttf.length} >>`, data: ttf },
+      { dict: `<< /Length ${Buffer.byteLength(cmap, 'latin1')} >>`, data: Buffer.from(cmap, 'latin1') },
+    ];
+  } else {
+    show = (s) => `(${s}) Tj`;
+    fontObjs = () => ['<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>', '<< >>', '<< >>', '<< >>', '<< >>'];
+  }
+  // 1 Catalog · 2 Pages · 3 쪽1 · 4 쪽1 내용 · 5 쪽2 · 6 쪽2 내용 · 7 X · 8 Im · 9 Ia · 10 Ia SMask · 11 N · 12 D · 13 Helvetica · 14~18 F1
+  const F1 = 14;
+  const xc = [
+    `BT /F1 12 Tf 10 88 Td ${show(T.phone)} ET`,
+    'BT /F2 9 Tf 10 70 Td (mail kim.secret@example.com) Tj ET',
+    'q 40 0 0 20 10 8 cm /Im Do Q',
+    '1 0 0 rg 60 5 30 30 re f',
+    'q 30 0 0 30 60 5 cm /Ia Do Q',
+    '0 0 1 rg 100 10 20 20 re f',
+    '/N Do',
+  ].join('\n');
+  const nc = `BT /F1 10 Tf 2 30 Td ${show(T.inner)} ET\nq 1 0 0 1 0 4 cm /D Do Q`;
+  const dc = `0 0.5 0 rg BT /F1 9 Tf 2 5 Td ${show(T.deep)} ET`;
+  const im = Buffer.alloc(8 * 4 * 3);
+  for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) im.set([x * 32, 64 + y * 40, 200 - x * 20], (y * 8 + x) * 3);
+  const ia = Buffer.alloc(6 * 6 * 3), sm = Buffer.alloc(6 * 6);
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++) { ia.set([0, 160, 0], (y * 6 + x) * 3); sm[y * 6 + x] = (x - 2.5) ** 2 + (y - 2.5) ** 2 <= 6.5 ? 255 : 0; }
+  const z = (b) => zlib.deflateSync(b);
+  const stream = (dict, data) => ({ dict: `<< ${dict} /Length ${data.length} >>`, data });
+  const xres = `/Resources << /Font << /F1 ${F1} 0 R /F2 13 0 R >> /XObject << /Im 8 0 R /Ia 9 0 R /N 11 0 R >> >>`;
+  const p1 = `BT /F1 14 Tf 40 760 Td ${show(T.p1)} ET\nq 1 0 0 1 50 560 cm /X Do Q\nq 1 0 0 1 50 300 cm /X Do Q`;
+  const p2 = `BT /F1 14 Tf 40 760 Td ${show(T.p2)} ET\nq 0 1.5 -1.5 0 400 150 cm /X Do Q`;
+  const pageRes = `/Resources << /Font << /F1 ${F1} 0 R >> /XObject << /X 7 0 R >> >>`;
+  const bytes = buildRawPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ${pageRes} /Contents 4 0 R >>`,
+    stream('/Filter /FlateDecode', z(Buffer.from(p1, 'latin1'))),
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] ${pageRes} /Contents 6 0 R >>`,
+    stream('/Filter /FlateDecode', z(Buffer.from(p2, 'latin1'))),
+    stream(`/Type /XObject /Subtype /Form /BBox [0 0 220 110] ${xres} /Filter /FlateDecode`, z(Buffer.from(xc, 'latin1'))),
+    stream('/Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode', z(im)),
+    stream('/Type /XObject /Subtype /Image /Width 6 /Height 6 /ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 10 0 R /Filter /FlateDecode', z(ia)),
+    stream('/Type /XObject /Subtype /Image /Width 6 /Height 6 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode', z(sm)),
+    stream(`/Type /XObject /Subtype /Form /BBox [0 0 100 50] /Matrix [0.8 0 0 0.8 130 40] /Resources << /Font << /F1 ${F1} 0 R >> /XObject << /D 12 0 R >> >>`, Buffer.from(nc, 'latin1')),
+    stream(`/Type /XObject /Subtype /Form /BBox [0 0 100 22] /Resources << /Font << /F1 ${F1} 0 R >> >>`, Buffer.from(dc, 'latin1')),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+    ...fontObjs(F1),
+  ]);
+  return { bytes, korean, text: T, email: 'kim.secret@example.com', phone: '010-1234-5678', hex };
+}
+
+module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf, buildFormPdf, buildFormXObjectPdf };

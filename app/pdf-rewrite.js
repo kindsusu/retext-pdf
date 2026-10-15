@@ -443,6 +443,8 @@ function walk(pdf, starts, visit) {
 // /ID는 그대로 옮긴다(없으면 만들지 않는다)
 // opts.dedupe: 사전·바이트가 똑같은 그림 스트림(/Subtype /Image)은 하나만 쓰고 나머지 참조를 그것으로 돌린다 —
 //   그림 워터마크는 PDFium이 쪽마다 그림 사본을 만들어 100쪽이면 100벌이 된다. /SMask가 서로 다른 번호여도 같아지도록 여러 번 돈다
+// opts.dedupe === 'streams': 그림뿐 아니라 모든 스트림(글꼴 파일·양식·내용)을 같은 규칙으로 — 양식 가리기는 배치마다 양식을 복사하며
+//   글꼴 파일까지 복사한다(FPDF_NewXObjectFromPage). 스트림은 읽기만 하는 값이라 같은 것끼리 합쳐도 그리는 결과가 같다
 function writePdf(pdf, opts = {}) {
   const tr = pdf.trailer.v;
   const rootRef = tr.get('Root');
@@ -462,7 +464,7 @@ function writePdf(pdf, opts = {}) {
       const keys = new Map();
       for (const o of objs) {
         const v = o.value;
-        if (alias.has(o.old) || !v || v.t !== 'stream' || nameOf(v.dict.v.get('Subtype')) !== 'Image') continue;
+        if (alias.has(o.old) || !v || v.t !== 'stream' || (opts.dedupe !== 'streams' && nameOf(v.dict.v.get('Subtype')) !== 'Image')) continue;
         const d = new Map(v.dict.v); d.delete('Length');
         const key = crypto.createHash('sha256').update(serialize({ t: 'dict', v: d }, named, null)).update(v.data).digest('hex');
         if (keys.has(key)) { alias.set(o.old, keys.get(key)); grew = true; } else keys.set(key, o.old);
@@ -629,4 +631,72 @@ function sanitizePdf(input, opts = {}) {
   return { bytes: writePdf(pdf), removed };
 }
 
-module.exports = { fail, num, name, dict, isDict, nameOf, Lexer, inflate, decodeStream, parsePdf, writeName, serialize, walk, writePdf, textString, setInfoPdf, sanitizePdf };
+// ── 양식 XObject 하나 → 한 쪽짜리 PDF(가리기에서 양식 배치 하나만 고칠 때, pdf-engine isolateForm) ─────────────
+// input: 쪽 하나에 양식 XObject 하나만 그린 PDF(PDFium이 쪽을 임시 문서로 복사해 그 배치만 남기고 저장한 것).
+// 결과 PDF의 쪽: MediaBox = 양식 /BBox(양식 좌표), /Resources = 양식 /Resources, /Contents = [prefix(배치에 걸린 클립 등), 양식 내용 스트림(필터 그대로)].
+//   자원 종류 사전(ExtGState·Pattern·Shading·XObject·Font·ColorSpace) 안의 직접 사전·스트림은 간접 객체로 뺀다 —
+//   PDFium 내용 생성기는 번호 없는 자원을 "0 0 R"로 써서 다시 쓴 쪽에서 셰이딩·패턴이 사라진다(실측 2026-10-15).
+//   양식에 /Resources가 없으면(옛 문법 — 쪽 자원을 물려받는다) 그 쪽의 자원을 쓴다.
+// 반환 { bytes, matrix: 양식 /Matrix(양식 좌표 → 배치 좌표), group: /Group이 있었나, oc: /OC가 있었나 }
+const RES_INDIRECT = new Set(['ExtGState', 'Pattern', 'Shading', 'XObject', 'Font', 'ColorSpace']);
+// gs: { ca, CA } — 배치가 물려준 불투명도. 쪽 자원에 /RetextInherit 그래픽 상태로 넣고 prefix 끝에서 건다
+function formToPagePdf(input, { prefix = '', gs = null } = {}) {
+  const pdf = parsePdf(input);
+  const R = (v) => (v && v.t === 'ref' ? pdf.get(v.n) : v);
+  const root = R(pdf.trailer.v.get('Root')), pages = isDict(root) ? R(root.v.get('Pages')) : null;
+  let pg = pages;
+  for (let d = 0; isDict(pg) && nameOf(pg.v.get('Type')) !== 'Page' && d < 8; d++) pg = R((R(pg.v.get('Kids')) || [])[0]);
+  if (!isDict(pg)) throw fail('복사한 쪽을 찾지 못했습니다');
+  const pres = R(pg.v.get('Resources')), xobjs = isDict(pres) ? R(pres.v.get('XObject')) : null;
+  const isForm = (s) => s && s.t === 'stream' && nameOf(R(s.dict.v.get('Subtype'))) === 'Form';
+  let forms = isDict(xobjs) ? [...xobjs.v.entries()].filter(([, v]) => isForm(R(v))) : [];
+  if (forms.length > 1) { // 자원이 정리되지 않았으면 내용에서 Do 이름을 찾는다
+    const used = new Set();
+    for (const c of [].concat(R(pg.v.get('Contents')) || [])) {
+      const s = R(c);
+      if (s && s.t === 'stream') { try { for (const m of decodeStream(s, (r) => pdf.get(r.n)).latin1Slice().matchAll(/\/([^\s/<>[\]()%]+)\s+Do\b/g)) used.add(m[1]); } catch {} }
+    }
+    forms = forms.filter(([k]) => used.has(k));
+  }
+  if (forms.length !== 1) throw fail('복사한 쪽에서 양식 하나를 찾지 못했습니다');
+  const fx = R(forms[0][1]);
+  const nums = (a) => (Array.isArray(R(a)) ? R(a).map((x) => Number(R(x)?.raw)) : null);
+  const bb = nums(fx.dict.v.get('BBox'));
+  if (!bb || bb.length !== 4 || !bb.every(Number.isFinite)) throw fail('양식 /BBox가 없습니다');
+  const mt = nums(fx.dict.v.get('Matrix'));
+  const matrix = mt && mt.length === 6 && mt.every(Number.isFinite) ? mt : [1, 0, 0, 1, 0, 0];
+  const fres = R(fx.dict.v.get('Resources')) || pres;
+  let next = (pdf.nums.length ? pdf.nums[pdf.nums.length - 1] : 0) + 1;
+  const extra = new Map();
+  const add = (v) => { const n = next++; extra.set(n, v); return { t: 'ref', n, g: 0 }; };
+  const res = dict([]);
+  if (isDict(fres)) {
+    for (const [cat, v] of fres.v) {
+      const cv = R(v);
+      if (RES_INDIRECT.has(cat) && isDict(cv)) {
+        const m = new Map();
+        for (const [k, x] of cv.v) m.set(k, x && (x.t === 'dict' || x.t === 'stream') ? add(x) : x);
+        res.v.set(cat, { t: 'dict', v: m });
+      } else res.v.set(cat, v);
+    }
+  }
+  if (gs) {
+    const eg = res.v.get('ExtGState');
+    const m = eg && eg.t === 'dict' ? eg : { t: 'dict', v: new Map() };
+    m.v.set('RetextInherit', add(dict([['Type', name('ExtGState')], ['ca', num(+gs.ca.toFixed(4))], ['CA', num(+gs.CA.toFixed(4))]])));
+    res.v.set('ExtGState', m);
+    prefix += '/RetextInherit gs\n';
+  }
+  const body = dict([]);
+  for (const k of ['Filter', 'DecodeParms']) if (fx.dict.v.has(k)) body.v.set(k, fx.dict.v.get(k));
+  const contents = [add({ t: 'stream', dict: dict([]), data: Buffer.from(prefix, 'latin1') }), add({ t: 'stream', dict: body, data: fx.data })];
+  const pageRef = { t: 'ref', n: next++, g: 0 }, pagesRef = { t: 'ref', n: next++, g: 0 }, catRef = { t: 'ref', n: next++, g: 0 };
+  const box = [Math.min(bb[0], bb[2]), Math.min(bb[1], bb[3]), Math.max(bb[0], bb[2]), Math.max(bb[1], bb[3])];
+  extra.set(pageRef.n, dict([['Type', name('Page')], ['Parent', pagesRef], ['MediaBox', box.map(num)], ['Resources', res], ['Contents', contents]]));
+  extra.set(pagesRef.n, dict([['Type', name('Pages')], ['Kids', [pageRef]], ['Count', num(1)]]));
+  extra.set(catRef.n, dict([['Type', name('Catalog')], ['Pages', pagesRef]]));
+  const view = { version: pdf.version, trailer: dict([['Root', catRef]]), nums: pdf.nums, get: (n) => (extra.has(n) ? extra.get(n) : pdf.get(n)) };
+  return { bytes: writePdf(view), matrix, group: fx.dict.v.has('Group'), oc: fx.dict.v.has('OC') };
+}
+
+module.exports = { fail, num, name, dict, isDict, nameOf, Lexer, inflate, decodeStream, parsePdf, writeName, serialize, walk, writePdf, textString, setInfoPdf, sanitizePdf, formToPagePdf };

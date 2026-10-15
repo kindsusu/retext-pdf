@@ -164,8 +164,13 @@ function mergeTiltCovers(tilts) {
 // 가리기(/api/pdf/mask와 tools/demo-assets.js가 같이 쓴다). parts: [{ idx, from, to }] — 글자를 텍스트에서 실제로 지우고(redact),
 // 덮개는 다 지운 뒤 줄마다 하나씩 그린다(4.0.1 이전에는 글자·조각마다 따로 그려 높이가 들쭉날쭉했다).
 // 하나라도 가렸으면 ok:true(건너뛴 조각은 skipped). 아무것도 못 가렸으면 ok:false — 호출한 쪽(mutate)이 문서를 되돌린다
-function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
+// v6 forms(기본 true): 덮개 밑의 양식 XObject 안 내용(글자·그림 픽셀·다 든 도형)도 지운다(redactFormsIn) — 줄·고른 글자 가리기는
+//   쪽 객체만 고를 수 있어서, 덮개 밑 양식 글자가 파일에 남지 않게. 개인정보·영역 가리기(redactRanges·redactArea)는 양식을 따로 다루므로 false로 부른다
+// lineCovers: false면 글자만 지우고 줄 덮개를 그리지 않는다(펼친 양식 쪽의 영역 가리기 — 원래 쪽의 영역 덮개가 덮는다. 줄 덮개는 영역 밖으로 삐져나온다).
+//   그때 ok는 지운 조각(cut)이 있나로 정한다
+function maskParts(doc, i, parts, { color, fallbackRects = [], forms = true, lineCovers = true } = {}) {
   const covers = [], tilts = [], skipped = [], rects = [], polys = [];
+  let cut = 0;
   const colFor = (b) => (color === 'auto' ? doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
   // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
   const sorted = [...parts].sort((a, b) => b.idx - a.idx);
@@ -175,7 +180,7 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
   const before = doc.objects(i);
   for (const { idx, from, to } of sorted) {
     const r = doc.redact(i, idx, from, to, undefined, { draw: false });
-    if (r.ok) { covers.push({ rect: r.rects[0], line: r.line }); continue; }
+    if (r.ok) { cut++; covers.push({ rect: r.rects[0], line: r.line }); continue; }
     if (r.reason === 'empty' && !String(before[idx]?.text || '').slice(from, to).trim()) continue;
     // 글자 단위로 못 자르는 객체(조각 텍스트 charmap, 회전·기울임 rotated): 객체 전체를 공백으로 지우고 상자를 따로 덮는다
     if (r.reason === 'charmap' || r.reason === 'rotated') {
@@ -185,6 +190,7 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
       const tilt = r.reason === 'rotated' && typeof doc.addPolygon === 'function' ? tiltCover(obj) : null;
       const cleared = doc.setText(i, idx, ' ');
       if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
+      cut++;
       // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
       // _setOneRaw는 객체 자리를 유지한다(setText는 투명 사본을 드러내며 맨 뒤로 옮겨 남은 parts의 인덱스를 민다)
       for (const j of r.twins || []) {
@@ -200,11 +206,90 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
     } else skipped.push({ idx, reason: r.reason });
   }
   // 덮개 색은 글자를 다 지운 뒤 합친 상자에서 잰다('auto')
-  for (const b of mergeLineCovers(covers)) { doc.addRect(i, b, colFor(b)); rects.push(b); }
+  const lineRects = lineCovers ? mergeLineCovers(covers) : [], tiltRects = lineCovers ? mergeTiltCovers(tilts) : [], extra = fallbackRects || [];
+  // v6: 덮개 밑 양식 안 내용 지우기(덮개를 그리기 전에 — 'auto' 색은 지금 보이는 그대로에서 잰다)
+  let f = { forms: 0, unmapped: 0, unsupported: [] };
+  if (forms && typeof doc.formsIn === 'function') {
+    const all = [...lineRects, ...tiltRects.map((q) => q.bounds), ...extra];
+    if (all.length && doc.formsIn(i, all).length) {
+      if (color === 'auto') for (const b of all) mergeForms(f, redactFormsIn(doc, i, [b], colFor(b)));
+      else f = redactFormsIn(doc, i, all, colFor(all[0]));
+    }
+  }
+  for (const b of lineRects) { doc.addRect(i, b, colFor(b)); rects.push(b); }
   // 회전 줄: 줄마다 돌린 사각형 하나. rects에는 쪽 축 상자(겹치는 주석 지우기·화면 표시용), polys에 꼭짓점
-  for (const q of mergeTiltCovers(tilts)) { doc.addPolygon(i, q.pts, colFor(q.bounds)); rects.push(q.bounds); polys.push(q.pts); }
-  for (const b of fallbackRects || []) { doc.addRect(i, b, colFor(b)); rects.push(b); }
-  return { ok: rects.length > 0, rects, skipped, ...(polys.length ? { polys } : {}) };
+  for (const q of tiltRects) { doc.addPolygon(i, q.pts, colFor(q.bounds)); rects.push(q.bounds); polys.push(q.pts); }
+  for (const b of extra) { doc.addRect(i, b, colFor(b)); rects.push(b); }
+  return { ok: rects.length > 0 || (!lineCovers && cut > 0), rects, skipped, cut, ...(polys.length ? { polys } : {}), ...(forms ? { forms: f.forms, unsupported: f.unsupported } : {}) };
+}
+
+// ── v6: 양식 XObject 안 진짜 가리기 ─────────────────────────────────────────
+// 양식(로고·도장·머리말 묶음, 쪽 전체를 양식 하나로 감싼 PDF)은 여러 배치·여러 쪽이 같은 스트림을 쓴다. 가릴 배치 하나만 복사해 고친다:
+// doc.isolateForm(i, k) → 양식 내용을 한 쪽짜리 문서(엔진)로 펼친다 → 거기서 쪽 수준 가리기를 그대로(안의 양식은 같은 방법으로 — 깊이 제한 없음)
+// → 바뀐 것이 있으면 doc.replaceForm(i, k, iso)로 원래 배치 자리에 새 양식을 놓고 원래 배치를 뺀다(다른 배치·다른 쪽은 그대로).
+// 원래 스트림은 이 쪽에서 안 쓰게 되면 쪽 자원에서 빠지고, 서버가 저장 뒤 다시 쓰기(compactDoc)로 고아 스트림을 버린다.
+// 행렬은 PDF 순서 [a b c d e f], mxMul(m, n) = m 다음 n
+const mxMul = (m, n) => {
+  if (!m) return n || null;
+  if (!n) return m;
+  return [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
+};
+// 덮개 밑에 남는 것(지울 수 없는 것) 알림: [{ reason, count }] — 같은 이유는 하나로 센다
+const addNote = (list, reason, count = 1) => { const n = list.find((x) => x.reason === reason); if (n) n.count += count; else list.push({ reason, count }); };
+const mergeForms = (acc, r) => { acc.forms += r.forms || 0; acc.unmapped += r.unmapped || 0; for (const u of r.unsupported || []) addNote(acc.unsupported, u.reason, u.count); return acc; };
+// 영역들(rects — xf로 옮긴 좌표)에 걸친 양식 배치마다: 펼쳐서 영역 가리기(덮개는 부른 쪽이 그린다) → 바뀌었으면 바꿔 넣기.
+// 반환 { forms(바꿔 넣은 배치 수), unmapped(펼친 쪽에서도 못 지운 글자 수), unsupported }
+function redactFormsIn(doc, i, rects, fill, xf = null) {
+  const out = { forms: 0, unmapped: 0, unsupported: [], paths: 0, images: { painted: 0, removed: 0 } };
+  if (typeof doc.formsIn !== 'function') return out;
+  for (const k of doc.formsIn(i, rects, { xf })) {
+    const iso = doc.isolateForm(i, k);
+    if (!iso.ok) { addNote(out.unsupported, `form-copy:${iso.reason}`); continue; } // 이 배치는 덮개로만 가려진다(남은 글자는 unmapped로 잡힌다)
+    try {
+      const sx = mxMul(iso.m, xf);
+      let changed = false;
+      const inner = { forms: 0, unmapped: 0, unsupported: [], paths: 0, painted: 0, removed: 0 };
+      for (const rect of rects) {
+        const r = redactArea(iso.sub, 0, rect, { color: fill, xf: sx });
+        changed = changed || r.changed;
+        mergeForms(inner, { unmapped: r.unmapped, unsupported: r.unsupported });
+        inner.paths += r.paths; inner.painted += r.images.painted; inner.removed += r.images.removed;
+      }
+      for (const u of inner.unsupported) addNote(out.unsupported, u.reason, u.count); // 바꾸지 않아도 알린다(걸친 셰이딩 등)
+      if (!changed) continue;
+      const rep = doc.replaceForm(i, k, iso);
+      if (!rep.ok) { addNote(out.unsupported, `form-replace:${rep.reason}`); continue; }
+      out.forms++;
+      out.unmapped += inner.unmapped;
+      out.paths += inner.paths; out.images.painted += inner.painted; out.images.removed += inner.removed;
+    } finally { iso.sub.close(); }
+  }
+  return out;
+}
+// 개인정보 가리기: 양식 안 글자(doc.partsForRanges의 formChars — { k, u, x, y })를 배치마다 펼친 쪽에서 같은 글자(유니코드·원점)를 찾아 지운다.
+// 반환 { forms, done(지운 글자 수), unsupported }
+function redactFormChars(doc, i, formChars, color) {
+  const out = { forms: 0, done: 0, unsupported: [] }, byK = new Map();
+  for (const c of formChars) { if (!byK.has(c.k)) byK.set(c.k, []); byK.get(c.k).push(c); }
+  for (const k of [...byK.keys()].sort((a, b) => b - a)) {
+    const list = byK.get(k);
+    if (k < 0) { addNote(out.unsupported, 'form-owner', list.length); continue; }
+    const iso = doc.isolateForm(i, k);
+    if (!iso.ok) { addNote(out.unsupported, `form-copy:${iso.reason}`, list.length); continue; }
+    try {
+      const { ranges, matched } = iso.sub.charRangesAt(0, list, iso.m);
+      if (matched < list.length) addNote(out.unsupported, 'form-match', list.length - matched);
+      if (!ranges.length) continue;
+      const r = redactRanges(iso.sub, 0, ranges, { color });
+      if (!(r.ok || r.forms)) continue;
+      const rep = doc.replaceForm(i, k, iso);
+      if (!rep.ok) { addNote(out.unsupported, `form-replace:${rep.reason}`, list.length); continue; }
+      out.forms++;
+      out.done += Math.max(0, matched - (r.unmapped || 0));
+      for (const u of r.unsupported || []) addNote(out.unsupported, u.reason, u.count);
+    } finally { iso.sub.close(); }
+  }
+  return out;
 }
 
 // 가리기 조각 정리: 같은 객체의 조각은 겹치거나 맞닿으면 하나로 합치고(객체 전체 조각이 있으면 그것 하나),
@@ -231,27 +316,47 @@ function normalizeParts(parts) {
 }
 
 // 텍스트 페이지 글자 번호 범위들([[start, end], …], end 미포함)을 진짜로 가린다(개인정보 일괄 가리기 · 영역 가리기 공용):
-// 글자 → 객체 조각(doc.partsForRanges) → maskParts(글자 제거 + 줄마다 덮개) → 덮개와 겹치는 주석 지우기.
-// extraRects: 함께 덮을 사각형(영역 가리기의 영역 전체). 돌려주는 값: { ok, rects, skipped, unmapped(쪽 객체에 없는 글자 수), annots(지운 주석 수) }
-function redactRanges(doc, i, ranges, { color, extraRects = [] } = {}) {
-  const { parts, unmapped } = ranges.length ? doc.partsForRanges(i, ranges) : { parts: [], unmapped: 0 };
-  const r = parts.length || extraRects.length ? maskParts(doc, i, normalizeParts(parts), { color, fallbackRects: extraRects }) : { ok: false, rects: [], skipped: [] };
+// 글자 → 객체 조각(doc.partsForRanges) → [v6: 양식 안 글자는 그 배치를 복사해 지운다(redactFormChars)] → maskParts(글자 제거 + 줄마다 덮개) → 덮개와 겹치는 주석 지우기.
+// 양식 배치를 바꿔 넣어도 쪽 객체 번호는 그대로라(replaceForm) 미리 잰 조각(idx)이 맞는다.
+// extraRects: 함께 덮을 사각형(영역 가리기의 영역 전체). forms: false면 양식 안 글자를 건드리지 않는다(영역 가리기가 먼저 다뤘다)
+// 돌려주는 값: { ok, rects, skipped, unmapped(지우지 못한 양식 안 글자 수), annots(지운 주석 수), forms(바꿔 넣은 양식 배치 수), unsupported:[{ reason, count }] }
+function redactRanges(doc, i, ranges, { color, extraRects = [], forms = true, lineCovers = true } = {}) {
+  const { parts, unmapped, formChars = [] } = ranges.length ? doc.partsForRanges(i, ranges) : { parts: [], unmapped: 0 };
+  let left = unmapped;
+  const f = { forms: 0, unsupported: [] };
+  if (forms && formChars.length && typeof doc.isolateForm === 'function') {
+    const r = redactFormChars(doc, i, formChars, color);
+    f.forms = r.forms; f.unsupported = r.unsupported;
+    left = Math.max(0, unmapped - r.done);
+  }
+  const r = parts.length || extraRects.length ? maskParts(doc, i, normalizeParts(parts), { color, fallbackRects: extraRects, forms: false, lineCovers }) : { ok: false, rects: [], skipped: [], cut: 0 };
   const annots = r.rects.length ? doc.removeAnnotsIn(i, r.rects) : 0;
-  return { ...r, unmapped, annots };
+  return { ...r, unmapped: left, annots, forms: f.forms, unsupported: f.unsupported };
 }
 
 // 영역 진짜 가리기(한 쪽). rect: { x0, y0, x1, y1 } 회전 전 페이지 좌표. 순서가 중요하다:
-//   1) 영역 안에 다 든 선·도형을 뺀다 2) 겹치는 그림은 영역 부분 픽셀을 칠해 다시 넣는다(다 들면 뺀다)
+//   0) v6: 영역에 걸친 양식 XObject 배치는 복사해 펼친 쪽에서 1)~3)을 그대로 하고 바꿔 넣는다(redactFormsIn — 안의 양식도 같은 방법)
+//   1) 영역 안에 다 든 선·도형·셰이딩을 뺀다 2) 겹치는 그림은 영역 부분 픽셀을 칠해 다시 넣는다(다 들면 뺀다, 투명은 지킨다)
 //   3) 글자 상자 가운데가 영역 안인 글자를 지우고 줄 덮개 + 영역 덮개를 그린다(새 덮개가 1)에서 빠지지 않게 마지막에)
 //   4) 영역과 겹치는 주석을 지운다
-// 양식 XObject 안의 글자·그림은 지울 수 없어 덮개로만 가려진다(unmapped로 센다). 글자 대응이 어긋난 객체는 객체 전체를 비운다(영역 밖 글자까지)
-function redactArea(doc, i, rect, { color } = {}) {
+// 걸친 도형·셰이딩은 잘라 낼 수 없어 덮개 밑에 남는다(셰이딩은 unsupported로 알린다). 글자 대응이 어긋난 객체는 객체 전체를 비운다(영역 밖 글자까지).
+// unmapped: 영역 안인데 지우지 못한 양식 안 글자 수(양식 복사 실패 등 — unsupported에 이유). xf: 펼친 양식 쪽에서 부를 때 그 쪽 좌표 → rect 좌표
+// (그때는 영역 덮개를 그리지 않는다 — 원래 쪽이 그린다). changed: 무엇이든 바꿨나(펼친 쪽을 바꿔 넣을지)
+function redactArea(doc, i, rect, { color, xf = null } = {}) {
   const box = { x0: Math.min(rect.x0, rect.x1), y0: Math.min(rect.y0, rect.y1), x1: Math.max(rect.x0, rect.x1), y1: Math.max(rect.y0, rect.y1) };
   const fill = color === 'auto' ? doc.sampleColor(i, box) : (Array.isArray(color) ? color : [0, 0, 0, 255]);
-  const paths = doc.removePathsIn(i, box);
-  const images = doc.redactImagesIn(i, box, fill);
-  const r = redactRanges(doc, i, doc.charRangesIn(i, box), { color: fill, extraRects: [box] });
-  return { ...r, paths, images };
+  const f = redactFormsIn(doc, i, [box], fill, xf);
+  const paths = doc.removePathsIn(i, box, { xf }) + f.paths; // 양식 안에서 뺀 도형·칠한 그림도 센다
+  const images = doc.redactImagesIn(i, box, fill, { xf });
+  images.painted += f.images.painted; images.removed += f.images.removed;
+  const r = redactRanges(doc, i, doc.charRangesIn(i, box, { xf }), { color: fill, extraRects: xf ? [] : [box], forms: false, lineCovers: !xf });
+  const unsupported = [];
+  for (const u of [...f.unsupported, ...(r.unsupported || [])]) addNote(unsupported, u.reason, u.count);
+  const left = typeof doc.areaLeftovers === 'function' ? doc.areaLeftovers(i, box, { xf }) : { shading: 0 };
+  if (left.shading) addNote(unsupported, 'shading', left.shading); // 걸친 셰이딩(그라데이션)은 잘라 내지 못한다 — 덮개 밑에 남는다
+  const unmapped = r.unmapped; // 바꿔 넣은 배치에 남은 글자도 여기서 다시 잡힌다(f.unmapped와 겹쳐 세지 않는다)
+  const changed = f.forms > 0 || paths > 0 || images.painted + images.removed > 0 || r.rects.length > 0 || r.cut > 0;
+  return { ...r, paths, images, forms: f.forms, unmapped, unsupported, changed };
 }
 
 // ── 2단계: 조각(run)별 모양을 지키는 줄 편집 · 문단 다시 흘리기(/api/pdf/edit-runs) ─────────────────────
@@ -878,4 +983,4 @@ function replaceInDoc(doc, query, replacement, opts = {}, target = null) {
   return { count, pages: [...pages], written, skipped };
 }
 
-module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, tiltCover, mergeTiltCovers, normalizeParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc };
+module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, tiltCover, mergeTiltCovers, normalizeParts, redactRanges, redactArea, redactFormsIn, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc };

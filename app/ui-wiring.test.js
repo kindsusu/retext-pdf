@@ -912,7 +912,9 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   const saveAs = fnBodyOf(s, 'async function saveAs(');
   assert.ok(saveAs.indexOf("settleInplace('저장', opts.pending)") > 0 && saveAs.indexOf('confirmSubstitutions(cur)') < saveAs.indexOf("apiPost('/api/pdf/saveas'"), '다른 이름으로 저장도 같은 확인');
   assert.match(fnBodyOf(s, 'async function onPrint('), /if \(!\(await settleInplace\('인쇄'\)\)\) return;/, '인쇄 전에도');
-  assert.match(fnBodyOf(s, 'async function open('), /if \(name !== cur && !\(await settleInplace\('열기'\)\)\) return;/, '다른 문서로 바꾸기 전에도');
+  // v6 Wave F: 탭을 바꿀 때는 묻지 않고 고치던 상태를 그 탭 기억에 넣는다(돌아오면 되살린다 — 아래 Wave F 시험)
+  assert.match(fnBodyOf(s, 'async function open('), /if \(name !== cur && !opts\.noStash\) await parkInplace\(\);/, '다른 문서로 바꾸기 전에는 고치던 상태를 탭 기억에');
+  assert.doesNotMatch(fnBodyOf(s, 'async function open('), /settleInplace\('열기'\)/, '탭을 바꿀 때 적용/버리기를 묻지 않는다');
   assert.match(fnBodyOf(s, 'async function removeFile('), /if \(cur === p && !\(await settleInplace\('닫기'\)\)\) return;/, '문서를 닫기 전에도');
   assert.match(s, /window\.isDirty = \(\) => !!dirty\(\) \|\| !!\(inplace && inplace\.dirty\(\)\) \|\| tabs\.some\(\(p\) => p !== cur && tabDirty\(p\)\);/, '창 닫기 확인은 적용하지 않은 글도(v6 Wave C: 다른 탭의 고친 내용도) 미저장으로 본다');
   assert.match(s, /window\.retextPdfSave = async \(\) => \{ await save\(\{ pending: 'apply' \}\); return !dirty\(\) && saveOtherTabs\(\); \};/, '창 닫기 → 저장은 적용하고 저장(다른 탭도)');
@@ -1014,7 +1016,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
     const clean = await runClose(true, 'others', 'd.pdf');
     assert.deepStrictEqual(clean.asked, ['b.md'], '지금 탭(b.md)이 고쳐졌으면 그것도 묻는다');
   })().catch((e) => { console.error(e); process.exit(1); });
-  assert.match(s, /window\.dirtyNames = \(\) => tabs\.filter\(tabDirty\)\.map\(basename\);/, '창 닫기 확인에 고친 문서 이름');
+  assert.match(s, /window\.dirtyNames = \(\) => tabs\.filter\(tabDirty\)\.map\(pendLabel\);/, '창 닫기 확인에 고친 문서 이름(v6 Wave F: 적용하지 않은 글 표시)');
   assert.match(fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8'), /window\.dirtyNames \? window\.dirtyNames\(\) : \[\]/, 'main.js가 고친 문서 이름을 늘어놓는다');
   assert.match(fnBodyOf(s, 'async function saveAs('), /tabs = tabs\.filter\(\(f\) => f !== to \|\| f === name\)\.map\(\(f\) => \(f === name \? to : f\)\);/, '다른 이름으로 저장하면 탭이 그 자리에서 새 이름으로');
 

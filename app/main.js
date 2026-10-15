@@ -156,6 +156,12 @@ function main() {
         return { ok: true, width, height };
       } catch (e) { return { error: e.message }; }
     });
+    // v6 Wave F 글자 선택·복사: 글 → 클립보드(줄바꿈은 Windows 줄바꿈으로). 렌더러의 navigator.clipboard는 창에 초점이 없으면 거절되므로 앱에서는 이 길을 쓴다
+    ipcMain.handle('copyText', (_e, text) => {
+      const t = String(text ?? '');
+      if (t.length > 5_000_000) return { error: '복사할 글이 너무 깁니다' };
+      try { clipboard.writeText(process.platform === 'win32' ? t.replace(/\r?\n/g, '\r\n') : t); return { ok: true, length: t.length }; } catch (e) { return { error: e.message }; }
+    });
     // v6 Wave D 링크 따라가기: http(s)·mailto만, 열기 전에 주소를 보여 주고 묻는다(문서 속 링크가 몰래 열리지 않게). 자동으로 열지 않는다
     ipcMain.handle('openLink', async (_e, url) => {
       const u = String(url || '');

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('retextPdf', {
   openAnyFile: () => ipcRenderer.invoke('openAnyFile'),
   saveFile: (defaultPath, filters) => ipcRenderer.invoke('saveFile', defaultPath, filters),
   copyImage: (bytes) => ipcRenderer.invoke('copyImage', bytes),
+  copyText: (text) => ipcRenderer.invoke('copyText', text), // v6 Wave F: 글자 선택 복사(Ctrl+C) → { ok } | { error }
   openLink: (url) => ipcRenderer.invoke('openLink', url),
   // P7 인쇄: { name, pages?:[0 기준] } → { ok } | { ok:false, cancelled } | { error, needPassword? } (main.js 'print')
   print: (opts) => ipcRenderer.invoke('print', opts),

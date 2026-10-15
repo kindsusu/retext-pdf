@@ -6,6 +6,7 @@ const fontkit = require('fontkit');
 const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽입 · 다운샘플링의 인코더 (동기, 순수 JS)
 const fontRegistry = require('./pdf-fonts');
 const crypto = require('crypto');
+const pdfRewrite = require('./pdf-rewrite'); // 양식 XObject를 한 쪽짜리 문서로 펼치기(formToPagePdf) — 가리기에서 양식 배치 하나만 고칠 때
 
 const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
@@ -243,9 +244,32 @@ function normalizeLinkUri(raw) {
 }
 function decodeSafe(s) { try { return decodeURI(s); } catch { return s; } }
 
+// ── 행렬(PDF 순서 [a b c d e f]: 점 (x,y) → (a·x + c·y + e, b·x + d·y + f)) ────────────────
+// mxMul(m, n): 먼저 m, 다음 n을 적용하는 행렬. null은 항등으로 본다
+const MX_ID = [1, 0, 0, 1, 0, 0];
+const mxMul = (m, n) => {
+  if (!m) return n || MX_ID;
+  if (!n) return m;
+  return [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3], m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5]];
+};
+const mxApply = (m, x, y) => (m ? [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]] : [x, y]);
+const mxInv = (m) => {
+  const det = m[0] * m[3] - m[1] * m[2];
+  if (!det || !Number.isFinite(det)) return null;
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det, (m[2] * m[5] - m[3] * m[4]) / det, (m[1] * m[4] - m[0] * m[5]) / det];
+};
+// 사각형 {x0,y0,x1,y1}을 행렬로 옮긴 네 모서리의 외접 사각형(m이 없으면 그대로)
+const mxBox = (m, b) => {
+  if (!m) return b;
+  const pts = [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]].map(([x, y]) => mxApply(m, x, y));
+  const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
+};
+
 // password: 여는 암호(사용자 암호). 없으면 빈 암호로 연다 — 소유자 암호만 걸린(권한 제한) 문서는 PDFium이 빈 암호로 연다
-async function open(buffer, password) {
-  const P = await pdfium();
+async function open(buffer, password) { return openWith(await pdfium(), buffer, password); }
+// 초기화된 PDFium으로 바로(동기) 연다 — 양식 XObject를 한 쪽짜리 문서로 펼쳐 고칠 때(isolateForm) 엔진 안에서 쓴다
+function openWith(P, buffer, password) {
   const M = P.pdfium; // emscripten 모듈 (_malloc/_free/HEAPU8/getValue/...)
 
   // 힙은 메모리 성장 시 재할당되므로 매번 새로 참조한다.
@@ -551,14 +575,18 @@ async function open(buffer, password) {
   // 실측 2026-10-14: FPDFBitmap_CreateEx(BGRA) + FPDFImageObj_SetBitmap → PDFium이 /SMask(DeviceGray)를 붙여 저장하고,
   // 저장·재열기 후 알파 0 칸은 밑의 빨간 사각형이, 알파 255 칸은 이미지 색이 그려진다. 비트맵 버퍼는 호출 중에 복사된다 —
   // 해제 전에 0xAB로 덮어 두므로 복사하지 않는 빌드로 바뀌면 시험(투명 도장 픽셀)이 바로 깨진다
-  const putBitmap = (io, rgba, width, height) => {
+  // pageHandles: 이미 쪽에 놓인 그림을 바꿀 때 그 쪽 핸들들(그림 캐시 비우기 — putJpeg과 같다)
+  // alpha=false: 알파를 버리고 BGRx로 넣는다(/SMask 없이 무손실 FlateDecode — 가리기에서 원래 무손실이던 그림)
+  const putBitmap = (io, rgba, width, height, pageHandles = [], alpha = true) => {
     if (!(width > 0 && height > 0) || rgba.length < width * height * 4) throw new Error('RGBA 데이터가 이미지 크기보다 짧습니다.');
     const buf = mal(width * height * 4), H = heap();
-    for (let k = 0; k < width * height * 4; k += 4) { H[buf + k] = rgba[k + 2]; H[buf + k + 1] = rgba[k + 1]; H[buf + k + 2] = rgba[k]; H[buf + k + 3] = rgba[k + 3]; } // RGBA → BGRA
-    const bmp = P.FPDFBitmap_CreateEx(width, height, BMP_BGRA, buf, width * 4);
+    for (let k = 0; k < width * height * 4; k += 4) { H[buf + k] = rgba[k + 2]; H[buf + k + 1] = rgba[k + 1]; H[buf + k + 2] = rgba[k]; H[buf + k + 3] = alpha ? rgba[k + 3] : 255; } // RGBA → BGRA
+    const bmp = P.FPDFBitmap_CreateEx(width, height, alpha ? BMP_BGRA : BMP_BGRx, buf, width * 4);
+    const arr = mal(Math.max(4, pageHandles.length * 4));
+    pageHandles.forEach((h, k) => M.setValue(arr + k * 4, h, 'i32'));
     try {
-      if (!bmp || !P.FPDFImageObj_SetBitmap(0, 0, io, bmp)) throw new Error('이미지를 PDF에 넣지 못했습니다 (투명 이미지).');
-    } finally { if (bmp) P.FPDFBitmap_Destroy(bmp); heap().fill(0xab, buf, buf + width * height * 4); free(buf); }
+      if (!bmp || !P.FPDFImageObj_SetBitmap(pageHandles.length ? arr : 0, pageHandles.length, io, bmp)) throw new Error('이미지를 PDF에 넣지 못했습니다 (투명 이미지).');
+    } finally { free(arr); if (bmp) P.FPDFBitmap_Destroy(bmp); heap().fill(0xab, buf, buf + width * height * 4); free(buf); }
   };
   const transparent = (image) => {
     if (image?.kind !== 'rgba' || !image.data) return false;
@@ -953,18 +981,27 @@ async function open(buffer, password) {
   // 텍스트 페이지 글자 번호 범위들 → 가리기 조각 [{ idx, from, to }] (객체 텍스트 안의 위치, to 미포함).
   // 객체마다 그 객체가 그린 글자 번호를 차례로 모아(charsByObject) 객체 텍스트(objText — objects()·charBoxes()와 같은 함수)의 위치로 바꾼다.
   // 객체 텍스트에서 뺀 PDFium 공백(IsGenerated)은 지울 글자가 없으므로 범위에 들어 있어도 건너뛴다.
-  // 쪽의 객체 목록에 없는 객체(양식 XObject 안 글자)의 글자는 unmapped로 센다(지울 수 없다 — 덮기만 된다)
+  // 쪽의 객체 목록에 없는 객체(양식 XObject 안 글자)의 글자는 unmapped로 센다. v6: 그 글자들은 formChars로도 돌려준다 —
+  //   { k: 그 글자를 품은 쪽 맨 위 양식 객체 번호, u: 유니코드, x, y: 글자 원점(쪽 좌표) }. 가리기가 그 양식 배치를 복사해 고친다(isolateForm)
   const rangesToParts = (i, ranges) => {
     const p = page(i), tp = P.FPDFText_LoadPage(p), s = mal(32);
     try {
       const ptrIdx = new Map();
       for (let k = 0, n = P.FPDFPage_CountObjects(p); k < n; k++) ptrIdx.set(P.FPDFPage_GetObject(p, k), k);
       const want = (c) => ranges.some(([a, b]) => c >= a && c < b);
-      let unmapped = 0;
-      const parts = [];
+      let unmapped = 0, topOf = null;
+      const parts = [], formChars = [];
       for (const [o, list] of charsByObject(tp)) {
         const idx = ptrIdx.get(o);
-        if (idx === undefined) { unmapped += list.filter((x) => want(x.c)).length; continue; }
+        if (idx === undefined) {
+          const hit = list.filter((x) => want(x.c) && !x.gen); // PDFium이 끼운 공백(gen)은 지울 글리프가 없다
+          unmapped += hit.length;
+          if (!hit.length) continue;
+          topOf ||= formOwners(p);
+          const k = topOf.get(o);
+          for (const x of hit) { P.FPDFText_GetCharOrigin(tp, x.c, s, s + 8); formChars.push({ k: k ?? -1, u: x.u, x: f64(s), y: f64(s + 8) }); }
+          continue;
+        }
         if (!list.some((x) => want(x.c))) continue;
         const { at } = objText(tp, o, list, s, false);
         // 원하는 범위마다 연속 구간으로
@@ -974,9 +1011,145 @@ async function open(buffer, password) {
           if (from >= 0) parts.push({ idx, from, to });
         }
       }
-      return { parts, unmapped };
+      return { parts, unmapped, formChars };
     } finally { free(s); P.FPDFText_ClosePage(tp); }
   };
+
+  // ── v6: 양식 XObject 안 내용 가리기 ─────────────────────────────────────────
+  // PDFium에는 양식 안에 객체를 넣는 API가 없고(FPDFFormObj_InsertObject 없음), 양식 안 객체를 고쳐도 쪽 내용을 다시 쓸 때
+  // 맨 위 양식만(FPDFFormObj_RemoveObject로 더럽혀진 것만) 다시 쓴다 — 고친 글자·깊은 양식은 저장되지 않는다(실측 2026-10-15).
+  // 또 양식 스트림은 여러 배치·여러 쪽이 함께 쓰므로 제자리에서 고치면 다른 배치까지 바뀐다.
+  // 그래서 가릴 배치 하나를 "복사해 고친다": 그 쪽을 임시 문서로 복사해 그 배치만 남기고 저장 → 양식 내용을 한 쪽짜리 문서로 펼친다
+  // (pdf-rewrite formToPagePdf — 쪽 자원 = 양식 자원이라 그래픽 상태·패턴 이름이 그대로 산다) → 그 문서를 엔진으로 열어(openWith)
+  // 쪽 수준 가리기를 그대로 돌린다(안의 양식은 같은 방법으로 다시 — 깊이 제한 없음) → 고친 쪽을 새 양식(FPDF_NewXObjectFromPage)으로
+  // 만들어 원래 배치 자리에 놓고 원래 배치를 뺀다. 원래 양식 스트림은 그대로라 다른 배치·다른 쪽은 안 바뀐다.
+  // 이 쪽에서 더 쓰지 않는 원래 양식은 쪽을 다시 쓸 때 쪽 /Resources에서 빠지고(PDFium이 안 쓰는 자원을 지운다), 저장 뒤 다시 쓰기(compactDoc)가 고아 스트림을 버린다.
+  const OBJ_SHADING = 4, OBJ_FORM = 5, FORM_DEPTH = 32;
+  const matOf = (o) => { const b = mal(24); try { return P.FPDFPageObj_GetMatrix(o, b) ? [0, 1, 2, 3, 4, 5].map((k) => f32(b + k * 4)) : null; } finally { free(b); } };
+  // 양식 객체 form 아래 모든 자손(양식 제외): [{ o, t, m }] — m: 그 객체 좌표(행렬·상자) → 이 쪽 좌표. parent: form이 놓인 좌표 → 쪽 좌표
+  const formLeaves = (form, parent = null, out = [], depth = 0) => {
+    const fm = mxMul(matOf(form) || MX_ID, parent);
+    for (let k = 0, n = P.FPDFFormObj_CountObjects(form); k < n; k++) {
+      const o = P.FPDFFormObj_GetObject(form, k);
+      if (!o) continue;
+      const t = P.FPDFPageObj_GetType(o);
+      if (t === OBJ_FORM) { if (depth < FORM_DEPTH) formLeaves(o, fm, out, depth + 1); else out.push({ o, t, m: fm, deep: true }); } else out.push({ o, t, m: fm });
+    }
+    return out;
+  };
+  // 쪽 맨 위 양식 객체들의 자손 포인터 → 그 양식의 쪽 객체 번호
+  const formOwners = (p) => {
+    const own = new Map();
+    for (let k = 0, n = P.FPDFPage_CountObjects(p); k < n; k++) {
+      const o = P.FPDFPage_GetObject(p, k);
+      if (o && P.FPDFPageObj_GetType(o) === OBJ_FORM) for (const l of formLeaves(o)) own.set(l.o, k);
+    }
+    return own;
+  };
+  // 객체에 걸린 클립 경로 → 내용 스트림 조각(행렬 inv로 옮겨서). 경로마다 "… W n"(여러 경로는 교집합). 글자 클립은 옮기지 못한다
+  const clipOps = (o, inv) => {
+    const cp = P.FPDFPageObj_GetClipPath(o);
+    const np = cp ? P.FPDFClipPath_CountPaths(cp) : -1;
+    if (!(np > 0)) return '';
+    const s = mal(8), f = (v) => (Math.round(v * 1000) / 1000).toString();
+    let out = '';
+    try {
+      for (let k = 0; k < np; k++) {
+        const ns = P.FPDFClipPath_CountPathSegments(cp, k);
+        if (!(ns > 0)) continue;
+        let ops = '', bez = [];
+        for (let j = 0; j < ns; j++) {
+          const seg = P.FPDFClipPath_GetPathSegment(cp, k, j);
+          if (!seg || !P.FPDFPathSegment_GetPoint(seg, s, s + 4)) continue;
+          const [x, y] = mxApply(inv, f32(s), f32(s + 4)), t = P.FPDFPathSegment_GetType(seg);
+          if (t === 1) { bez.push(`${f(x)} ${f(y)}`); if (bez.length === 3) { ops += `${bez.join(' ')} c\n`; bez = []; } }
+          else { bez = []; ops += `${f(x)} ${f(y)} ${t === 2 ? 'm' : 'l'}\n`; }
+          if (P.FPDFPathSegment_GetClose(seg)) ops += 'h\n';
+        }
+        if (ops) out += ops + 'W n\n';
+      }
+    } finally { free(s); }
+    return out;
+  };
+  // 양식 배치 객체 o에 남은(Do 자리에서 물려줄) 그래픽 상태 → { pre: 내용 스트림 조각, gs: ExtGState 값(불투명도) | null }.
+  // 색은 PDFium이 RGB로 준다(DeviceRGB로 깐다). 글자 상태(Tf·Tc 등)를 물려받는 양식은 드물어 옮기지 않는다
+  const inheritedState = (o) => {
+    const b = mal(16), f = (v) => (Math.round(v * 10000) / 10000).toString();
+    try {
+      let pre = '', gs = null;
+      const col = (get) => (get(o, b, b + 4, b + 8, b + 12) ? [0, 1, 2, 3].map((k) => i32(b + k * 4) & 255) : null);
+      const fill = col(P.FPDFPageObj_GetFillColor.bind(P)), stroke = col(P.FPDFPageObj_GetStrokeColor.bind(P));
+      if (fill) pre += `${fill.slice(0, 3).map((v) => f(v / 255)).join(' ')} rg\n`;
+      if (stroke) pre += `${stroke.slice(0, 3).map((v) => f(v / 255)).join(' ')} RG\n`;
+      if (P.FPDFPageObj_GetStrokeWidth(o, b)) { const w = f32(b); if (w >= 0 && Number.isFinite(w)) pre += `${f(w)} w\n`; }
+      if ((fill && fill[3] < 255) || (stroke && stroke[3] < 255)) gs = { ca: (fill ? fill[3] : 255) / 255, CA: (stroke ? stroke[3] : 255) / 255 };
+      return { pre, gs };
+    } finally { free(b); }
+  };
+  // 그림의 투명(알파)을 원래 해상도로 읽는다: 행렬을 잠깐 [w 0 0 h 0 0]으로 두면 FPDFImageObj_GetRenderedBitmap이 픽셀 하나 = 원래 픽셀 하나로
+  // 마스크(SMask·/Mask·스텐실)를 적용한 BGRA를 준다(실측 2026-10-15). 투명이 없거나 못 읽으면 null. 반환 { rgba(색도 렌더 값), width, height }
+  const renderedRgba = (p, o, w, h) => {
+    if (!hasAlpha(p, o)) return null;
+    const m = matOf(o);
+    if (!m) return null;
+    setMatrix(o, [w, 0, 0, h, 0, 0]);
+    let bmp = 0;
+    try { bmp = P.FPDFImageObj_GetRenderedBitmap(doc, p, o); } finally { setMatrix(o, m); }
+    if (!bmp) return null;
+    try {
+      if (P.FPDFBitmap_GetWidth(bmp) !== w || P.FPDFBitmap_GetHeight(bmp) !== h || P.FPDFBitmap_GetFormat(bmp) !== BMP_BGRA) return null;
+      const stride = P.FPDFBitmap_GetStride(bmp), buf = P.FPDFBitmap_GetBuffer(bmp), H = heap(), out = Buffer.alloc(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const s = buf + y * stride + x * 4, q = (y * w + x) * 4; out[q] = H[s + 2]; out[q + 1] = H[s + 1]; out[q + 2] = H[s]; out[q + 3] = H[s + 3]; }
+      return { rgba: out, width: w, height: h };
+    } finally { P.FPDFBitmap_Destroy(bmp); }
+  };
+  // 그림 객체 o의 픽셀 중 영역(rect — xf로 옮긴 좌표계) 안에 드는 것을 color로 칠해 그 자리에서 다시 넣는다.
+  // 픽셀마다 네 모서리·가운데를 쪽 좌표로 옮겨 하나라도 영역 안이면(또는 영역 모서리가 그 픽셀 안이면) 칠한다 — 돌린 그림도 영역 밖은 안 칠한다.
+  // 투명이 있는 그림은 BGRA로 다시 넣어(PDFium이 /SMask를 단다) 칠한 픽셀만 불투명이 되고 나머지 투명은 그대로다. 없으면 JPEG(품질 92).
+  // 반환 'painted' | 'none'(영역에 든 픽셀 없음) | 'drop'(픽셀을 못 읽었다 — 호출자가 그림을 뺀다)
+  const paintImage = (p, o, rect, xf, color) => {
+    const om = matOf(o);
+    if (!om) return 'drop';
+    const full = mxMul(om, xf), inv = mxInv(full);
+    const px = inv ? imagePixels(o) : null;
+    if (!px) return 'drop';
+    const W = px.width, Hh = px.height;
+    const toPx = (x, y) => { const [u, v] = mxApply(inv, x, y); return [u * W, (1 - v) * Hh]; };
+    const corners = [toPx(rect.x0, rect.y0), toPx(rect.x1, rect.y0), toPx(rect.x0, rect.y1), toPx(rect.x1, rect.y1)];
+    const E = 1e-3; // 행렬이 float라 경계에 딱 닿은 픽셀(겹친 넓이 0)이 칠해지지 않게
+    const X0 = Math.max(0, Math.floor(Math.min(...corners.map((z) => z[0])) + E)), X1 = Math.min(W, Math.ceil(Math.max(...corners.map((z) => z[0])) - E));
+    const Y0 = Math.max(0, Math.floor(Math.min(...corners.map((z) => z[1])) + E)), Y1 = Math.min(Hh, Math.ceil(Math.max(...corners.map((z) => z[1])) - E));
+    if (X1 <= X0 || Y1 <= Y0) return 'none';
+    const axis = Math.abs(full[1]) < 1e-6 && Math.abs(full[2]) < 1e-6; // 축에 맞은 그림: 외접 상자가 곧 영역
+    const inR = (X, Y) => { const [x, y] = mxApply(full, X / W, 1 - Y / Hh); return x >= rect.x0 && x <= rect.x1 && y >= rect.y0 && y <= rect.y1; };
+    const hit = (x, y) => axis || inR(x + 0.5, y + 0.5) || inR(x, y) || inR(x + 1, y) || inR(x, y + 1) || inR(x + 1, y + 1)
+      || corners.some(([X, Y]) => X >= x && X <= x + 1 && Y >= y && Y <= y + 1);
+    const alpha = renderedRgba(p, o, W, Hh);
+    const data = alpha ? alpha.rgba : px.data;
+    let any = false;
+    for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) {
+      if (!hit(x, y)) continue;
+      const k = (y * W + x) * 4; data[k] = color[0]; data[k + 1] = color[1]; data[k + 2] = color[2]; data[k + 3] = 255; any = true;
+    }
+    if (!any) return 'none';
+    if (alpha) putBitmap(o, data, W, Hh, [p]);
+    else if (lossyImage(o)) putJpeg(o, encodeJpeg(data, W, Hh, 92), [p]);
+    else putBitmap(o, data, W, Hh, [p], false); // 원래 무손실이던 그림은 무손실로 — 영역 밖 픽셀이 JPEG 손실로 번지지 않는다
+    return 'painted';
+  };
+  // 그림이 손실 압축(JPEG·JPEG 2000)으로 저장돼 있나 — 다시 넣을 때 같은 방식(JPEG)으로 크기를 지킨다
+  const lossyImage = (o) => {
+    const b = mal(64);
+    try {
+      for (let k = 0, n = P.FPDFImageObj_GetImageFilterCount(o); k < n; k++) {
+        const len = P.FPDFImageObj_GetImageFilter(o, k, b, 64);
+        if (len > 1 && /^(DCTDecode|DCT|JPXDecode)$/.test(M.UTF8ToString(b))) return true;
+      }
+      return false;
+    } finally { free(b); }
+  };
+  // 빈 { painted, removed }에 하나 더하기
+  const countImage = (acc, r) => { if (r === 'painted') acc.painted++; else if (r === 'removed') acc.removed++; return acc; };
 
   // ── 주석 ───────────────────────────────────────────────────────────────────
   // FPDF_ANNOT_* 번호 ↔ 이름. 만들 수 있는 것은 ANNOT_CREATE에 있는 것만
@@ -2896,8 +3069,9 @@ async function open(buffer, password) {
       try { return rangeRects(tp, start, end); } finally { P.FPDFText_ClosePage(tp); }
     },
     // 영역(rect: {x0,y0,x1,y1}) 안에 글자 상자 가운데가 드는 글자들 → 연속 범위 [[start, end], …]. 상자 없는 글자(공백)는 양옆이 들면 함께 넣는다
-    charRangesIn(i, rect) {
-      const tp = P.FPDFText_LoadPage(page(i)), s = mal(32);
+    // opts.xf: 이 쪽 좌표 → rect 좌표 행렬(양식을 펼친 한 쪽 문서에서 원래 쪽의 영역으로 잴 때)
+    charRangesIn(i, rect, opts = {}) {
+      const tp = P.FPDFText_LoadPage(page(i)), s = mal(32), xf = opts.xf || null;
       try {
         const ranges = [];
         let cur = null; // 열린 범위. 상자 없는 글자는 범위를 닫지도 늘리지도 않는다 — 다음 안쪽 글자가 오면 그 사이까지 이어진다
@@ -2905,59 +3079,163 @@ async function open(buffer, password) {
           const ok = P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24); // left right bottom top
           const l = f64(s), r = f64(s + 8), b = f64(s + 16), t = f64(s + 24);
           if (!ok || !(r > l) || !(t > b)) continue;
-          const cx = (l + r) / 2, cy = (b + t) / 2;
+          const [cx, cy] = mxApply(xf, (l + r) / 2, (b + t) / 2);
           if (cx >= rect.x0 && cx <= rect.x1 && cy >= rect.y0 && cy <= rect.y1) { if (cur) cur[1] = c + 1; else { cur = [c, c + 1]; ranges.push(cur); } }
           else cur = null;
         }
         return ranges;
       } finally { free(s); P.FPDFText_ClosePage(tp); }
     },
+    // 글자 열쇠([{ u, x, y }] — 다른 문서 쪽 좌표의 글자 원점)와 같은 글자 → 범위. m: 이 쪽 좌표 → 열쇠 좌표.
+    // 양식을 펼친 한 쪽 문서(isolateForm)에서 원래 쪽의 개인정보 글자를 찾는다. 반환 { ranges, matched(맞은 열쇠 수) }
+    charRangesAt(i, keys, m = null) {
+      const tp = P.FPDFText_LoadPage(page(i)), s = mal(16), TOL = 0.3;
+      try {
+        const ranges = [], hit = new Set();
+        let cur = null;
+        for (let c = 0, n = P.FPDFText_CountChars(tp); c < n; c++) {
+          const u = P.FPDFText_GetUnicode(tp, c);
+          let k = -1;
+          if (u && P.FPDFText_GetCharOrigin(tp, c, s, s + 8)) {
+            const [x, y] = mxApply(m, f64(s), f64(s + 8));
+            k = keys.findIndex((q) => q.u === u && Math.abs(q.x - x) <= TOL && Math.abs(q.y - y) <= TOL);
+          }
+          if (k >= 0) { hit.add(k); if (cur) cur[1] = c + 1; else { cur = [c, c + 1]; ranges.push(cur); } } else cur = null;
+        }
+        return { ranges, matched: hit.size };
+      } finally { free(s); P.FPDFText_ClosePage(tp); }
+    },
+    // 영역(rects, xf로 옮긴 좌표)에 자손 객체가 걸치는 쪽 맨 위 양식 객체 번호들(내림차순 — 뒤에서부터 바꾸면 앞 번호가 그대로다)
+    formsIn(i, rects, opts = {}) {
+      const p = page(i), xf = opts.xf || null, out = [];
+      const hit = (b) => { const q = mxBox(xf, b); return rects.some((r) => overlaps(q, r)); };
+      for (let k = P.FPDFPage_CountObjects(p) - 1; k >= 0; k--) {
+        const o = P.FPDFPage_GetObject(p, k);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_FORM || !hit(boundsOf(o))) continue;
+        if (formLeaves(o).some((l) => hit(mxBox(l.m, boundsOf(l.o))))) out.push(k);
+      }
+      return out;
+    },
+    // 쪽 맨 위 양식 객체 k를 한 쪽짜리 문서로 펼친다(위 설명). 반환 { ok, sub(엔진 — 다 쓰면 close), m(펼친 쪽 좌표 → 이 쪽 좌표), notes } | { ok:false, reason }
+    // 배치에 걸린 클립(앞의 "re W n")은 펼친 쪽 내용 앞에 옮겨 단다. 양식 /Group(투명 묶음)·/OC(선택 내용)는 옮기지 못한다(notes)
+    isolateForm(i, k) {
+      flush(); // 임시 문서가 쪽 내용 스트림을 읽는다
+      const p = page(i), o = P.FPDFPage_GetObject(p, k);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_FORM) return { ok: false, reason: 'not-form' };
+      const om = matOf(o);
+      if (!om || !mxInv(om)) return { ok: false, reason: 'matrix' };
+      let bytes;
+      const tmp = P.FPDF_CreateNewDocument();
+      if (!tmp) return { ok: false, reason: 'tmp-doc' };
+      try {
+        const arr = mal(4);
+        M.setValue(arr, i, 'i32');
+        const imported = P.FPDF_ImportPagesByIndex(tmp, doc, arr, 1, 0);
+        free(arr);
+        if (!imported) return { ok: false, reason: 'import' };
+        const tpg = P.FPDF_LoadPage(tmp, 0);
+        if (!tpg) return { ok: false, reason: 'import' };
+        try {
+          const n = P.FPDFPage_CountObjects(tpg);
+          // 다시 읽은 쪽의 객체 수가 다르면(내용 생성기가 못 쓰는 객체가 있었다) 같은 행렬의 양식 중 같은 순번으로 찾는다
+          const sameM = (x) => { const xm = x && P.FPDFPageObj_GetType(x) === OBJ_FORM ? matOf(x) : null; return !!xm && xm.every((v, q) => Math.abs(v - om[q]) <= 1e-3); };
+          let keep = k;
+          if (n !== P.FPDFPage_CountObjects(p)) {
+            let ord = 0;
+            for (let j = 0; j < k; j++) if (sameM(P.FPDFPage_GetObject(p, j))) ord++;
+            keep = -1;
+            for (let j = 0, seen = 0; j < n && keep < 0; j++) if (sameM(P.FPDFPage_GetObject(tpg, j)) && seen++ === ord) keep = j;
+            if (keep < 0) return { ok: false, reason: 'object-count' };
+          }
+          for (let j = n - 1; j >= 0; j--) {
+            if (j === keep) continue;
+            const x = P.FPDFPage_GetObject(tpg, j);
+            if (x && P.FPDFPage_RemoveObject(tpg, x)) P.FPDFPageObj_Destroy(x);
+          }
+          const left = P.FPDFPage_GetObject(tpg, 0), lm = left && matOf(left);
+          if (P.FPDFPage_CountObjects(tpg) !== 1 || P.FPDFPageObj_GetType(left) !== OBJ_FORM || !lm || lm.some((v, q) => Math.abs(v - om[q]) > 1e-3)) return { ok: false, reason: 'object-match' };
+          if (!P.FPDFPage_GenerateContent(tpg)) return { ok: false, reason: 'generate' };
+        } finally { P.FPDF_ClosePage(tpg); }
+        bytes = saveDoc(P, tmp);
+      } finally { P.FPDF_CloseDocument(tmp); }
+      let built;
+      try {
+        // 클립은 쪽 좌표 → 양식 좌표(양식 /Matrix·배치 행렬의 역)로. /Matrix는 펼친 뒤에야 알므로 두 번 만든다
+        const probe = pdfRewrite.formToPagePdf(bytes);
+        const m0 = mxMul(probe.matrix, om), inv = mxInv(m0);
+        if (!inv) return { ok: false, reason: 'matrix' };
+        // 양식은 Do 자리의 그래픽 상태를 물려받는다(색을 안 정한 양식 글자는 앞에서 정한 채움색으로 그려진다 — 실측: 파란 사각형 뒤 양식 글자가 파랗다).
+        // 펼친 쪽은 기본 상태(검정)에서 시작하므로 배치 객체에 남은 채움·선 색·선 굵기·불투명도를 앞에 깐다(PDFium 내용 생성기도 배치 앞에 같은 것을 쓴다)
+        const { pre, gs } = inheritedState(o);
+        built = { ...pdfRewrite.formToPagePdf(bytes, { prefix: 'q\n' + clipOps(o, inv) + pre, gs }), m: m0 };
+      } catch (e) { return { ok: false, reason: 'rewrite: ' + e.message }; }
+      let sub;
+      try { sub = openWith(P, built.bytes); } catch (e) { return { ok: false, reason: 'open: ' + e.message }; }
+      const notes = [...(built.group ? ['group'] : []), ...(built.oc ? ['oc'] : [])];
+      return { ok: true, sub, m: built.m, notes };
+    },
+    // isolateForm으로 펼쳐 고친 쪽(iso.sub의 0쪽)을 새 양식으로 만들어 쪽 객체 k 자리에 놓고 원래 배치를 뺀다(객체 번호는 그대로)
+    replaceForm(i, k, iso) {
+      const p = page(i), o = P.FPDFPage_GetObject(p, k);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_FORM) return { ok: false, reason: 'not-form' };
+      const xo = P.FPDF_NewXObjectFromPage(doc, iso.sub._rawDoc(), 0);
+      if (!xo) return { ok: false, reason: 'xobject' };
+      const w = P.FPDF_NewFormObjectFromXObject(xo);
+      P.FPDF_CloseXObject(xo);
+      if (!w) return { ok: false, reason: 'xobject' };
+      setMatrix(w, iso.m);
+      if (!P.FPDFPage_InsertObjectAtIndex(p, w, k)) { P.FPDFPageObj_Destroy(w); return { ok: false, reason: 'insert' }; }
+      if (P.FPDFPage_RemoveObject(p, o)) P.FPDFPageObj_Destroy(o);
+      regen(p);
+      return { ok: true };
+    },
+    // 펼친 쪽을 부모 엔진이 새 양식으로 가져가기 전에: 미룬 내용을 쓰고 PDFium 문서 핸들을 준다(엔진 안에서만 쓴다)
+    _rawDoc() { flush(); return doc; },
+    // 영역(xf로 옮긴 좌표)에 걸쳐 지울 수 없어 덮개 밑에 남는 것: { shading: 영역에 걸친(다 들지 않은) 셰이딩(sh) 객체 수 }
+    // (다 든 셰이딩은 removePathsIn이 뺀다. 양식 안 셰이딩은 양식을 펼친 쪽에서 센다)
+    areaLeftovers(i, rect, opts = {}) {
+      const p = page(i), xf = opts.xf || null, out = { shading: 0 };
+      for (let k = 0, n = P.FPDFPage_CountObjects(p); k < n; k++) {
+        const o = P.FPDFPage_GetObject(p, k);
+        if (o && P.FPDFPageObj_GetType(o) === OBJ_SHADING && overlaps(mxBox(xf, boundsOf(o)), rect)) out.shading++;
+      }
+      return out;
+    },
     // 글자 번호 범위들 → 가리기 조각 { parts:[{ idx, from, to, whole? }], unmapped }(rangesToParts 참고)
     partsForRanges(i, ranges) { return rangesToParts(i, [].concat(ranges || []).map(([s, e]) => [Number(s), Number(e)])); },
 
     // ── 영역 가리기의 그림·도형 부분 ─────────────────────────────────────────
-    // rect와 겹치는 그림: 영역 안에 다 들면 객체를 빼고, 걸치면 원본 픽셀에서 영역에 해당하는 부분을 color로 칠해 다시 넣는다
-    // (행렬의 역변환으로 영역 네 모서리를 그림 픽셀로 옮겨 그 외곽 상자를 칠한다 — 돌린 그림은 조금 더 넓게 칠해진다).
-    // 다시 넣는 그림은 JPEG(품질 92). 투명(SMask) 그림은 원본 픽셀에 마스크가 빠져 있어 불투명 그림으로 다시 들어간다(가린 쪽이 안전하다).
-    // 픽셀을 읽지 못하는 그림은 통째로 뺀다. 양식 XObject 안의 그림은 건드리지 못한다(덮개로만 가려진다)
-    redactImagesIn(i, rect, color = [0, 0, 0, 255]) {
-      const p = page(i);
-      let painted = 0, removed = 0;
+    // rect와 겹치는 그림: 영역 안에 다 들면 객체를 빼고, 걸치면 원본 픽셀에서 영역에 드는 픽셀을 color로 칠해 그 자리에서 다시 넣는다(paintImage).
+    // 픽셀마다 쪽 좌표로 옮겨 재므로 돌린 그림도 영역 밖은 칠하지 않는다. v6: 투명(SMask·마스크) 그림은 투명을 지킨다 — BGRA로 다시 넣어
+    // 칠한 픽셀만 불투명이 된다(예전에는 불투명 JPEG가 되어 밑 글자를 가렸다). 투명 없는 그림은 JPEG(품질 92).
+    // 픽셀을 읽지 못하는 그림은 통째로 뺀다. 같은 그림 스트림을 다른 쪽도 쓰면 그 쪽 그림도 함께 칠해진다(쪽 수준 — 양식 안 그림은 배치마다 복사해 고친다).
+    // opts.xf: 이 쪽 좌표 → rect 좌표(양식을 펼친 쪽에서)
+    redactImagesIn(i, rect, color = [0, 0, 0, 255], opts = {}) {
+      const p = page(i), xf = opts.xf || null, acc = { painted: 0, removed: 0 };
       const inside = (b) => b.x0 >= rect.x0 && b.x1 <= rect.x1 && b.y0 >= rect.y0 && b.y1 <= rect.y1;
-      const m = mal(24);
-      try {
-        for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
-          const o = P.FPDFPage_GetObject(p, idx);
-          if (!o || P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
-          const b = boundsOf(o);
-          if (!overlaps(b, rect)) continue;
-          const drop = () => { if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; } };
-          if (inside(b)) { drop(); continue; }
-          const px = P.FPDFPageObj_GetMatrix(o, m) ? imagePixels(o) : null;
-          if (!px) { drop(); continue; }
-          const [a, bb, c, d, e, f] = [0, 1, 2, 3, 4, 5].map((k) => f32(m + k * 4));
-          const det = a * d - bb * c;
-          if (!det) { drop(); continue; }
-          const toPx = (x, y) => { const u = (d * (x - e) - c * (y - f)) / det, v = (-bb * (x - e) + a * (y - f)) / det; return [u * px.width, (1 - v) * px.height]; };
-          const q = [toPx(rect.x0, rect.y0), toPx(rect.x1, rect.y0), toPx(rect.x0, rect.y1), toPx(rect.x1, rect.y1)];
-          const X0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[0])))), X1 = Math.min(px.width, Math.ceil(Math.max(...q.map((z) => z[0]))));
-          const Y0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[1])))), Y1 = Math.min(px.height, Math.ceil(Math.max(...q.map((z) => z[1]))));
-          if (X1 <= X0 || Y1 <= Y0) continue;
-          for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) { const k = (y * px.width + x) * 4; px.data[k] = color[0]; px.data[k + 1] = color[1]; px.data[k + 2] = color[2]; px.data[k + 3] = 255; }
-          try { putJpeg(o, encodeJpeg(px.data, px.width, px.height, 92), [p]); painted++; } catch { drop(); }
-        }
-      } finally { free(m); }
-      if (painted || removed) regen(p);
-      return { painted, removed };
-    },
-    // rect 안에 완전히 든 선·도형(경로) 객체를 뺀다(가린 영역 밑에 그림처럼 그린 글자·서명이 남지 않게). 걸친 도형은 덮개로만 가려진다
-    removePathsIn(i, rect) {
-      const p = page(i), E = 0.01;
-      let removed = 0;
       for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
         const o = P.FPDFPage_GetObject(p, idx);
-        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_PATH) continue;
-        const b = boundsOf(o);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+        const b = mxBox(xf, boundsOf(o));
+        if (!overlaps(b, rect)) continue;
+        const drop = () => { if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); acc.removed++; } };
+        if (inside(b)) { drop(); continue; }
+        let r;
+        try { r = paintImage(p, o, rect, xf, color); } catch { r = 'drop'; }
+        if (r === 'drop') drop(); else countImage(acc, r);
+      }
+      if (acc.painted || acc.removed) regen(p);
+      return acc;
+    },
+    // rect 안에 완전히 든 선·도형(경로) 객체와 셰이딩(sh) 객체를 뺀다(가린 영역 밑에 그림처럼 그린 글자·서명이 남지 않게).
+    // 걸친 도형은 덮개로만 가려진다(잘라 낼 수 없다 — 영역 밖 부분은 보여야 한다). opts.xf: 이 쪽 좌표 → rect 좌표
+    removePathsIn(i, rect, opts = {}) {
+      const p = page(i), E = 0.01, xf = opts.xf || null;
+      let removed = 0;
+      for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+        const o = P.FPDFPage_GetObject(p, idx), t = o ? P.FPDFPageObj_GetType(o) : 0;
+        if (t !== OBJ_PATH && t !== OBJ_SHADING) continue;
+        const b = mxBox(xf, boundsOf(o));
         if (b.x0 >= rect.x0 - E && b.x1 <= rect.x1 + E && b.y0 >= rect.y0 - E && b.y1 <= rect.y1 + E && P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; }
       }
       if (removed) regen(p);

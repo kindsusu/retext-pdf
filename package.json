@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js && node app/pdf-ocr.test.js",
+    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js && node app/pdf-ocr.test.js && node app/pdf-wave-f.test.js && node app/pdf-form-redact.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
@@ -39,7 +39,10 @@
       "!node_modules/tesseract.js-core/*.wasm.js",
       "!node_modules/tesseract.js-core/*-lstm.{js,wasm}",
       "!node_modules/zlibjs/**",
-      "!node_modules/idb-keyval/**"
+      "!node_modules/idb-keyval/**",
+      "!node_modules/hunspell-wasm/{src,docs}/**",
+      "!node_modules/hunspell-wasm/**/*.map",
+      "!node_modules/hunspell-wasm/tsconfig.json"
     ],
     "asar": true,
     "asarUnpack": [
@@ -50,7 +53,12 @@
       "node_modules/regenerator-runtime/**",
       "node_modules/is-url/**",
       "node_modules/bmp-js/**",
-      "node_modules/wasm-feature-detect/**"
+      "node_modules/wasm-feature-detect/**",
+      "app/spell-worker.js",
+      "app/spell-core.js",
+      "node_modules/hunspell-wasm/**",
+      "node_modules/hunspell-dict-ko/**",
+      "node_modules/dictionary-en/**"
     ],
     "fileAssociations": [
       {
@@ -129,8 +137,11 @@
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.15.0",
+    "dictionary-en": "4.0.0",
     "dompurify": "^3.4.13",
     "fontkit": "^2.0.4",
+    "hunspell-dict-ko": "0.1.0",
+    "hunspell-wasm": "0.3.0",
     "jpeg-js": "^0.4.4",
     "marked": "^15.0.7",
     "tesseract.js": "7.0.0",

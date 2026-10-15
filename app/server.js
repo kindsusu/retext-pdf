@@ -25,6 +25,7 @@ const pdfCompare = require('./pdf-compare');   // v6 Wave D: 두 문서 비교
 const pdfForms = require('./pdf-forms');       // v6 Wave E: 양식 외형(한글)·고정 정리·양식 데이터
 const pdfOffice = require('./pdf-office');     // v6 Wave E: Word(.docx)·한글(.hwpx) 내보내기
 const pdfOcr = require('./pdf-ocr');           // v6 Wave E2: 글자 인식(OCR, 앱 안 tesseract — 문서를 PC 밖으로 보내지 않는다)
+const spell = require('./spell-check');        // v6 Wave F: 맞춤법 검사(오프라인 Hunspell, 한국어·영어)
 const uiModel = require('./ui-model');         // 화면과 같이 쓰는 순수 계산(스캔한 쪽 알아보기)
 const stamps = require('./stamp-store');
 const { buildPrintHtml } = require('./print-html');
@@ -447,7 +448,8 @@ function defaultAuthor() {
 // (파일에서 읽어 온 주석은 지우면 저장본에 남지 않는다). 세션 중 바꿔 넣은 그림의 옛 스트림도 같은 처지다.
 // 그래서 진짜 가리기(개인정보·영역)·주석 지우기·숨은 데이터 지우기 뒤에는 이것을 부른다. 실패하면 false(문서는 그대로 — 가린 결과는 화면·글자에서 이미 유효)
 async function compactDoc(entry) {
-  try { await swapDoc(entry, pdfRewrite.writePdf(pdfRewrite.parsePdf(entry.doc.save()))); return true; }
+  // v6: dedupe 'streams' — 양식 가리기가 배치마다 복사한 글꼴 파일·같은 스트림을 하나로(pdf-rewrite writePdf)
+  try { await swapDoc(entry, pdfRewrite.writePdf(pdfRewrite.parsePdf(entry.doc.save()), { dedupe: 'streams' })); return true; }
   catch (e) { console.error('compact:', e.message); return false; }
 }
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
@@ -646,7 +648,7 @@ async function batchOne(action, doc, bytes, o, ctx) {
     case 'pii': {
       const r = piiRedactDoc(doc, [].concat(o.kinds || pii.KINDS));
       let out = doc.save();
-      try { out = pdfRewrite.writePdf(pdfRewrite.parsePdf(out)); } catch (e) { console.error('batch pii compact:', e.message); }
+      try { out = pdfRewrite.writePdf(pdfRewrite.parsePdf(out), { dedupe: 'streams' }); } catch (e) { console.error('batch pii compact:', e.message); }
       return { bytes: out, info: r };
     }
     case 'protect': {
@@ -714,7 +716,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
     if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
     // P9: 쪽 범위 해석기·목차 글 형식은 화면과 서버가 같은 파일을 쓴다(window.parsePageRange · window.parseOutlineText)
-    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js' || url.pathname === '/inplace-edit.js' || url.pathname === '/find-replace.js' || url.pathname === '/ui-model.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
+    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js' || url.pathname === '/inplace-edit.js' || url.pathname === '/find-replace.js' || url.pathname === '/ui-model.js' || url.pathname === '/text-select.js' || url.pathname === '/spell-core.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION }); // 화면 머리줄의 앱 버전(#ver)이 읽는다
@@ -1265,8 +1267,9 @@ const server = http.createServer(async (req, res) => {
       // P9: 덮개와 겹치는 주석(메모·형광펜·도형, 링크·양식 칸 제외)도 같은 스냅샷 안에서 지운다 — 가린 글자가 주석 메모로 남지 않게.
       // 지운 주석이 있으면 저장본에 고아 객체로 남지 않게 다시 쓴다(compactDoc)
       const r = await mutate(entry, i, () => { const m = maskParts(entry.doc, i, parts, { color, fallbackRects }); if (m.ok) m.annots = entry.doc.removeAnnotsIn ? entry.doc.removeAnnotsIn(i, m.rects) : 0; return m; });
-      if (r.annots) await compactDoc(entry);
-      return json(res, 200, { ok: r.ok, rects: r.ok ? r.rects : [], skipped: r.skipped, annots: r.annots || 0, textLeft: entry.doc.pageText(i), ...stacks(entry) });
+      // v6: 덮개 밑 양식 배치를 복사해 고쳤으면(r.forms) 원래 양식 스트림이 고아로 저장되지 않게 다시 쓴다
+      if (r.annots || r.forms) await compactDoc(entry);
+      return json(res, 200, { ok: r.ok, rects: r.ok ? r.rects : [], skipped: r.skipped, annots: r.annots || 0, forms: r.forms || 0, unsupported: r.unsupported || [], textLeft: entry.doc.pageText(i), ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/undo' && req.method === 'POST') {
       const { name } = await readJson(req);
@@ -1422,7 +1425,7 @@ const server = http.createServer(async (req, res) => {
       snapshot(entry, null, before);
       entry.dirty = true;
       const annots = pagesOut.reduce((n, p) => n + (p.annots || 0), 0);
-      return json(res, 200, { ok: true, redacted, failed, annots, compacted, pages: pagesOut.map((p) => ({ i: p.i, rects: p.rects, annots: p.annots })), reloadAll: true, ...stacks(entry) });
+      return json(res, 200, { ok: true, redacted, failed, annots, compacted, pages: pagesOut.map((p) => ({ i: p.i, rects: p.rects, annots: p.annots, forms: p.forms || 0, unmapped: p.unmapped || 0, unsupported: p.unsupported || [] })), reloadAll: true, ...stacks(entry) });
     }
     // 영역 진짜 가리기(여러 쪽): rect [l,b,r,t](기준 쪽의 PDF 사용자 좌표 — 모든 쪽에 같은 좌표로) 안의 글자 제거 · 그림 픽셀 칠하기 · 도형·주석 빼기 + 덮개
     if (url.pathname === '/api/pdf/redact-area' && req.method === 'POST') {
@@ -1436,7 +1439,7 @@ const server = http.createServer(async (req, res) => {
       const list = pageRange(pages, entry.doc.pageCount);
       const out = await mutate(entry, null, () => ({ ok: true, pages: list.map((i) => ({ i, ...redactArea(entry.doc, i, box, { color: col }) })) }));
       const compacted = await compactDoc(entry); // 같은 스냅샷 안 — 실행 취소는 한 번
-      return json(res, 200, { ok: true, compacted, pages: out.pages.map((p) => ({ i: p.i, rects: p.rects, unmapped: p.unmapped, annots: p.annots, paths: p.paths, images: p.images, skipped: p.skipped.length })), reloadAll: true, ...stacks(entry) });
+      return json(res, 200, { ok: true, compacted, pages: out.pages.map((p) => ({ i: p.i, rects: p.rects, unmapped: p.unmapped, annots: p.annots, paths: p.paths, images: p.images, skipped: p.skipped.length, forms: p.forms || 0, unsupported: p.unsupported || [] })), reloadAll: true, ...stacks(entry) });
     }
     // 숨은 데이터 지우기: 문서 정보는 EPDF_SetMetaText(빈 값)로 비운 뒤, 저장 바이트를 pdf-rewrite.sanitizePdf로 다시 써서(XMP·첨부·자바스크립트·주석·목차·/Info)
     // 그 바이트로 문서를 다시 연다. 다시 쓸 때 닿지 않는 객체는 버리므로 지운 것이 파일에 남지 않는다. 기본: info·xmp·attachments·javascript는 켜고 annotations·bookmarks는 끈다
@@ -1659,6 +1662,46 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, ...r });
       } catch (e) { job.error = e.message; throw e; }
       finally { entry.busy = false; endJob(job); }
+    }
+    // ── v6 Wave F: 맞춤법 검사(오프라인 Hunspell — spell-check.js, 작업 스레드는 네트워크를 막는다) ──
+    // 상태 { available, engine, langs:[{ code, label, version, ok }], userWords, running }
+    if (url.pathname === '/api/spell/status' && req.method === 'GET') return json(res, 200, spell.status());
+    // 낱말·글 검사: { text } → { issues:[{ at, len, word }] }(쪽 위 편집기) · { words:[…] } → { results:[{ word, ok }] }
+    if (url.pathname === '/api/spell/check' && req.method === 'POST') {
+      const q = await readJson(req);
+      if (typeof q.text === 'string') {
+        if (q.text.length > 20000) return json(res, 400, { error: '검사할 글이 너무 깁니다(2만 자까지)' });
+        return json(res, 200, { issues: await spell.checkText(q.text) });
+      }
+      if (!Array.isArray(q.words) || q.words.length > 20000) return json(res, 400, { error: '검사할 낱말(2만 개까지)을 주세요' });
+      return json(res, 200, { results: await spell.check(q.words) });
+    }
+    if (url.pathname === '/api/spell/suggest' && req.method === 'POST') {
+      const q = await readJson(req);
+      return json(res, 200, { word: q.word, suggestions: await spell.suggest(q.word) });
+    }
+    // 사용자 사전(spell-user-dict.json): GET 목록 · POST { add:[…] } / { remove:[…] } · 무시(이번 실행만): POST /api/spell/ignore { words }
+    if (url.pathname === '/api/spell/dict' && req.method === 'GET') return json(res, 200, { words: spell.userDict() });
+    if (url.pathname === '/api/spell/dict' && req.method === 'POST') {
+      const q = await readJson(req);
+      return json(res, 200, q.remove ? await spell.removeWords(q.remove) : await spell.addWords(q.add));
+    }
+    if (url.pathname === '/api/spell/ignore' && req.method === 'POST') return json(res, 200, spell.ignore((await readJson(req)).words));
+    // 문서 검사: { name, pages?('1-3') } → { issues:[{ i, line, at, len, word, lineText, context, rect, editable, reason, suggestions? }], lines, words, unique, ms }
+    if (url.pathname === '/api/spell/scan' && req.method === 'POST') {
+      const q = await readJson(req);
+      const { doc } = await getPdfDoc(q.name);
+      return json(res, 200, await spell.scanDoc(doc, { pages: q.pages ? pageRange(q.pages, doc.pageCount) : null }));
+    }
+    // 고치기: { name, fixes:[{ i, line, at, len, word, lineText, replacement }] } — 조각별 편집(글자 모양 보존), 요청 하나 = 실행 취소 한 번([모두 고치기]도 한 번)
+    if (url.pathname === '/api/spell/fix' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const fixes = Array.isArray(q.fixes) ? q.fixes : [];
+      const pagesOf = [...new Set(fixes.map((f) => f.i))];
+      const r = await textTransaction(entry, pagesOf.length === 1 ? pagesOf[0] : null, (doc) => spell.applyFixes(doc, fixes),
+        (persisted, result) => { for (const i of result.pages) verifyRuns(persisted, i, { written: result.written[i] || [] }); });
+      return json(res, 200, { ok: r.count > 0, count: r.count, pages: r.pages, reloadAll: r.pages.length > 1, ...stacks(entry) });
     }
     // ── v6 Wave E2: 글자 인식(OCR) ──
     // 상태: { available, engine, langs:[{ code, label, bytes, ok }], defaultLangs, source } — 화면이 대화상자를 열 때 묻는다
