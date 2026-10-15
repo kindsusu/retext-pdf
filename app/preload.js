@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('retextPdf', {
   saveAs: (defaultPath, opts) => ipcRenderer.invoke('saveAs', defaultPath, opts),
   // P7 인쇄: { name, pages?:[0 기준] } → { ok } | { ok:false, cancelled } | { error, needPassword? } (main.js 'print')
   print: (opts) => ipcRenderer.invoke('print', opts),
+  // v6 Wave C: 테마('light'|'dark'|'system') → main.js가 nativeTheme·창 바탕색을 맞추고 기억한다
+  setTheme: (pref) => ipcRenderer.invoke('setTheme', pref),
   // 연결 프로그램으로 더블클릭·`electron . <파일>`·두 번째 실행으로 열린 파일을 렌더러에 전달(main.js가 open-paths로 보냄)
   onOpenPaths: (cb) => ipcRenderer.on('open-paths', (_e, paths) => cb(paths)),
   // 드래그해 놓은 File 객체에서 실제 파일 경로를 얻는다(webUtils.getPathForFile — File.path는 보안상 제거됨).

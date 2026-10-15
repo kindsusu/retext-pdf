@@ -1,5 +1,5 @@
 // Electron 셸: 서버를 같은 프로세스에서 띄우고 창을 연다
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -23,6 +23,14 @@ function pathsFromArgv(argv) {
   }
   return out;
 }
+
+// v6 Wave C 테마: 창 바탕색(첫 그리기 전 깜빡임)은 --panel과 같다. 고른 테마(밝게·어둡게·시스템)는 userData/ui-theme.json에 두고
+// 시작할 때 읽는다 — 렌더러의 localStorage는 창이 뜬 뒤에야 읽을 수 있어서다
+const WINDOW_BG = { light: '#fbf9f4', dark: '#262522' };
+const THEME_PREFS = ['light', 'dark', 'system'];
+const themeFile = () => path.join(app.getPath('userData'), 'ui-theme.json');
+function readThemePref() { try { const t = JSON.parse(fs.readFileSync(themeFile(), 'utf8')).theme; return THEME_PREFS.includes(t) ? t : 'light'; } catch { return 'light'; } }
+const resolvedTheme = (pref) => (pref === 'dark' || (pref === 'system' && nativeTheme.shouldUseDarkColors) ? 'dark' : 'light');
 
 function main() {
   // 도장 보관함 등 앱 데이터 폴더. 서버 모듈을 읽기 전에 정한다(stamp-store가 이 값을 쓴다). 시험·개발에서 미리 정했으면 그대로
@@ -50,10 +58,21 @@ function main() {
     let port;
     try { port = await ready; } // 기본 4747이 사용 중이면 서버가 다음 포트로 옮긴다
     catch (e) { dialog.showErrorBox('Retext PDF를 시작할 수 없습니다', `로컬 서버를 열지 못했습니다.\n${e.message}`); app.quit(); return; }
+    let themePref = readThemePref();
+    nativeTheme.themeSource = themePref; // prefers-color-scheme(시스템 따라가기)과 창 틀(제목줄)도 같은 테마
     win = new BrowserWindow({
-      width: 1400, height: 900, title: `Retext PDF v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#fbf9f4',
+      width: 1400, height: 900, title: `Retext PDF v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: WINDOW_BG[resolvedTheme(themePref)],
       webPreferences: { preload: path.join(__dirname, 'preload.js') },
     });
+    // 렌더러가 ⚙ 설정에서 테마를 바꾸면: nativeTheme·창 바탕색을 맞추고 다음 시작을 위해 기억한다
+    ipcMain.handle('setTheme', (_e, pref) => {
+      if (!THEME_PREFS.includes(pref)) return null;
+      themePref = pref; nativeTheme.themeSource = pref;
+      if (win && !win.isDestroyed()) win.setBackgroundColor(WINDOW_BG[resolvedTheme(pref)]);
+      try { fs.writeFileSync(themeFile(), JSON.stringify({ theme: pref })); } catch {}
+      return resolvedTheme(pref);
+    });
+    nativeTheme.on('updated', () => { if (themePref === 'system' && win && !win.isDestroyed()) win.setBackgroundColor(WINDOW_BG[resolvedTheme('system')]); });
     const appUrl = `http://localhost:${port}`;
     win.loadURL(appUrl);
     // Markdown 링크가 앱 창 자체를 이동시키지 못하게 한다: will-navigate는 loadURL·새로고침에는 발생하지 않으므로 사용자가 누른 링크만 걸린다.
@@ -153,8 +172,11 @@ function main() {
       e.preventDefault();
       const dirty = await exec('window.isDirty ? window.isDirty() : false');
       if (dirty) {
+        // v6 Wave C: 탭이 여럿이면 고친 문서 이름을 늘어놓는다. [덮어쓰기]는 고친 탭을 모두 저장한다
+        const names = await exec('window.dirtyNames ? window.dirtyNames() : []');
+        const list = Array.isArray(names) && names.length ? `${names.map((n) => `· ${n}`).join('\n')}\n\n` : '';
         const r = dialog.showMessageBoxSync(win, {
-          type: 'warning', message: '저장하지 않은 변경이 있습니다.', detail: '어떻게 할까요?',
+          type: 'warning', message: '저장하지 않은 변경이 있습니다.', detail: `${list}어떻게 할까요?`,
           buttons: ['이 문서에 덮어쓰기', '다른 이름으로 저장', '저장하지 않고 닫기', '취소'], defaultId: 0, cancelId: 3, noLink: true,
         });
         if (r === 3) return;

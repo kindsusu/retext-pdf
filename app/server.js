@@ -483,7 +483,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
     if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
     // P9: 쪽 범위 해석기·목차 글 형식은 화면과 서버가 같은 파일을 쓴다(window.parsePageRange · window.parseOutlineText)
-    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js' || url.pathname === '/inplace-edit.js' || url.pathname === '/find-replace.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
+    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js' || url.pathname === '/inplace-edit.js' || url.pathname === '/find-replace.js' || url.pathname === '/ui-model.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION }); // 화면 머리줄의 앱 버전(#ver)이 읽는다

@@ -67,6 +67,6 @@ function context(disp, at, len, width = 14) {
   return (a > 0 ? '…' : '') + disp.slice(a, b) + (b < disp.length ? '…' : '');
 }
 
-const api = { findAll, lineMatches, applyReplace, editBlock, context };
-if (typeof window !== 'undefined') window.findReplace = api;
-if (typeof module !== 'undefined') module.exports = api;
+const findReplaceApi = { findAll, lineMatches, applyReplace, editBlock, context }; // 이름이 api면 같은 창의 inplace-edit.js(const api)와 겹쳐 이 파일이 읽히지 않는다(v6 Wave C에서 고침)
+if (typeof window !== 'undefined') window.findReplace = findReplaceApi;
+if (typeof module !== 'undefined') module.exports = findReplaceApi;

@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <title>Retext PDF</title>
+<!-- v6 Wave C: 테마(밝게·어둡게·시스템 따라가기)를 첫 그리기 전에 정한다 — 어두운 테마에서 밝은 화면이 번쩍이지 않게 -->
+<script>try { const t = localStorage.getItem('retextpdf.theme'); document.documentElement.dataset.theme = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light'; } catch {}</script>
 <script src="/vendor/marked.js"></script>
 <script src="/vendor/purify.js"></script>
 <script src="/font-editor.js"></script>
 <script src="/text-grouping.js"></script>
 <script src="/inplace-edit.js"></script><!-- v6: 쪽 위에서 바로 고치기 편집기의 순수 계산(window.inplaceEdit) — Node 시험도 같이 쓴다 -->
 <script src="/find-replace.js"></script><!-- v6: 찾아 바꾸기 일치 계산(window.findReplace, 서버와 같은 규칙) -->
+<script src="/ui-model.js"></script><!-- v6 Wave C: 문서 탭·명령 검색·보기 방식·테마의 순수 계산(window.uiModel) — Node 시험도 같이 쓴다 -->
 <script src="/page-range.js"></script><!-- P9: 쪽 범위 해석기(window.parsePageRange, 서버와 같은 규칙). 없으면 화면 안 checkPageRange로 대신한다 -->
 <style>
   /* 밝은 아이보리 테마: 창 틀(도구줄·패널·대화상자)은 거의 흰 아이보리, 문서 보는 자리만 옅은 회색이라 흰 쪽이 또렷하다.
@@ -20,7 +23,19 @@
     --docBg:#dcdbd7;--paper:#fff;--paperInk:#222;--shadow:0 6px 24px rgba(60,48,30,.16),0 1px 3px rgba(60,48,30,.10);
     --backdrop:rgba(42,40,36,.38);--scroll:#cfc8bb;--scrollHover:#b9b1a2;
     --info:#2f74c0;--warn:#b7791f;--bad:#c0392b;--badText:#b42318;
-    --bannerBg:#fdf1d8;--bannerFg:#6b4300;--bannerLine:#efd7a4}
+    --bannerBg:#fdf1d8;--bannerFg:#6b4300;--bannerLine:#efd7a4;
+    --overlay:rgba(251,249,244,.88);--tabBar:#f0ece4}
+  /* v6 Wave C 어두운 테마(⚙ 설정 → 어둡게 · 시스템 따라가기): 창 틀은 따뜻한 짙은 회색, 문서 뒤 바탕은 짙은 회색, 쪽은 그대로 흰 종이.
+     글자 토큰은 밝은 테마와 같이 대비 4.5:1 이상(ui-wiring.test.js가 두 테마 모두 잰다) */
+  :root[data-theme="dark"]{color-scheme:dark;
+    --bg:#1e1d1b;--panel:#262522;--panel2:#201f1d;--line:#3a3834;--line2:#4b4842;--fg:#ece8e1;--mut:#aaa49b;
+    --hover:#312f2b;--sel:#45302a;--input:#1c1b19;--btn:#2f2d2a;--btnHover:#3a3732;
+    --acc:#d97757;--accText:#f0a283;--accStrong:#b5543a;--accStrongHover:#c35f44;--accBg:rgba(217,119,87,.2);--accLine:rgba(217,119,87,.6);
+    --docBg:#3d3c39;--paper:#fff;--paperInk:#222;--shadow:0 6px 24px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+    --backdrop:rgba(0,0,0,.55);--scroll:#4f4c46;--scrollHover:#635f58;
+    --info:#6aa8ea;--warn:#e3ac4f;--bad:#e5604f;--badText:#ff8f80;
+    --bannerBg:#3b2f17;--bannerFg:#f2d69a;--bannerLine:#5e4b23;
+    --overlay:rgba(30,29,27,.9);--tabBar:#1a1917}
   *{box-sizing:border-box}
   /* 스크롤 막대: 밝은 바탕에 맞춘 옅은 막대(문서 영역 .pdf는 세로 막대를 늘 두어 맞춤 계산이 흔들리지 않게 한다) */
   ::-webkit-scrollbar{width:12px;height:12px}
@@ -195,7 +210,7 @@
   #emptyState .emptyBig{font-size:16px;padding:10px 22px}
   #emptyState .emptyRecent{display:flex;flex-direction:column;gap:2px;width:100%;max-height:180px;overflow:auto;text-align:left;color:var(--fg)}
   #emptyState .emptyTools{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px}
-  #dropOverlay{position:fixed;inset:0;z-index:20;background:rgba(251,249,244,.88);color:var(--accText);font-weight:600;display:flex;align-items:center;justify-content:center;font-size:22px;border:3px dashed var(--acc);pointer-events:none}
+  #dropOverlay{position:fixed;inset:0;z-index:20;background:var(--overlay);color:var(--accText);font-weight:600;display:flex;align-items:center;justify-content:center;font-size:22px;border:3px dashed var(--acc);pointer-events:none}
   /* ---- 문서 영역 ---- */
   main{display:flex;flex-direction:column;min-width:0;min-height:0}
   .bar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
@@ -402,11 +417,115 @@
   dialog.rpDialog label.f span{width:46px;color:var(--mut);flex-shrink:0}
   .rpSkipped{max-height:120px;overflow:auto;font-size:11.5px;color:var(--fg);background:var(--bannerBg);border:1px solid var(--bannerLine);border-radius:8px;padding:6px 8px;line-height:1.5}
   .rpSkipped b{color:var(--bannerFg)}
+  /* ==== v6 Wave C: 문서 탭 · 명령 검색 · 설정 · 시작 화면 · 쪽 보기 방식 · 손 도구 · 읽기 모드 ==== */
+  /* 문서 탭 줄(리본 위): 고른 탭은 아래 리본 탭 줄(--panel2)과 이어진다 */
+  .docTabs{flex-shrink:0;height:34px;display:flex;align-items:flex-end;padding:0 6px;background:var(--tabBar);border-bottom:1px solid var(--line);min-width:0}
+  .dtList{display:flex;align-items:flex-end;gap:2px;min-width:0;height:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+  .dtList::-webkit-scrollbar{display:none}
+  .dt{position:relative;display:flex;align-items:center;gap:6px;height:29px;width:200px;min-width:110px;flex-shrink:1;padding:0 4px 0 10px;margin-bottom:-1px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;color:var(--mut);font-size:12px;user-select:none;cursor:default}
+  .dt:hover{background:var(--hover);color:var(--fg)}
+  .dt.on{background:var(--panel2);border-color:var(--line);color:var(--fg);font-weight:600}
+  .dt.on::after{content:'';position:absolute;left:10px;right:10px;top:-1px;height:2px;border-radius:0 0 2px 2px;background:var(--acc)}
+  .dt .ext{flex-shrink:0;padding:0 4px;border-radius:4px;font-size:9.5px;font-weight:700;letter-spacing:.3px;line-height:15px;background:var(--accBg);color:var(--accText)}
+  .dt .ext.md{background:var(--hover);color:var(--mut)}
+  .dt .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dt .dot{flex-shrink:0;color:var(--accText);font-size:12px;line-height:1}
+  .dt .x{flex-shrink:0;width:20px;height:20px;padding:0;display:flex;align-items:center;justify-content:center;border:0;border-radius:5px;background:transparent;color:var(--mut);font-size:15px;line-height:1}
+  .dt .x:hover{background:var(--btnHover);color:var(--fg)}
+  .dt.dragging{opacity:.45}
+  .dt.dropBefore::before,.dt.dropAfter::before{content:'';position:absolute;top:5px;bottom:5px;width:2px;border-radius:1px;background:var(--acc)}
+  .dt.dropBefore::before{left:-2px}.dt.dropAfter::before{right:-2px}
+  #dtAdd{flex-shrink:0;width:28px;height:26px;margin:0 0 3px 4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--mut);font-size:18px;line-height:1}
+  #dtAdd:hover{background:var(--hover);color:var(--fg)}
+  /* 명령 검색(리본 탭 줄 오른쪽 끝) */
+  .cmdBox{position:relative;display:flex;align-items:center;height:100%;margin-left:8px}
+  .cmdBox>svg{position:absolute;left:8px;width:14px;height:14px;fill:none;stroke:var(--mut);stroke-width:2;stroke-linecap:round;pointer-events:none}
+  #cmdInput{width:200px;height:24px;padding:0 8px 0 27px;border:1px solid var(--line2);border-radius:7px;background:var(--input);color:var(--fg);font:inherit;font-size:12px}
+  #cmdInput:focus{outline:2px solid var(--acc);outline-offset:0;border-color:transparent}
+  #cmdInput::placeholder{color:var(--mut)}
+  .cmdList{position:absolute;right:0;top:calc(100% + 3px);z-index:40;width:360px;max-height:420px;overflow:auto;padding:4px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow)}
+  .cmdItem{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:6px;cursor:pointer}
+  .cmdItem.on{background:var(--sel)}
+  .cmdItem svg{width:18px;height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .cmdItem .cl{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmdItem .cg,.cmdItem .ck{flex-shrink:0;color:var(--mut);font-size:11px}
+  .cmdItem .ck kbd{font:inherit}
+  .cmdItem.off{color:var(--mut)}
+  .cmdEmpty{padding:10px;color:var(--mut)}
+  .tb.cmdFlash,.qa.cmdFlash,.viewBox button.cmdFlash{animation:cmdFlash 1.4s ease-out}
+  @keyframes cmdFlash{0%,45%{background:var(--accBg);box-shadow:0 0 0 2px var(--acc)}100%{box-shadow:0 0 0 2px transparent}}
+  @media (prefers-reduced-motion:reduce){.tb.cmdFlash,.qa.cmdFlash{animation:none;box-shadow:0 0 0 2px var(--acc)}}
+  /* ⚙ 설정 */
+  .setBox{position:relative;display:flex;align-items:center;height:100%;margin-left:4px}
+  .setPop{position:absolute;right:0;top:calc(100% + 3px);z-index:40;width:270px;padding:10px 14px 12px;background:var(--panel);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);font-size:12px}
+  .setPop h5{margin:6px 0 6px;color:var(--mut);font-size:11px;font-weight:600}
+  .setSeg{display:flex;flex-direction:column;gap:4px}
+  .setSeg label,.setRow{display:flex;align-items:center;gap:7px;cursor:pointer}
+  /* 시작 화면 */
+  #emptyState{overflow:auto;align-items:flex-start}
+  .startPage{width:100%;max-width:860px;margin:auto;padding:12px 8px;display:flex;flex-direction:column;gap:22px;text-align:left}
+  .startHead h1{margin:0 0 2px;color:var(--fg);font-size:22px;font-weight:700}
+  .startTasks{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px}
+  .startTask{display:grid;grid-template-columns:34px 1fr;grid-template-rows:auto auto;column-gap:10px;align-items:center;padding:14px 14px;text-align:left;white-space:normal;background:var(--panel);border:1px solid var(--line);border-radius:12px;color:var(--fg);box-shadow:0 1px 2px rgba(60,48,30,.06)}
+  .startTask:hover{background:var(--hover);border-color:var(--accLine)}
+  .startTask svg{grid-row:1/3;width:30px;height:30px;fill:none;stroke:var(--accText);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .startTask b{font-size:14px;font-weight:600;word-break:keep-all}
+  .startTask span{font-size:11.5px;color:var(--mut);line-height:1.35;word-break:keep-all}
+  .startTask.main{background:var(--accStrong);border-color:var(--accStrong);color:#fff}
+  .startTask.main:hover{background:var(--accStrongHover)}
+  .startTask.main svg{stroke:#fff}.startTask.main span{color:#fff;opacity:.92}
+  .startRecent h3{margin:0 0 6px;color:var(--mut);font-size:12px;font-weight:600}
+  #emptyState .emptyRecent{max-height:none;gap:0;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
+  .rItem{display:grid;grid-template-columns:22px minmax(0,1.2fr) minmax(0,2fr) auto 24px;align-items:center;gap:10px;padding:7px 10px 7px 12px;cursor:pointer;border-top:1px solid var(--line)}
+  .rItem:first-child{border-top:0}
+  .rItem:hover{background:var(--hover)}
+  .rItem .ext{font-size:9.5px;font-weight:700;color:var(--accText)}
+  .rItem .rn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg);font-weight:600}
+  .rItem .rd{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mut);font-size:11.5px}
+  .rItem .rt{color:var(--mut);font-size:11.5px;white-space:nowrap}
+  .rItem .rx{width:22px;height:22px;padding:0;border:0;background:transparent;color:var(--mut);visibility:hidden}
+  .rItem:hover .rx{visibility:visible}.rItem .rx:hover{background:var(--btnHover);color:var(--fg)}
+  .rEmpty{padding:14px;color:var(--mut)}
+  /* 상태줄 보기 도구: 손·선택 | 쪽 보기 방식 · 읽기 모드 */
+  .viewBox{display:flex;align-items:center;gap:1px;flex-shrink:0}
+  .viewBox button{width:26px;height:22px;padding:0;display:flex;align-items:center;justify-content:center;background:transparent;border-color:transparent;border-radius:5px;color:var(--fg)}
+  .viewBox button:hover{background:var(--hover)}
+  .viewBox button[aria-pressed="true"]{background:var(--sel);color:var(--accText)}
+  .viewBox svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .vsep{width:1px;height:14px;margin:0 4px;background:var(--line2)}
+  .ctxMenu .chk{display:inline-block;width:16px;color:var(--accText)}
+  /* 쪽 두 개씩 보기: 두 칸 격자 — 왼쪽 쪽은 오른쪽 끝, 오른쪽 쪽은 왼쪽 끝에 붙어 책처럼 펼쳐진다. 표지 따로면 1쪽이 오른쪽 칸에 혼자 */
+  .pdf.spread{display:grid;grid-template-columns:repeat(2,max-content);justify-content:safe center;align-content:start;align-items:start;column-gap:12px;row-gap:20px}
+  .pdf.spread>.pdfPage{margin:0}
+  .pdf.spread:not(.cover)>.pdfPage:nth-child(odd),.pdf.spread.cover>.pdfPage:nth-child(even){justify-self:end}
+  .pdf.spread:not(.cover)>.pdfPage:nth-child(even),.pdf.spread.cover>.pdfPage:nth-child(odd){justify-self:start}
+  .pdf.spread.cover>.pdfPage:first-child{grid-column:2}
+  /* 한 쪽씩 넘기기(연속 스크롤 끔): 지금 쪽(두 개씩이면 그 줄)만 보인다 */
+  .pdf.paged>.pdfPage.offView{display:none}
+  /* 손 도구(상태줄 손 · Space 누른 채): 끌어서 문서를 움직인다. 글자·주석 도구는 누르지 않는다 */
+  .pdf.handMode,.pdf.handMode *{cursor:grab!important}
+  .pdf.handDragging,.pdf.handDragging *{cursor:grabbing!important;user-select:none!important}
+  /* 읽기 모드: 리본·패널·상태줄을 숨기고 문서만. 알약(쪽 번호·나가기)은 마우스를 올리면 또렷해진다 */
+  body.reading .docTabs,body.reading .ribbonBar,body.reading .toolbar,body.reading .ctxbar,body.reading aside,body.reading .propPanel,body.reading .statusbar{display:none!important}
+  body.reading .workarea{grid-template-columns:1fr!important}
+  .readPill{position:fixed;left:50%;bottom:18px;z-index:25;transform:translateX(-50%);display:flex;align-items:center;gap:10px;padding:5px 6px 5px 14px;border:1px solid var(--line2);border-radius:20px;background:var(--panel);box-shadow:var(--shadow);color:var(--fg);font-size:12px;opacity:.35;transition:opacity .2s}
+  .readPill:hover,.readPill.show{opacity:1}
+  .readPill button{padding:3px 10px;border-radius:14px;font-size:12px}
+  /* 탭 닫기 확인 목록 */
+  .ctList{margin:6px 0 10px;padding:8px 10px 8px 28px;max-height:220px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px}
+  .ctList li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  dialog.panel button.danger{color:var(--badText)}
 </style>
 </head>
 <body>
 <!-- 리본(P9): 탭 [홈][주석][쪽][문서][보안]마다 아이콘+이름 버튼 한 줄. 모든 기능이 버튼으로 보인다(숨은 메뉴 없음).
      탭 줄 오른쪽 빠른 실행(저장·실행 취소·다시 실행)은 어느 탭에서나 누를 수 있다 — 도구줄의 같은 버튼을 대신 누른다 -->
+<!-- v6 Wave C 문서 탭 줄: 연 문서마다 탭 하나(이름·고친 내용 ●·닫기 ×). 가운데 단추로 닫기, 끌어 순서 바꾸기, 오른쪽 클릭 메뉴(닫기·다른 탭 닫기·모든 탭 닫기).
+     탭마다 보던 자리(확대·쪽·도구·왼쪽 패널·찾기·쪽 보기 방식)를 따로 기억한다. [+]는 파일 열기 -->
+<div class="docTabs" id="docTabs">
+  <div class="dtList" id="dtList" role="tablist" aria-label="열린 문서"></div>
+  <button type="button" id="dtAdd" title="파일 열기 (Ctrl+O)" aria-label="파일 열기">+</button>
+</div>
 <div class="ribbonBar" id="ribbonBar">
   <div class="ribbonTabs" id="ribbonTabs" role="tablist" aria-label="리본 탭">
     <button type="button" class="rtab on" id="rtab-home" data-rtab="home" role="tab" aria-selected="true" aria-controls="rpanel-home">홈</button>
@@ -420,6 +539,26 @@
     <button type="button" class="qa" id="qaSave" data-icon="save" data-proxy="save" data-modes="pdf md" data-tip="저장 (Ctrl+S)"></button>
     <button type="button" class="qa" id="qaUndo" data-icon="undo" data-proxy="undoBtn" data-modes="pdf" data-tip="실행 취소 (Ctrl+Z)" disabled></button>
     <button type="button" class="qa" id="qaRedo" data-icon="redo" data-proxy="redoBtn" data-modes="pdf" data-tip="다시 실행 (Ctrl+Y)" disabled></button>
+  </div>
+  <!-- v6 Wave C 명령 검색(Ctrl+Q): 리본의 모든 명령을 이름·별칭·초성(ㅇㅎ → 암호)으로 찾아 바로 실행한다. 실행하면 그 탭으로 가서 버튼을 잠깐 빛낸다 -->
+  <div class="cmdBox" id="cmdBox">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+    <input id="cmdInput" type="text" placeholder="명령 검색 (Ctrl+Q)" autocomplete="off" spellcheck="false" role="combobox" aria-expanded="false" aria-controls="cmdList" aria-autocomplete="list" aria-label="명령 검색">
+    <div class="cmdList" id="cmdList" role="listbox" aria-label="찾은 명령" hidden></div>
+  </div>
+  <!-- ⚙ 설정: 테마(밝게·어둡게·시스템 따라가기) · 상자 테두리. 고른 값은 기억한다(retextpdf.theme · retextpdf.outlines) -->
+  <div class="setBox">
+    <button type="button" class="qa" id="setBtn" data-icon="settings" data-tip="설정: 테마·상자 테두리" aria-haspopup="dialog" aria-expanded="false"></button>
+    <div class="setPop" id="setPop" role="dialog" aria-label="설정" hidden>
+      <h5>테마</h5>
+      <div class="setSeg" role="radiogroup" aria-label="테마">
+        <label><input type="radio" name="themePref" value="light"> 밝게</label>
+        <label><input type="radio" name="themePref" value="dark"> 어둡게</label>
+        <label><input type="radio" name="themePref" value="system"> 시스템 따라가기</label>
+      </div>
+      <h5>글자 고치기</h5>
+      <label class="setRow"><input type="checkbox" id="setOutlines"> 고칠 수 있는 상자마다 옅은 테두리</label>
+    </div>
   </div>
 </div>
 <div class="toolbar" id="toolbar" role="toolbar" aria-label="도구 모음">
@@ -596,15 +735,24 @@
     <span class="sp"></span>
     <button id="searchClose" title="닫기 (Esc)" aria-label="찾기 닫기">×</button>
   </div>
+  <!-- v6 Wave C 시작 화면(연 문서가 없을 때): 큰 작업 단추(파일을 고르면 그 작업 창까지 바로 연다) · 최근 파일(이름·폴더·마지막으로 연 때) · 끌어다 놓기 안내 -->
   <div id="emptyState">
-    <div class="emptyCard">
-      <button id="emptyOpen" class="pri emptyBig" hidden>파일 열기</button>
-      <p class="hint2">PDF · MD 파일을 여기에 끌어다 놓으세요</p>
-      <div id="emptyRecent" class="emptyRecent" hidden></div>
-      <div class="emptyTools">
-        <button id="emptyMerge">병합…</button>
-        <button id="emptyDownsampleFiles">여러 파일 용량 줄이기…</button>
-        <button id="emptyExportImages">이미지로 내보내기…</button>
+    <div class="startPage">
+      <div class="startHead"><h1>무엇을 할까요?</h1><p class="hint2">PDF · Markdown 파일을 이 창에 끌어다 놓아도 열립니다</p></div>
+      <div class="startTasks" role="group" aria-label="작업">
+        <button type="button" id="emptyOpen" class="startTask main" data-sicon="open" hidden><b>PDF 열기</b><span>PDF·Markdown 파일을 탭으로 엽니다</span></button>
+        <button type="button" id="startEdit" class="startTask" data-sicon="toolEdit" data-electron><b>편집</b><span>글자를 그 자리에서 고칩니다</span></button>
+        <button type="button" id="emptyMerge" class="startTask" data-sicon="merge"><b>병합</b><span>여러 PDF를 하나로 잇습니다</span></button>
+        <button type="button" id="emptyDownsampleFiles" class="startTask" data-sicon="downsample" data-electron><b>압축(용량 줄이기)</b><span>여러 파일 용량 줄이기</span></button>
+        <button type="button" id="startPii" class="startTask" data-sicon="pii" data-electron><b>개인정보 가리기</b><span>전화번호·이메일 등을 찾아 가립니다</span></button>
+        <button type="button" id="startRaster" class="startTask" data-sicon="rasterize" data-electron><b>이미지 PDF로</b><span>숨은 글자 없이 그림으로 저장</span></button>
+        <button type="button" id="startOrganize" class="startTask" data-sicon="organize" data-electron><b>쪽 정리…</b><span>필요한 쪽만 남기거나 지웁니다</span></button>
+        <button type="button" id="emptyExportImages" class="startTask" data-sicon="exportImages" data-electron><b>이미지로 내보내기</b><span>쪽을 PNG·JPEG로 저장</span></button>
+        <button type="button" id="startProtect" class="startTask" data-sicon="lock" data-electron><b>암호 걸기</b><span>열 때 암호를 묻는 사본</span></button>
+      </div>
+      <div class="startRecent" id="startRecent">
+        <h3>최근 파일</h3>
+        <div id="emptyRecent" class="emptyRecent" role="list"></div>
       </div>
     </div>
   </div>
@@ -660,6 +808,14 @@
   <span class="sigBadge" id="sigBadge" hidden title="이 문서에는 전자서명이 있습니다. 고쳐서 저장하면 서명이 무효가 되므로 다른 이름으로 저장합니다.">전자서명 있음</span>
   <span id="sbMdInfo" hidden></span>
   <span id="status" role="status"></span>
+  <!-- v6 Wave C 보기 도구(ALPDF처럼 상태줄): 손 도구·선택 도구(Space를 누르고 끌면 잠깐 손) | 쪽 보기 방식(한 쪽·두 쪽·표지 따로·연속/한 쪽씩) | 읽기 모드(F11 전체 화면) -->
+  <div class="viewBox" id="viewBox" data-modes="pdf" role="group" aria-label="보기 도구">
+    <button type="button" id="vbSelect" data-icon="pointer" data-tip="선택 도구: 글자를 눌러 고칩니다" aria-pressed="true"></button>
+    <button type="button" id="vbHand" data-icon="hand" data-tip="손 도구: 끌어서 문서를 움직입니다 (Space를 누른 채 끌어도 됩니다)" aria-pressed="false"></button>
+    <span class="vsep"></span>
+    <button type="button" id="vbLayout" data-icon="layoutSingle" data-tip="쪽 보기 방식: 한 쪽 · 두 쪽 · 표지 따로 · 연속 스크롤" aria-haspopup="menu"></button>
+    <button type="button" id="vbRead" data-icon="reading" data-tip="읽기 모드: 리본·패널을 숨깁니다 (F11 전체 화면 · Esc로 나가기)"></button>
+  </div>
   <!-- 확대 비율: 도구줄 이름이 1366px 창에서 다 보이도록 상태줄 오른쪽 끝에 둔다. PDF를 열면 "쪽 전체 보기"로 시작한다 -->
   <div class="zoomBox" id="pdfZoom" data-modes="pdf">
     <button type="button" id="zoomOut" data-icon="minus" data-tip="축소"></button>
@@ -673,6 +829,15 @@
   <span id="ver">Retext PDF</span>
 </div>
 <div id="dropOverlay" hidden>놓아서 열기</div>
+<!-- v6 Wave C 읽기 모드 알약: 쪽 번호 · [나가기]. 마우스를 올리면 또렷해진다 -->
+<div class="readPill" id="readPill" hidden><span id="readPage"></span><button type="button" id="readExit">읽기 모드 나가기 (Esc)</button></div>
+<!-- v6 Wave C 탭 닫기 확인: 저장하지 않은 문서 이름을 늘어놓고 [저장하지 않고 닫기]/[취소]를 묻는다 -->
+<dialog id="closeTabsDialog" class="panel" aria-labelledby="ctTitle"><div class="card" style="width:460px">
+  <h2 id="ctTitle">저장하지 않은 변경이 있습니다</h2>
+  <p class="hint2" id="ctMsg"></p>
+  <ul class="ctList" id="ctList"></ul>
+  <div class="row"><span class="sp"></span><button type="button" id="ctDiscard" class="danger">저장하지 않고 닫기</button><button type="button" id="ctCancel" class="pri">취소</button></div>
+</div></dialog>
 <div id="dragLabel" aria-hidden="true"></div>
 <dialog id="pageExtractDialog" class="panel"><div class="card" style="width:640px">
   <h2>쪽 정리</h2>
@@ -1062,6 +1227,17 @@ async function apiPost(path, payload, opts = {}) {
 }
 const NO_ROUTE_MSG = '이 서버에는 이 기능이 없습니다 (404) — 앱을 새 버전으로 바꾸세요'; // 서버가 그 길(route)을 모를 때(apiPost·apiGet 공용)
 let cur = null, docText = '', savedText = '', curTemp = false, curReadOnly = false;
+// v6 Wave C 문서 탭: tabs = 연 문서(탭 순서, 절대경로). tabViews = 탭마다 보던 자리
+// { dirty, aside, zoomMode, pdfScale, page, frac, scrollLeft, tool, layout, search:{open,query,matchCase}, md:{text,saved,eol,scrollTop,selStart,selEnd,temp,readOnly} }
+// PDF의 고친 내용·실행 취소는 서버가 문서 이름별로 들고 있으므로 탭을 바꿔도 그대로 남는다. Markdown은 고친 글을 탭 기억(md)에 둔다
+const UM = window.uiModel;
+let tabs = [];
+const tabViews = new Map();
+let viewLayout = { spread: false, cover: false, paged: false }, pagedIdx = 0; // v6 Wave C 쪽 보기 방식 · 한 쪽씩 넘기기에서 보이는 쪽
+let reading = false, readingFull = false; // v6 Wave C 읽기 모드(F11이면 전체 화면까지)
+// 문서별로 한 번만 띄우는 알림(암호를 풀고 열었음·전자서명·바깥에서 바뀜) — 탭을 오가도 다시 띄우지 않고, 탭을 닫으면 잊는다
+const docNoted = new Map();
+function notedOnce(name, kind) { const s = docNoted.get(name) || new Set(); if (s.has(kind)) return false; s.add(kind); docNoted.set(name, s); return true; }
 let mdEol = '\n'; // 지금 연 Markdown 파일의 원래 줄바꿈('\r\n'이면 저장할 때 되돌린다)
 const ZOOM_MIN = 0.25, ZOOM_MAX = 4, ZOOM_DEFAULT = 1;
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]; // 상태줄 확대 목록(#zoomSelect)과 −/+ 단계
@@ -1091,6 +1267,7 @@ const showDirty = () => {
   const d = !!dirty();
   $('#dirty').hidden = !d; $('#saveState').hidden = !cur;
   $('#saveText').textContent = d ? '고친 내용 있음' : '저장됨';
+  if (cur && tabs.includes(cur)) { const v = tabViews.get(cur) || {}; if (v.dirty !== d) { v.dirty = d; tabViews.set(cur, v); renderFiles(); } } // v6 Wave C: 탭의 ●
 };
 // 인터넷·메일에서 바로 열린 임시 파일이거나 읽기전용이면 배너를 띄우고, 저장(Ctrl+S/버튼)은 다른 이름으로 저장으로 유도한다(WP-B1)
 const updateTempBanner = () => { $('#tempBanner').hidden = !(curTemp || curReadOnly); };
@@ -1103,16 +1280,26 @@ async function showVersion() {
   } catch {} // 버전 표시는 없어도 편집에는 지장이 없다
 }
 
-// ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
+// ---- 열어 둔 파일 목록 = 문서 탭(v6 Wave C) ----
+// 앱: 왼쪽 「파일」 목록은 탭 목록(tabs)과 같다. 브라우저 화면: files = 작업 폴더의 파일(누르면 탭으로 연다)
 let files = [];
 const basename = (p) => p.split(/[\\/]/).pop();
-// retextpdf.files는 sessionStorage에만 둔다(같은 실행 중 새로고침만 유지, 앱 재시작 시 자동으로 비워짐) — P2-O
-const loadFilesLS = () => { try { files = JSON.parse(sessionStorage.getItem('retextpdf.files') || '[]'); } catch { files = []; } };
-const saveFilesLS = () => sessionStorage.setItem('retextpdf.files', JSON.stringify(files));
+const fileList = () => (window.retextPdf ? tabs : files);
+// 고친 내용이 있는 탭인가: 지금 탭은 화면 상태(쪽 위 편집기의 적용하지 않은 글 포함), 다른 탭은 떠날 때 기억한 값
+const tabDirty = (p) => (p === cur ? !!dirty() || !!(inplace && inplace.dirty()) : !!tabViews.get(p)?.dirty);
+// retextpdf.files(열린 탭)는 sessionStorage에만 둔다(같은 실행 중 새로고침만 유지, 앱 재시작 시 자동으로 비워짐) — P2-O
+const loadFilesLS = () => { try { tabs = JSON.parse(sessionStorage.getItem('retextpdf.files') || '[]').filter((p) => typeof p === 'string').slice(0, UM.MAX_TABS); } catch { tabs = []; } };
+const saveFilesLS = () => sessionStorage.setItem('retextpdf.files', JSON.stringify(tabs));
 function loadRecent() { try { return JSON.parse(localStorage.getItem('retextpdf.recent') || '[]'); } catch { return []; } }
+// 최근 파일을 마지막으로 연 때(시작 화면의 "오늘 14:32") — 경로 → 시각(ms)
+function loadRecentAt() { try { return JSON.parse(localStorage.getItem('retextpdf.recentAt') || '{}') || {}; } catch { return {}; } }
 function pushRecent(p) {
-  const r = loadRecent();
-  localStorage.setItem('retextpdf.recent', JSON.stringify([p, ...r.filter((x) => x !== p)].slice(0, 20)));
+  const r = [p, ...loadRecent().filter((x) => x !== p)].slice(0, 20), at = loadRecentAt();
+  at[p] = Date.now();
+  try {
+    localStorage.setItem('retextpdf.recent', JSON.stringify(r));
+    localStorage.setItem('retextpdf.recentAt', JSON.stringify(Object.fromEntries(r.filter((x) => at[x]).map((x) => [x, at[x]]))));
+  } catch {}
   renderRecent();
 }
 function removeRecentEntry(p) {
@@ -1138,13 +1325,26 @@ function renderRecent() {
   renderEmptyRecent();
 }
 $('#recentList').onclick = (e) => { const el = e.target.closest('[data-r]'); if (el) openRecent(el.dataset.r); };
-// WP-B1: 빈 상태 카드의 최근 파일(최대 6개, 사이드바 목록은 그대로 전체 표시)
+// v6 Wave C 시작 화면의 최근 파일(최대 8개): 이름 · 폴더 · 마지막으로 연 때, 줄 끝 ×는 최근 목록에서만 지운다(파일은 그대로)
 function renderEmptyRecent() {
-  const r = loadRecent().slice(0, 6);
-  $('#emptyRecent').hidden = !r.length;
-  $('#emptyRecent').replaceChildren(...r.map((p) => fileEntry(p, true)));
+  const r = loadRecent().slice(0, 8), at = loadRecentAt();
+  $('#startRecent').hidden = !window.retextPdf; // 브라우저 화면은 최근 파일을 쓰지 않는다
+  if (!r.length) { $('#emptyRecent').replaceChildren(Object.assign(document.createElement('div'), { className: 'rEmpty', textContent: '최근에 연 파일이 없습니다' })); return; }
+  $('#emptyRecent').replaceChildren(...r.map((p) => {
+    const row = document.createElement('div'); row.className = 'rItem'; row.dataset.r = p; row.title = p; row.tabIndex = 0; row.setAttribute('role', 'listitem');
+    row.innerHTML = `<span class="ext">${/\.pdf$/i.test(p) ? 'PDF' : 'MD'}</span><span class="rn"></span><span class="rd"></span><span class="rt"></span><button type="button" class="rx" title="최근 목록에서 지우기" aria-label="최근 목록에서 지우기">×</button>`;
+    row.querySelector('.rn').textContent = basename(p);
+    row.querySelector('.rd').textContent = p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))) || p;
+    row.querySelector('.rt').textContent = UM.whenText(at[p], Date.now());
+    return row;
+  }));
 }
-$('#emptyRecent').onclick = (e) => { const el = e.target.closest('[data-r]'); if (el) openRecent(el.dataset.r); };
+$('#emptyRecent').onclick = (e) => {
+  const el = e.target.closest('[data-r]'); if (!el) return;
+  if (e.target.closest('.rx')) return removeRecentEntry(el.dataset.r);
+  openRecent(el.dataset.r);
+};
+$('#emptyRecent').onkeydown = (e) => { const el = e.target.closest('[data-r]'); if (el && e.key === 'Enter') openRecent(el.dataset.r); };
 // 서버는 고칠 수 없어 존재 확인은 실제 fetch로 한다. /api/file은 없는 파일이면 헤더만 쓰고 스트림 에러로 응답이 끝나지 않을 수 있어 타임아웃을 둔다.
 async function fileExists(p) {
   const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 4000);
@@ -1159,34 +1359,149 @@ async function openRecent(p) {
   else { flash('파일을 찾을 수 없습니다'); removeRecentEntry(p); }
 }
 function renderFiles() {
-  const entries = files.map((f) => { const item = fileEntry(f); item.classList.toggle('on', f === cur); return item; });
+  const list = fileList();
+  const entries = list.map((f) => {
+    const item = fileEntry(f); item.classList.toggle('on', f === cur);
+    if (!tabs.includes(f)) item.querySelector('.x')?.remove(); // 브라우저 화면: 열지 않은 작업 폴더 파일은 닫을 것이 없다
+    else { const x = item.querySelector('.x'); if (x) x.title = '닫기'; if (tabDirty(f)) item.firstChild.textContent += ' ●'; }
+    return item;
+  });
   if (!entries.length) { const empty = document.createElement('div'); empty.className = 'f'; empty.style.color = 'var(--mut)'; empty.textContent = '.md / .pdf 파일 없음'; entries.push(empty); }
   $('#files').replaceChildren(...entries);
+  renderTabs();
 }
+// 여러 파일을 한꺼번에 열면 탭으로 더하고 첫 파일을 고른다. 탭은 UM.MAX_TABS(20)개까지 — 넘는 파일은 열지 않고 알린다
 function addFiles(paths) {
   if (!paths || !paths.length) return;
-  for (const p of paths) if (!files.includes(p)) files.push(p);
-  saveFilesLS(); renderFiles(); open(paths[0]);
+  let skipped = 0;
+  for (const p of paths) {
+    const r = UM.tabOpen({ order: tabs, active: cur }, p);
+    if (r.full) skipped++; else tabs = r.order;
+  }
+  saveFilesLS(); renderFiles();
+  if (skipped) flash(`⚠ 탭은 ${UM.MAX_TABS}개까지 엽니다 — ${skipped}개 파일은 열지 않았습니다`, 5000);
+  if (tabs.includes(paths[0])) open(paths[0]);
 }
-async function removeFile(p) {
+// 탭 닫기(× · 가운데 단추 · Ctrl+W · 파일 목록 ×). opts.confirmed: 이미 물었다(여러 탭 닫기) · opts.noSwitch: 다른 탭으로 옮기지 않는다
+async function removeFile(p, opts = {}) {
   if (cur === p && !(await settleInplace('닫기'))) return; // v6 Wave B: 쪽 위 편집기의 적용하지 않은 글
-  if (cur === p && dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 목록에서 닫을까요?')) return;
-  files = files.filter((f) => f !== p); saveFilesLS();
+  if (!opts.confirmed && tabDirty(p) && !(await confirmCloseTabs([p]))) return;
+  const next = UM.tabClose({ order: tabs, active: cur }, p).active;
+  tabs = tabs.filter((f) => f !== p); saveFilesLS();
+  tabViews.delete(p); docNoted.delete(p);
   if (cur === p) {
-    pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); p9ResetDoc(); // P9: 개인정보 창·주석 그리기·목차 상태는 그 문서 것이다
-    cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
-    curSigned = false; $('#sigBadge').hidden = true;
-    curTemp = curReadOnly = false; updateTempBanner();
-    $('#fname').textContent = ''; $('#fname').title = '';
-    $('#md').hidden = $('#pdf').hidden = true;
-    setTool('edit'); pageSel.clear();
-    renderPageThumbs(); showAsideTab('file');
-    updateEmptyState(); showDirty();
+    if (next && !opts.noSwitch) await open(next, { noStash: true }); // 오른쪽(없으면 왼쪽) 탭으로
+    else {
+      pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); p9ResetDoc(); // P9: 개인정보 창·주석 그리기·목차 상태는 그 문서 것이다
+      cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
+      curSigned = false; $('#sigBadge').hidden = true;
+      curTemp = curReadOnly = false; updateTempBanner();
+      $('#fname').textContent = ''; $('#fname').title = '';
+      $('#md').hidden = $('#pdf').hidden = true;
+      setTool('edit'); pageSel.clear(); setReading(false);
+      renderPageThumbs(); showAsideTab('file');
+      updateEmptyState(); showDirty();
+    }
   }
   renderFiles();
   // 서버 캐시의 미저장 편집도 함께 버린다 — 남겨 두면 다음에 같은 파일을 열 때 "깨끗한 문서"인 척 이전 편집이 나타난다
   if (p.endsWith('.pdf')) await apiPost('/api/pdf/close', { name: p }).catch(() => {});
 }
+// 여러 탭 닫기(탭 오른쪽 클릭 메뉴): 'one' · 'others' · 'right' · 'all'. 저장하지 않은 문서는 이름을 늘어놓고 한 번만 묻는다
+async function closeTabs(kind, p) {
+  const list = UM.tabsToClose({ order: tabs, active: cur }, kind, p);
+  if (!list.length) return;
+  if (list.includes(cur) && !(await settleInplace('닫기'))) return;
+  const dirtyList = UM.dirtyOf(list, tabDirty);
+  if (dirtyList.length && !(await confirmCloseTabs(dirtyList))) return;
+  for (const f of list) await removeFile(f, { confirmed: true });
+}
+function confirmCloseTabs(paths) {
+  return new Promise((resolve) => {
+    const d = $('#closeTabsDialog');
+    $('#ctMsg').textContent = paths.length === 1 ? '저장하지 않고 닫으면 이 문서에서 고친 내용이 사라집니다.' : `저장하지 않고 닫으면 문서 ${paths.length}개에서 고친 내용이 사라집니다.`;
+    $('#ctList').replaceChildren(...paths.map((p) => Object.assign(document.createElement('li'), { textContent: basename(p), title: p })));
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); };
+    $('#ctDiscard').onclick = () => finish(true); $('#ctCancel').onclick = () => finish(false);
+    d.onclose = () => finish(false);
+    d.showModal(); $('#ctCancel').focus();
+  });
+}
+// ---- 문서 탭 줄 그리기·누르기·끌어 옮기기·오른쪽 클릭 메뉴(v6 Wave C) ----
+function renderTabs() {
+  const box = $('#dtList');
+  box.replaceChildren(...tabs.map((p) => {
+    const t = document.createElement('div'), on = p === cur, md = !/\.pdf$/i.test(p);
+    t.className = 'dt' + (on ? ' on' : ''); t.dataset.path = p; t.title = p; t.draggable = true;
+    t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', on); t.tabIndex = on || (!cur && p === tabs[0]) ? 0 : -1;
+    t.innerHTML = `<span class="ext${md ? ' md' : ''}">${md ? 'MD' : 'PDF'}</span><span class="nm"></span>${tabDirty(p) ? '<span class="dot" title="고친 내용 있음">●</span>' : ''}<button type="button" class="x" tabindex="-1" title="닫기 (Ctrl+W)" aria-label="닫기">×</button>`;
+    t.querySelector('.nm').textContent = basename(p);
+    return t;
+  }));
+  const on = box.querySelector('.dt.on');
+  if (on && (on.offsetLeft < box.scrollLeft || on.offsetLeft + on.offsetWidth > box.scrollLeft + box.clientWidth)) box.scrollLeft = on.offsetLeft - 20;
+}
+$('#dtList').addEventListener('click', (e) => {
+  const t = e.target.closest('.dt'); if (!t) return;
+  if (e.target.closest('.x')) return removeFile(t.dataset.path);
+  if (t.dataset.path !== cur) open(t.dataset.path);
+});
+$('#dtList').addEventListener('mousedown', (e) => { if (e.button === 1 && e.target.closest('.dt')) e.preventDefault(); }); // 가운데 단추의 자동 스크롤을 막는다
+$('#dtList').addEventListener('auxclick', (e) => { const t = e.target.closest('.dt'); if (t && e.button === 1) { e.preventDefault(); removeFile(t.dataset.path); } });
+$('#dtList').addEventListener('keydown', (e) => {
+  const t = e.target.closest('.dt'); if (!t) return;
+  const all = [...$('#dtList').children], k = all.indexOf(t);
+  const next = { ArrowRight: k + 1, ArrowLeft: k - 1, Home: 0, End: all.length - 1 }[e.key];
+  if (next != null) { e.preventDefault(); const b = all[(next + all.length) % all.length]; open(b.dataset.path); requestAnimationFrame(() => $('#dtList').querySelector('.dt.on')?.focus()); }
+  else if (e.key === 'Delete') { e.preventDefault(); removeFile(t.dataset.path); }
+  else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(t.dataset.path); }
+});
+$('#dtList').addEventListener('contextmenu', (e) => { const t = e.target.closest('.dt'); if (!t) return; e.preventDefault(); openTabCtxMenu(t.dataset.path, e.clientX, e.clientY); });
+function openTabCtxMenu(p, x, y) {
+  const k = tabs.indexOf(p), menu = document.createElement('div');
+  menu.append(Object.assign(document.createElement('div'), { className: 'mhead', textContent: basename(p) }),
+    menuItem('닫기', () => removeFile(p)),
+    menuItem('다른 탭 닫기', () => closeTabs('others', p), { disabled: tabs.length < 2 }),
+    menuItem('오른쪽 탭 닫기', () => closeTabs('right', p), { disabled: k === tabs.length - 1 }),
+    menuItem('모든 탭 닫기', () => closeTabs('all', p)),
+    menuSep(),
+    menuItem('경로 복사', () => navigator.clipboard?.writeText(p).then(() => flash('경로를 복사했습니다')).catch(() => flash('⚠ 복사하지 못했습니다'))));
+  showCtxMenu(menu, x, y);
+}
+let tabDrag = null;
+const clearTabDrop = () => $('#dtList').querySelectorAll('.dropBefore, .dropAfter').forEach((el) => el.classList.remove('dropBefore', 'dropAfter'));
+function endTabDrag() { tabDrag = null; clearTabDrop(); $('#dtList').querySelectorAll('.dragging').forEach((el) => el.classList.remove('dragging')); }
+$('#dtList').addEventListener('dragstart', (e) => {
+  const t = e.target.closest('.dt'); if (!t) return;
+  tabDrag = t.dataset.path; t.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/x-retext-tab', tabDrag);
+});
+$('#dtList').addEventListener('dragover', (e) => {
+  if (!tabDrag) return;
+  e.preventDefault(); e.stopPropagation(); clearTabDrop();
+  const t = e.target.closest('.dt'); if (!t || t.dataset.path === tabDrag) return;
+  const r = t.getBoundingClientRect(); t.classList.add(e.clientX > r.left + r.width / 2 ? 'dropAfter' : 'dropBefore');
+});
+$('#dtList').addEventListener('drop', (e) => {
+  if (!tabDrag) return;
+  e.preventDefault(); e.stopPropagation();
+  const t = e.target.closest('.dt');
+  if (t && t.dataset.path !== tabDrag) { const r = t.getBoundingClientRect(); moveTab(tabDrag, t.dataset.path, e.clientX > r.left + r.width / 2); }
+  endTabDrag();
+});
+$('#dtList').addEventListener('dragend', endTabDrag);
+function moveTab(path, target, after) {
+  const from = tabs.indexOf(path), to = tabs.indexOf(target); if (from < 0 || to < 0) return;
+  tabs = UM.tabMove(tabs, from, UM.dropIndex(from, to, after)); saveFilesLS(); renderFiles();
+}
+$('#dtAdd').onclick = () => (window.retextPdf ? openFilesDialog() : showAsideTab('file'));
+// Ctrl+Tab·Ctrl+Shift+Tab: 다음·이전 탭 · Ctrl+W: 지금 탭 닫기(기본 메뉴를 쓰지 않아 창 닫기와 겹치지 않는다)
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || document.querySelector('dialog[open]')) return;
+  if (e.key === 'Tab' && tabs.length > 1) { e.preventDefault(); const p = UM.tabCycle({ order: tabs, active: cur }, e.shiftKey ? -1 : 1); if (p) open(p); }
+  else if (e.code === 'KeyW' && !e.shiftKey && cur) { e.preventDefault(); removeFile(cur); }
+});
 // 화면 모드: 'empty'(문서 없음) · 'pdf' · 'md'. 도구줄 버튼·묶음은 data-modes에 적힌 모드에서만 보이고,
 // data-electron은 설치된 앱에서만(브라우저 화면에서는 파일 대화상자를 열 수 없다) 보인다
 const docMode = () => (!cur ? 'empty' : cur.endsWith('.pdf') ? 'pdf' : 'md');
@@ -1198,6 +1513,7 @@ function updateEmptyState() {
   // 보이는 버튼이 하나도 없는 묶음은 구분선째 숨긴다(브라우저 화면의 빈 [파일] 묶음 등)
   document.querySelectorAll('#toolbar .tgroup').forEach((g) => { if (!g.dataset.modes) g.hidden = false; if (!g.hidden && ![...g.children].some((c) => !c.hidden)) g.hidden = true; });
   $('#sbPdfNav').hidden = mode !== 'pdf'; $('#sbMdInfo').hidden = mode !== 'md';
+  if (mode !== 'pdf' && reading) setReading(false); // v6 Wave C: 읽기 모드는 PDF에서만
   if (!has) renderEmptyRecent();
   // 리본: 지금 탭이 이 모드에서 숨었으면(예: Markdown을 열었는데 [쪽] 탭) 기억한 탭 → 홈 순으로 보이는 탭을 고른다(기억은 바꾸지 않는다)
   showRibbonTab(ribbonTabVisible(loadRibbonTab()) ? loadRibbonTab() : 'home', false);
@@ -1213,12 +1529,13 @@ async function initFiles() {
       addFiles(await (await fetch('/api/files?dir=' + encodeURIComponent(p))).json());
     };
     loadFilesLS(); renderFiles(); renderRecent();
-    if (files.length) open(files[0]);
+    if (tabs.length) open(tabs[0]);
   } else {
     const ws = await (await fetch('/api/workspace')).json();
     $('#wsPath').textContent = ws.path.split(/[\\/]/).pop(); $('#wsPath').title = ws.path;
     files = await (await fetch('/api/files')).json();
-    renderFiles();
+    loadFilesLS(); tabs = tabs.filter((p) => files.includes(p)); renderFiles();
+    if (tabs.length) open(tabs[0]);
   }
   updateEmptyState();
 }
@@ -1274,30 +1591,52 @@ $('#asideTabs').onclick = (e) => { const btn = e.target.closest('.tabBtn'); if (
 // ---- 빈 상태 빠른 도구(WP-B1: 병합만 연결, 나머지는 B2) ----
 $('#emptyMerge').onclick = openMergeDialog;
 
-async function open(name) {
+// 문서 열기 = 그 탭 고르기(v6 Wave C). 처음 여는 문서면 탭을 더한다. 떠나는 탭의 보던 자리는 stashView로 기억하고,
+// 고친 내용은 버리지 않는다(PDF는 서버가 문서별로, Markdown은 탭 기억이 들고 있다). 돌아오면 확대·쪽·도구·왼쪽 패널·찾기를 되살린다
+// opts.noStash: 떠나는 탭을 기억하지 않는다(그 탭을 닫는 중) · opts.reload: 이미 고른 탭도 다시 그린다
+async function open(name, opts = {}) {
   if (name !== cur && !(await settleInplace('열기'))) return; // v6 Wave B: 쪽 위 편집기의 적용하지 않은 글
-  if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
-  if (cur && cur.endsWith('.pdf') && pdfDirty) await apiPost('/api/pdf/close', { name: cur }).catch(() => {}); // 버리기로 했으니 서버 캐시도 닫는다
+  if (name === cur && !opts.reload) { renderFiles(); return; }
+  if (!tabs.includes(name)) {
+    const r = UM.tabOpen({ order: tabs, active: cur }, name);
+    if (r.full) { flash(`⚠ 탭은 ${UM.MAX_TABS}개까지 엽니다 — 쓰지 않는 탭을 닫고 다시 여세요`, 5000); return; }
+    tabs = r.order; saveFilesLS();
+  }
+  if (!opts.noStash) stashView();
+  const view = tabViews.get(name) || null;
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
   closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); // 토스트의 [실행 취소]는 이전 문서 것이다
   p9ResetDoc(); // P9: 개인정보 결과·쓰는 중인 주석·주석/목차 목록은 이전 문서 것이다
-  pdfDocName = null; externalWarned = null; securityNoted = null; signedNoted = null; curSigned = false; $('#sigBadge').hidden = true; // 명시적으로 여는 것이므로 1쪽부터
-  cur = name; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false;
+  pdfDocName = null; externalWarned = null; signedNoted = null; curSigned = false; $('#sigBadge').hidden = true; // 다시 그리는 것이 아니라 여는 것 — 보던 자리는 view로 되살린다
+  cur = name; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = !!view?.dirty;
   curTemp = curReadOnly = false; updateTempBanner();
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name;
   const isPdf = name.endsWith('.pdf');
   setTool('edit'); pageSel.clear(); pageAnchor = null;
   zoomMode = 'fitPage'; // 새로 여는 문서는 쪽 전체 보기로 시작한다(%는 문서를 보는 동안만 유지)
+  if (view?.zoomMode) { zoomMode = view.zoomMode; if (zoomMode === 'manual' && view.pdfScale) pdfScale = view.pdfScale; } // 탭으로 돌아오면 그 탭의 확대
+  setViewLayout(view?.layout || defaultLayout(), false);
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf;
   updateEmptyState(); showDirty();
-  showAsideTab(isPdf ? 'page' : 'file'); // PDF는 쪽 목록, Markdown은 파일 목록
+  showAsideTab(view?.aside || (isPdf ? 'page' : 'file')); // PDF는 쪽 목록, Markdown은 파일 목록(탭으로 돌아오면 그 탭에서 보던 패널)
   setUndoRedoState(0, 0);
-  if (isPdf) { await renderPdfDoc(name); maybeShowHint(); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
-  else {
+  if (isPdf) {
+    // 찾기 상태도 탭마다: 열려 있었으면 같은 말로 다시 찾는다(renderPdfDoc 끝)
+    $('#searchInput').value = view?.search?.query || ''; $('#searchMatchCase').checked = !!view?.search?.matchCase; $('#searchBar').hidden = !view?.search?.open;
+    await renderPdfDoc(name, view); // 미저장 여부·실행취소 스택은 서버 info로 채워진다
+    if (cur !== name) return;
+    if (view?.tool && view.tool !== 'edit' && pdfPages.length) setTool(view.tool);
+    maybeShowHint();
+  } else if (view?.md && view.md.text !== view.md.saved) { // 고친 Markdown: 탭 기억의 글(디스크에서 다시 읽지 않는다)
+    mdEol = view.md.eol; curTemp = !!view.md.temp; curReadOnly = !!view.md.readOnly; updateTempBanner();
+    docText = view.md.text; savedText = view.md.saved; $('#src').value = docText; preview(); updateMdStatus();
+    $('#src').scrollTop = view.md.scrollTop || 0; $('#src').setSelectionRange(view.md.selStart || 0, view.md.selEnd || 0);
+    renderPageThumbs();
+  } else {
     const r = await fetch('/api/file?name=' + encodeURIComponent(name));
     if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다 — 늦은 결과로 다른 문서를 덮어쓰지 않는다
-    if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name); }
+    if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name, { confirmed: true }); }
     const text = await r.text();
     if (cur !== name) return;
     curTemp = r.headers.get('X-Retext-Pdf-Temp') === '1'; curReadOnly = r.headers.get('X-Retext-Pdf-Readonly') === '1'; updateTempBanner();
@@ -1305,10 +1644,38 @@ async function open(name) {
     // 화면 안에서는 LF로 다루고, 저장할 때 원래 줄바꿈(CRLF)으로 되돌려 쓴다
     mdEol = /\r\n/.test(text) ? '\r\n' : '\n';
     docText = savedText = text.replace(/\r\n/g, '\n'); $('#src').value = docText; preview(); updateMdStatus();
+    if (view?.md) $('#src').scrollTop = view.md.scrollTop || 0;
     renderPageThumbs();
   }
   if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다
   showDirty();
+  if (pendingAfterOpen && pendingAfterOpen.name === name) { const fn = pendingAfterOpen.fn; pendingAfterOpen = null; fn(); } // 시작 화면 작업: 파일을 연 뒤 그 작업 창
+}
+// 떠나는 탭의 보던 자리를 기억한다(탭 바꾸기·닫기 전)
+function stashView() {
+  if (!cur || !tabs.includes(cur)) return;
+  const v = tabViews.get(cur) || {};
+  v.dirty = !!dirty();
+  v.aside = document.querySelector('#asideTabs .tabBtn.on')?.dataset.tab || 'file';
+  if (cur.endsWith('.pdf')) {
+    const el = $('#pdf'), i = currentPageIndex(), w = el.children[i];
+    Object.assign(v, { zoomMode, pdfScale, page: i, frac: w && w.offsetHeight ? (el.scrollTop - w.offsetTop) / w.offsetHeight : 0, scrollLeft: el.scrollLeft, tool, layout: { ...viewLayout },
+      search: { open: !$('#searchBar').hidden, query: $('#searchInput').value, matchCase: $('#searchMatchCase').checked } });
+  } else {
+    const ta = $('#src');
+    v.md = { text: docText, saved: savedText, eol: mdEol, scrollTop: ta.scrollTop, selStart: ta.selectionStart, selEnd: ta.selectionEnd, temp: curTemp, readOnly: curReadOnly };
+  }
+  tabViews.set(cur, v);
+}
+// 시작 화면의 작업 단추: 파일을 고르게 하고, 열리면 그 작업(쪽 정리·개인정보 찾기 …)을 바로 띄운다
+let pendingAfterOpen = null;
+async function openThen(fn, pdfOnly = true) {
+  if (!window.retextPdf) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const paths = (await window.retextPdf.openFiles()) || [];
+  const p = pdfOnly ? paths.find((x) => /\.pdf$/i.test(x)) : paths[0];
+  if (!p) { if (paths.length) flash('PDF 파일을 고르세요', 3000); return; }
+  pendingAfterOpen = { name: p, fn };
+  addFiles([p, ...paths.filter((x) => x !== p)]);
 }
 // 원격 이미지는 자동으로 불러오지 않는다(열람만으로 외부에 요청이 나가는 것을 막음) — 링크로 바꿔 누르면 기본 브라우저로 연다.
 // innerHTML에 바로 넣으면 img가 즉시 요청을 보내므로, 요청이 없는 DOMParser 문서에서 치환한 뒤 옮긴다. data:·상대 경로 이미지는 그대로 둔다.
@@ -1325,8 +1692,8 @@ function preview() {
 }
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); updateMdStatus(); };
 // Markdown 저장. 실패(파일 잠김·권한)를 그대로 알리고 미저장 표시를 유지한다 — 조용히 "저장됨"으로 넘어가면 닫을 때 편집을 잃는다
-async function putText(name, text) {
-  if (mdEol === '\r\n') text = text.replace(/\r?\n/g, '\r\n');
+async function putText(name, text, eol = mdEol) {
+  if (eol === '\r\n') text = text.replace(/\r?\n/g, '\r\n');
   let r; try { r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
 }
@@ -1364,7 +1731,7 @@ const signedAck = new Set(); // [계속]을 고른 문서(다시 묻지 않는�
 function showSigned(name, sec) {
   curSigned = !!sec?.signed;
   $('#sigBadge').hidden = !curSigned;
-  if (curSigned && signedNoted !== name) {
+  if (curSigned && signedNoted !== name && notedOnce(name, 'signed')) {
     signedNoted = name;
     toast(`이 문서에는 전자서명이 있습니다${sec.signatures > 1 ? `(${sec.signatures}개)` : ''}. 고쳐서 저장하면 서명이 무효가 되므로 다른 이름으로 저장합니다.`, { kind: 'warning', ms: 9000 });
   }
@@ -1465,7 +1832,11 @@ async function saveAs(opts = {}) {
     if (name.endsWith('.pdf')) await apiPost('/api/pdf/saveas', { name, to });
     else await putText(to, text);
   } catch (error) { flash('⚠ ' + error.message, 5000); return; }
-  if (!files.includes(to)) files.push(to);
+  // v6 Wave C: 탭은 그 자리에서 새 이름으로 바뀐다(PDF는 서버도 문서를 새 경로로 옮긴다). 새 경로가 다른 탭에 열려 있었으면 그 탭은 닫는다
+  const oldTab = tabs.includes(to) && to !== name;
+  tabs = tabs.filter((f) => f !== to || f === name).map((f) => (f === name ? to : f)); if (!tabs.includes(to)) tabs.push(to);
+  if (oldTab) tabViews.delete(to);
+  if (tabViews.has(name)) { tabViews.set(to, tabViews.get(name)); tabViews.delete(name); }
   if (cur !== name) { saveFilesLS(); renderFiles(); flash('다른 이름으로 저장됨 — 그사이 다른 문서로 옮겨 현재 화면은 그대로 둡니다', 4000); return; } // 늦은 결과로 다른 문서를 바꿔치지 않는다
   if (name.endsWith('.pdf')) { if (seq === mutationSeq) pdfDirty = false; } else savedText = text;
   saveFilesLS(); cur = to; if (pdfDocName === name) pdfDocName = to; pushRecent(to); renderFiles();
@@ -1481,10 +1852,28 @@ $('#save').onclick = saveOrSaveAs;
 $('#saveAs').onclick = saveAs;
 // 창 닫기 대화상자(main.js)에서 호출: 저장 성공이면 true. "이 문서에 덮어쓰기"는 사용자가 그 자리에 쓰겠다고 명시적으로 고른 선택이라
 // 임시 파일이어도 saveAs로 돌리지 않는다(다른 이름으로 저장은 별도 버튼으로 이미 있음).
-window.retextPdfSave = async () => { await save({ pending: 'apply' }); return !dirty(); };
-window.retextPdfSaveAs = async () => { await saveAs({ pending: 'apply' }); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
-// 창 닫기 확인(main.js)은 쪽 위 편집기에 적용하지 않은 글도 미저장으로 본다(v6 Wave B)
-window.isDirty = () => !!dirty() || !!(inplace && inplace.dirty());
+// v6 Wave C: 창 닫기 → [저장]은 지금 탭과 다른 탭의 고친 문서를 모두 저장한다. 하나라도 못 하면(보호 원본 등) 그 탭을 보이고 닫지 않는다
+window.retextPdfSave = async () => { await save({ pending: 'apply' }); return !dirty() && saveOtherTabs(); };
+window.retextPdfSaveAs = async () => { await saveAs({ pending: 'apply' }); return !dirty() && saveOtherTabs(); }; // 대화상자에서 취소하면 dirty 그대로 → false
+// 창 닫기 확인(main.js)은 쪽 위 편집기에 적용하지 않은 글과 다른 탭의 고친 내용도 미저장으로 본다(v6 Wave B·C)
+window.isDirty = () => !!dirty() || !!(inplace && inplace.dirty()) || tabs.some((p) => p !== cur && tabDirty(p));
+window.dirtyNames = () => tabs.filter(tabDirty).map(basename); // 창 닫기 확인 창에 늘어놓는다
+async function saveOtherTabs() {
+  for (const p of tabs.filter((f) => f !== cur && tabDirty(f))) {
+    const v = tabViews.get(p);
+    try {
+      if (p.endsWith('.pdf')) await apiPost('/api/pdf/save', { name: p }, { silent: true });
+      else { await putText(p, v.md.text, v.md.eol); v.md.saved = v.md.text; }
+      v.dirty = false;
+    } catch (error) {
+      renderFiles(); await open(p);
+      toast(error.data?.needSaveAs ? `${basename(p)}: 보호된 원본이라 그 자리에 저장하지 않습니다 — 다른 이름으로 저장하세요` : `${basename(p)}을(를) 저장하지 못했습니다: ${error.message}`, { kind: 'warning', ms: 8000 });
+      return false;
+    }
+  }
+  renderFiles();
+  return true;
+}
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey || e.key.toLowerCase() !== 's') return;
   e.preventDefault(); e.shiftKey ? saveAs() : saveOrSaveAs();
@@ -1513,7 +1902,7 @@ async function pdfMutate(path, payload, opts) {
 }
 // 서버가 디스크 변경을 감지하고도 메모리의 미저장 편집본을 유지했다는 신호 — 문서당 한 번만 알린다
 function noteExternalChange(r) {
-  if (!r || !r.externalChange || externalWarned === cur) return;
+  if (!r || !r.externalChange || externalWarned === cur || !notedOnce(cur, 'external')) return;
   externalWarned = cur;
   flash('⚠ 다른 프로그램이 이 파일을 바꿨습니다 — 저장하지 않은 편집본을 유지하고 있으며, 저장하면 그 변경을 덮어씁니다', 8000);
 }
@@ -1687,7 +2076,7 @@ function buildPages(name, scale) {
   });
   $('#pdf').replaceChildren(frag);
 }
-async function renderPdfDoc(name) {
+async function renderPdfDoc(name, restore = null) { // restore: 탭으로 돌아올 때 그 탭의 보던 자리(stashView)
   const renderGeneration = ++pdfRenderGeneration, el = $('#pdf');
   // 같은 문서를 다시 그리는 경우(회전·순서·삭제·실행 취소)에는 보던 쪽과 쪽 안 위치를 유지한다. 명시적으로 여는 경우(open)는 pdfDocName이 비어 1쪽부터
   const keep = pdfDocName === name && el.children.length ? { page: currentPageIndex(), offset: el.scrollTop - el.children[currentPageIndex()].offsetTop } : null;
@@ -1717,11 +2106,17 @@ async function renderPdfDoc(name) {
   noteSecurity(name, info.security);
   showSigned(name, info.security); // v6 Wave B: 전자서명 — 토스트·상태줄 표시
   // 맞춤 방식(쪽 전체 보기·폭 맞춤)이면 그릴 때마다 배율을 다시 잰다 — 처음 열 때는 1쪽, 다시 그릴 때(회전 등)는 보던 쪽 기준
-  const keepPage = keep ? Math.min(keep.page, pdfPages.length - 1) : 0;
+  const keepPage = keep ? Math.min(keep.page, pdfPages.length - 1) : restore?.page != null ? Math.max(0, Math.min(restore.page, pdfPages.length - 1)) : 0;
   if (zoomMode !== 'manual' && pdfPages.length) pdfScale = fitScale(zoomMode, keepPage);
   showZoom();
   buildPages(name, pdfScale); pdfDocName = name;
+  pagedIdx = keepPage; applyViewLayout(); // v6 Wave C: 두 쪽·한 쪽씩 보기
   if (keep && pdfPages.length) el.scrollTop = zoomMode === 'fitPage' ? pageTop(keepPage) : el.children[keepPage].offsetTop + (keepPage === keep.page ? keep.offset : 0); // 쪽 수가 줄었으면 마지막 쪽으로
+  else if (restore && pdfPages.length) { // 탭으로 돌아왔다: 그 탭에서 보던 쪽·쪽 안 위치
+    const w = el.children[keepPage], frac = restore.frac || 0;
+    el.scrollTop = zoomMode === 'fitPage' && Math.abs(frac) < 0.02 ? pageTop(keepPage) : w.offsetTop + frac * w.offsetHeight;
+    el.scrollLeft = restore.scrollLeft || 0;
+  }
   updateStatusPage(); renderPageThumbs(); // 상태줄 쪽 번호·사이드바 축소본(WP-B1)
   for (let i = 0; i < pdfPages.length; i++) {
     let objs;
@@ -1739,7 +2134,7 @@ async function renderPdfDoc(name) {
 }
 // 암호·편집 제한을 풀고 연 문서는 열 때 한 번 알린다(저장하면 보호 없는 사본이 된다는 것까지)
 function noteSecurity(name, sec) {
-  if (!sec || !(sec.encrypted || sec.restricted) || securityNoted === name) return;
+  if (!sec || !(sec.encrypted || sec.restricted) || securityNoted === name || !notedOnce(name, 'security')) return;
   securityNoted = name;
   toast(sec.openPassword ? '암호를 풀고 열었습니다. 저장하면 암호 없는 사본이 됩니다.' : '편집 제한을 풀고 열었습니다. 저장하면 제한 없는 사본이 됩니다.', { kind: 'info', ms: 7000 });
 }
@@ -2991,7 +3386,7 @@ function rpDrawHit(scroll) {
   const s = pdfToScreen(page, m.rect), el = document.createElement('div');
   el.className = 'searchHit cur rpHit'; el.style.cssText = `left:${s.left}px;top:${s.top}px;width:${s.width}px;height:${s.height}px`;
   wrap.appendChild(el);
-  if (scroll) el.scrollIntoView({ block: 'center' });
+  if (scroll) { revealPage(m.i); el.scrollIntoView({ block: 'center' }); }
 }
 function rpStep(dir) { if (!rp.matches.length) return; rp.cur = (rp.cur + dir + rp.matches.length) % rp.matches.length; rpShow(true); }
 async function rpReplaceOne() {
@@ -3073,6 +3468,7 @@ function fitScale(mode, idx = currentPageIndex()) {
   const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 2;
   const h = el.offsetHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom); // 가로 막대는 맞춘 뒤 사라지므로 offsetHeight로 잰다
   if (!(w > 0 && h > 0) || !pdfPages.length) return pdfScale; // 숨겨져 있어 잴 수 없다 — 그대로 둔다
+  if (viewLayout.spread) return UM.fitScale({ mode, viewW: w, viewH: h, pages: pdfPages, idx, layout: viewLayout, gap: 12, min: ZOOM_MIN, max: ZOOM_MAX }); // v6 Wave C: 두 쪽(그 줄)이 들어가게
   const p = pdfPages[Math.max(0, Math.min(pdfPages.length - 1, idx))];
   const s = mode === 'fitWidth' ? w / Math.max(...pdfPages.map((q) => q.w)) : Math.min(w / p.w, h / p.h);
   return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.floor(s * 100) / 100));
@@ -3086,8 +3482,9 @@ function applyZoom(next, anchor) {
   const ax = anchor ? anchor.x - rect.left : el.clientWidth / 2, ay = anchor ? anchor.y - rect.top : el.clientHeight / 2;
   const docX = el.scrollLeft + ax, docY = el.scrollTop + ay;
   // 기준 페이지: 커서가 놓인 페이지(없으면 가장 가까운 페이지) 안의 상대 위치(fx, fy)를 기억했다가 새 크기에서 같은 자리로 스크롤
-  const target = wraps.find((w) => docY >= w.offsetTop && docY <= w.offsetTop + w.offsetHeight)
-    || wraps.reduce((best, w) => (Math.abs(w.offsetTop - docY) < Math.abs(best.offsetTop - docY) ? w : best), wraps[0]);
+  const shown = wraps.filter((w) => !w.classList.contains('offView')); // 한 쪽씩 넘기기에서 숨은 쪽은 기준이 될 수 없다
+  const target = shown.find((w) => docY >= w.offsetTop && docY <= w.offsetTop + w.offsetHeight)
+    || shown.reduce((best, w) => (Math.abs(w.offsetTop - docY) < Math.abs(best.offsetTop - docY) ? w : best), shown[0] || wraps[0]);
   const fx = (docX - target.offsetLeft) / target.offsetWidth, fy = (docY - target.offsetTop) / target.offsetHeight;
   const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => `${o.idx}:${o.partFrom || 0}`), para: !!selectedObj.para, text: el.querySelector('.pdfEditor textarea')?.value, caret: (() => { const t = el.querySelector('.pdfEditor textarea'); return t && { start: t.selectionStart, end: t.selectionEnd }; })() };
   // v6 쪽 위 편집기: 고치던 내용(DOM)·고른 범위·손잡이 상자를 새 배율에서 되살린다
@@ -3178,6 +3575,7 @@ document.addEventListener('keydown', (e) => {
 function currentPageIndex() { // 스크롤 뷰포트 가운데에 가장 가까운 페이지(이미지 삽입·현재 쪽 내보내기 기준)
   const el = $('#pdf'), wraps = [...el.children];
   if (!wraps.length) return 0;
+  if (viewLayout.paged) return Math.max(0, Math.min(wraps.length - 1, pagedIdx)); // v6 Wave C: 한 쪽씩 넘기기는 보이는 쪽
   const mid = el.scrollTop + el.clientHeight / 2;
   let best = 0, bestDist = Infinity;
   wraps.forEach((w, i) => { const c = w.offsetTop + w.offsetHeight / 2, d = Math.abs(c - mid); if (d < bestDist) { bestDist = d; best = i; } });
@@ -3241,12 +3639,14 @@ $('#rotateRight').onclick = () => { const t = rotateTargets(); rotatePages(t, 90
 // 쪽 이동(PageUp/PageDown·Home/End·쪽 번호 입력·쪽 목록): 그 쪽 맨 위를 위 여백 바로 아래에 맞춘다 — 쪽 전체 보기면 한 쪽이 꼭 맞게 보인다
 function goToPage(idx) {
   const el = $('#pdf'), n = el.children.length; if (!n) return;
+  if (viewLayout.paged) { pagedIdx = Math.max(0, Math.min(n - 1, idx)); applyViewLayout(); el.scrollTop = 0; updateStatusPage(); return; } // v6 Wave C: 한 쪽씩 넘기기
   el.scrollTop = pageTop(Math.max(0, Math.min(n - 1, idx)));
 }
 function updateStatusPage() { // 쪽 번호 입력·전체쪽 표시를 현재 스크롤 위치에 맞춘다
   if (!cur || !cur.endsWith('.pdf')) return;
   if (document.activeElement !== $('#pageNumInput')) $('#pageNumInput').value = currentPageIndex() + 1;
   $('#pageCountLabel').textContent = `/ ${pdfPages.length}`;
+  if (reading) $('#readPage').textContent = `${currentPageIndex() + 1} / ${pdfPages.length}쪽`;
   highlightPageThumb();
 }
 function updateMdStatus() { $('#sbMdInfo').textContent = `${docText.length.toLocaleString()}자`; } // Markdown: 쪽 대신 글자 수
@@ -3260,8 +3660,8 @@ document.addEventListener('keydown', (e) => {
   if (!cur || !cur.endsWith('.pdf')) return;
   const tag = (document.activeElement || {}).tagName;
   if (tag === 'TEXTAREA' || tag === 'INPUT') return;
-  if (e.key === 'PageDown') { e.preventDefault(); goToPage(currentPageIndex() + 1); }
-  else if (e.key === 'PageUp') { e.preventDefault(); goToPage(currentPageIndex() - 1); }
+  if (e.key === 'PageDown') { e.preventDefault(); goToPage(UM.stepPage(currentPageIndex(), 1, pdfPages.length, viewLayout)); } // 두 쪽 보기면 줄 단위
+  else if (e.key === 'PageUp') { e.preventDefault(); goToPage(UM.stepPage(currentPageIndex(), -1, pdfPages.length, viewLayout)); }
   else if (e.key === 'Home') { e.preventDefault(); goToPage(0); }
   else if (e.key === 'End') { e.preventDefault(); goToPage(pdfPages.length - 1); }
 });
@@ -3678,6 +4078,7 @@ function searchStep(dir, first) {
   searchCur = first ? 0 : (((searchCur + dir) % searchHits.length) + searchHits.length) % searchHits.length;
   highlightCurrentHit(); updateSearchCount();
   const hit = searchHits[searchCur], wrap = $('#pdf').children[hit.i];
+  revealPage(hit.i);
   (wrap?.querySelector(`.searchHit[data-hit="${searchCur}"]`) || wrap)?.scrollIntoView({ block: 'center' });
 }
 // 검색 결과 rect의 중심이 들어가는 줄(그룹 라인)을 찾는다 — "줄 전체 가리기"만 제공(글자 단위 매핑은 어려워 계획대로 생략)
@@ -3711,8 +4112,7 @@ async function exportImagesFromFile() {
   const paths = await window.retextPdf.openFiles();
   const pdf = (paths || []).find((p) => /\.pdf$/i.test(p));
   if (!pdf) return;
-  if (!files.includes(pdf)) { files.push(pdf); saveFilesLS(); renderFiles(); }
-  await open(pdf);
+  await open(pdf); // 탭으로 더해 연다
   if (cur === pdf) openExportImagesDialog(); // 열기를 취소했으면(미저장 확인에서 [취소]) 창을 띄우지 않는다
 }
 let downsampleFilesPaths = [];
@@ -4149,6 +4549,14 @@ const ICONS = {
   indent: '<path d="M4 6h16M11 12h9M4 18h16"/><path d="m4 9.5 3.5 2.5L4 14.5"/>',
   outdent: '<path d="M4 6h16M11 12h9M4 18h16"/><path d="M7.5 9.5 4 12l3.5 2.5"/>',
   trash: '<path d="M4 7h16"/><path d="M9.5 7V4.5h5V7"/><path d="m6 7 1 13h10l1-13"/>',
+  // v6 Wave C: 설정 · 선택/손 도구 · 쪽 보기 방식 · 읽기 모드
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  pointer: '<path d="M5.5 3.5 18 10l-5.6 1.7L10 17.5z"/><path d="m12.4 11.7 5.1 6.3"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
+  layoutSingle: '<rect x="7" y="3.5" width="10" height="17" rx="1.5"/><path d="M9.5 8h5M9.5 11h5M9.5 14h3"/>',
+  layoutTwo: '<rect x="2.5" y="4" width="8.5" height="16" rx="1.2"/><rect x="13" y="4" width="8.5" height="16" rx="1.2"/>',
+  layoutCover: '<rect x="2.5" y="4" width="8.5" height="16" rx="1.2" stroke-dasharray="2 2.2"/><rect x="13" y="4" width="8.5" height="16" rx="1.2"/>',
+  reading: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`;
 
@@ -4190,6 +4598,12 @@ const SHORTCUTS = [
   { group: '보기', keys: 'Ctrl+0', label: '폭 맞춤' },
   { group: '보기', keys: 'Ctrl+1', label: '쪽 전체 보기' },
   { group: '보기', keys: 'Ctrl+/ / F1', label: '단축키 보기', target: 'helpBtn' },
+  { group: '보기', keys: 'Ctrl+Q', label: '명령 검색(이름·초성으로 찾아 실행)' },
+  { group: '보기', keys: 'Space+끌기', label: '손 도구로 잠깐 문서 움직이기' },
+  { group: '보기', keys: 'F11 / Esc', label: '읽기 모드(전체 화면) · 나가기' },
+  { group: '탭', keys: 'Ctrl+Tab / Ctrl+Shift+Tab', label: '다음 탭 · 이전 탭' },
+  { group: '탭', keys: 'Ctrl+W', label: '지금 탭 닫기' },
+  { group: '탭', keys: '가운데 단추', label: '누른 탭 닫기' },
 ];
 // 버튼 설명에 단축키를 붙인다: "저장 (Ctrl+S)". 단축키가 여럿이면 첫 번째만
 function withShortcut(id, tip) {
@@ -5998,8 +6412,285 @@ function p9AfterZoom() {
   if (piiDoc === cur) drawPiiHits();
   if (inkDraft) drawInkDraft();
 }
+// ==== v6 Wave C: 쪽 보기 방식 · 손 도구 · 읽기 모드 · 테마 · 명령 검색 · 시작 화면 ====
+// ---- 쪽 보기 방식: 한 쪽 / 두 쪽 / 두 쪽(표지 따로) × 연속 스크롤 / 한 쪽씩 넘기기 (상태줄 [쪽 보기] 메뉴) ----
+// 탭마다 기억하고(stashView), 마지막으로 고른 것을 새 탭의 기본으로 쓴다(retextpdf.viewLayout)
+function defaultLayout() {
+  try { const v = JSON.parse(localStorage.getItem('retextpdf.viewLayout') || 'null'); if (v) return { spread: !!v.spread, cover: !!v.spread && !!v.cover, paged: !!v.paged }; } catch {}
+  return { spread: false, cover: false, paged: false };
+}
+function applyViewLayout() {
+  const el = $('#pdf'), wraps = [...el.children];
+  el.classList.toggle('spread', viewLayout.spread); el.classList.toggle('cover', viewLayout.spread && viewLayout.cover); el.classList.toggle('paged', viewLayout.paged);
+  const vis = new Set(viewLayout.paged ? UM.visiblePages(pagedIdx, wraps.length, viewLayout) : wraps.map((_, i) => i));
+  wraps.forEach((w, i) => w.classList.toggle('offView', !vis.has(i)));
+}
+function setViewLayout(next, remember = true) {
+  const open = pdfOpen(), idx = open ? currentPageIndex() : 0;
+  viewLayout = { spread: !!next.spread, cover: !!next.spread && !!next.cover, paged: !!next.paged };
+  if (remember) { try { localStorage.setItem('retextpdf.viewLayout', JSON.stringify(viewLayout)); } catch {} }
+  updateLayoutButton();
+  pagedIdx = idx; applyViewLayout();
+  if (!remember || !open) return;
+  if (zoomMode === 'fitPage') fitPage(); else if (zoomMode === 'fitWidth') fitWidth();
+  goToPage(idx); updateStatusPage();
+}
+// 한 쪽씩 넘기기에서 그 쪽이 안 보이면 넘긴다(찾기·바꾸기 결과로 갈 때)
+function revealPage(i) {
+  const n = $('#pdf').children.length;
+  if (!viewLayout.paged || !n || UM.visiblePages(pagedIdx, n, viewLayout).includes(i)) return;
+  pagedIdx = Math.max(0, Math.min(n - 1, i)); applyViewLayout(); updateStatusPage();
+}
+const LAYOUT_ICON = (L) => (L.spread ? (L.cover ? 'layoutCover' : 'layoutTwo') : 'layoutSingle');
+function updateLayoutButton() {
+  const b = $('#vbLayout'), L = viewLayout;
+  b.innerHTML = icon(LAYOUT_ICON(L));
+  b.title = `쪽 보기: ${L.spread ? (L.cover ? '두 쪽(표지 따로)' : '두 쪽') : '한 쪽'} · ${L.paged ? '한 쪽씩 넘기기' : '연속 스크롤'}`;
+}
+$('#vbLayout').onclick = (e) => {
+  e.stopPropagation(); // 문서 전체의 click(메뉴 바깥 누르면 닫기)이 방금 연 메뉴를 닫지 않게
+  const r = e.currentTarget.getBoundingClientRect(), L = viewLayout, menu = document.createElement('div');
+  const item = (label, on, next) => {
+    const b = menuItem(label, () => setViewLayout({ ...viewLayout, ...next }));
+    b.setAttribute('role', 'menuitemradio'); b.setAttribute('aria-checked', on);
+    b.prepend(Object.assign(document.createElement('span'), { className: 'chk', textContent: on ? '✓' : '' }));
+    return b;
+  };
+  menu.append(Object.assign(document.createElement('div'), { className: 'mhead', textContent: '쪽 보기' }),
+    item('한 쪽', !L.spread, { spread: false, cover: false }),
+    item('두 쪽', L.spread && !L.cover, { spread: true, cover: false }),
+    item('두 쪽 (표지 따로)', L.spread && L.cover, { spread: true, cover: true }),
+    menuSep(),
+    item('연속 스크롤', !L.paged, { paged: false }),
+    item('한 쪽씩 넘기기', L.paged, { paged: true }));
+  showCtxMenu(menu, r.left, r.top - 4);
+};
+// 한 쪽씩 넘기기: 쪽 끝에서 휠을 더 굴리면 다음(앞) 쪽으로 넘긴다
+let flipAt = 0;
+$('#pdf').addEventListener('wheel', (e) => {
+  if (e.ctrlKey || !viewLayout.paged || !pdfOpen() || !e.deltaY) return;
+  const el = $('#pdf'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 2, atTop = el.scrollTop <= 0;
+  if ((e.deltaY > 0 && !atEnd) || (e.deltaY < 0 && !atTop)) return;
+  e.preventDefault();
+  if (Date.now() - flipAt < 350) return;
+  flipAt = Date.now();
+  const i = currentPageIndex(), next = UM.stepPage(i, e.deltaY > 0 ? 1 : -1, pdfPages.length, viewLayout);
+  if (UM.visiblePages(i, pdfPages.length, viewLayout).includes(next)) return;
+  goToPage(next);
+  if (e.deltaY < 0) el.scrollTop = el.scrollHeight;
+}, { passive: false });
+
+// ---- 손 도구: 상태줄 [손]을 켜거나 Space를 누른 채 끌면 문서를 움직인다. 그동안 글자·주석 도구는 누르지 않는다 ----
+let handOn = false, spaceHand = false, pointerOnPdf = false;
+const handActive = () => (handOn || spaceHand) && pdfOpen();
+function syncHandUi() {
+  $('#pdf').classList.toggle('handMode', handActive());
+  $('#vbHand').setAttribute('aria-pressed', handOn); $('#vbSelect').setAttribute('aria-pressed', !handOn);
+}
+function setHand(on) { handOn = !!on; if (handOn) closeAnyPanel(); syncHandUi(); }
+$('#vbHand').onclick = () => setHand(true);
+$('#vbSelect').onclick = () => setHand(false);
+$('#pdf').addEventListener('mouseenter', () => { pointerOnPdf = true; });
+$('#pdf').addEventListener('mouseleave', () => { pointerOnPdf = false; });
+$('#pdf').addEventListener('mousedown', (e) => {
+  if (!handActive() || e.button !== 0) return;
+  e.preventDefault(); e.stopPropagation(); // 쪽 위 상자·도구로 가지 않는다(잡기 단계에서 막는다)
+  const el = $('#pdf'), start = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+  el.classList.add('handDragging');
+  const move = (ev) => { el.scrollLeft = start.left - (ev.clientX - start.x); el.scrollTop = start.top - (ev.clientY - start.y); };
+  const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); el.classList.remove('handDragging'); };
+  document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+}, true);
+for (const type of ['click', 'dblclick', 'contextmenu']) $('#pdf').addEventListener(type, (e) => { if (handActive()) { e.preventDefault(); e.stopPropagation(); } }, true);
+// Space: 마우스가 문서 위에 있거나 입력·단추에 초점이 없을 때만(단추의 Space 누르기는 그대로 둔다)
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.ctrlKey || e.altKey || e.metaKey || !pdfOpen() || isTyping(document.activeElement) || document.querySelector('dialog[open]')) return;
+  const focusBtn = document.activeElement?.closest?.('button, [role="tab"], [role="option"], [role="menuitem"], summary, a');
+  if (focusBtn && !pointerOnPdf) return;
+  e.preventDefault(); // 쪽 아래로 스크롤하지 않는다
+  if (!spaceHand) { spaceHand = true; syncHandUi(); }
+});
+document.addEventListener('keyup', (e) => { if (e.code === 'Space' && spaceHand) { spaceHand = false; syncHandUi(); } });
+window.addEventListener('blur', () => { if (spaceHand) { spaceHand = false; syncHandUi(); } });
+
+// ---- 읽기 모드: 리본·탭·패널·상태줄을 숨기고 문서만. F11은 전체 화면까지, Esc로 나간다 ----
+let readPillTimer = 0;
+function setReading(on, full = false) {
+  on = !!on && pdfOpen();
+  if (on === reading) { if (on && full && !document.fullscreenElement) { readingFull = true; document.documentElement.requestFullscreen?.().catch(() => {}); } return; }
+  reading = on; readingFull = on && full;
+  document.body.classList.toggle('reading', on); $('#readPill').hidden = !on;
+  if (on) {
+    closeAnyPanel(); closeCmdList(); $('#setPop').hidden = true;
+    updateStatusPage();
+    $('#readPill').classList.add('show'); clearTimeout(readPillTimer); readPillTimer = setTimeout(() => $('#readPill').classList.remove('show'), 2500);
+    if (full) document.documentElement.requestFullscreen?.().catch(() => {});
+    $('#pdf').focus?.();
+  } else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+}
+$('#vbRead').onclick = () => setReading(true);
+$('#readExit').onclick = () => setReading(false);
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && reading && readingFull) setReading(false); });
+
+// ---- 테마: 밝게 · 어둡게 · 시스템 따라가기(⚙ 설정). 고른 값은 retextpdf.theme, 앱은 창 바탕색·nativeTheme도 맞춘다 ----
+const themePref = () => { try { const t = localStorage.getItem('retextpdf.theme'); return UM.THEMES.includes(t) ? t : 'light'; } catch { return 'light'; } };
+const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const pref = themePref();
+  document.documentElement.dataset.theme = UM.resolveTheme(pref, darkMQ.matches);
+  document.querySelectorAll('input[name="themePref"]').forEach((r) => { r.checked = r.value === pref; });
+  try { window.retextPdf?.setTheme?.(pref)?.catch?.(() => {}); } catch {}
+}
+function setThemePref(pref) {
+  if (!UM.THEMES.includes(pref)) pref = 'light';
+  try { localStorage.setItem('retextpdf.theme', pref); } catch {}
+  applyTheme();
+}
+darkMQ.addEventListener('change', () => { if (themePref() === 'system') applyTheme(); });
+document.querySelectorAll('input[name="themePref"]').forEach((r) => { r.onchange = () => { if (r.checked) setThemePref(r.value); }; });
+applyTheme();
+// ⚙ 설정 창: 바깥을 누르거나 Esc면 닫는다. 상자 테두리는 글자 고치기 상황줄의 같은 칸과 함께 움직인다
+function toggleSettings(show = $('#setPop').hidden) {
+  $('#setPop').hidden = !show; $('#setBtn').setAttribute('aria-expanded', show);
+  if (show) { $('#setOutlines').checked = $('#outlineToggle').checked; applyTheme(); $('#setPop').querySelector('input:checked')?.focus(); }
+}
+$('#setBtn').onclick = () => toggleSettings();
+$('#setOutlines').onchange = () => { $('#outlineToggle').checked = $('#setOutlines').checked; $('#outlineToggle').onchange(); };
+document.addEventListener('mousedown', (e) => { if (!$('#setPop').hidden && !e.target.closest('.setBox')) toggleSettings(false); });
+$('#setPop').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); toggleSettings(false); $('#setBtn').focus(); } });
+
+// ---- 명령 검색(Ctrl+Q): 리본 버튼(이름·설명·탭·묶음) + 단축키(SHORTCUTS) + 별칭 + 보기·탭·테마 명령 ----
+// 찾기는 uiModel.searchCommands(한글 이름·별칭·초성 "ㅇㅎ" → 암호·영문). 고르면 그 탭으로 가서 버튼을 잠깐 빛내고 누른다
+const CMD_ALIASES = {
+  openBtn: ['파일 열기', 'open'], save: ['저장하기', 'save'], saveAs: ['사본 저장', 'save as'], printBtn: ['프린트', 'print'],
+  undoBtn: ['되돌리기', 'undo'], redoBtn: ['redo'], toolEdit: ['편집', '텍스트 편집', '글 고치기', 'edit'], toolText: ['텍스트 추가', '글 넣기', '텍스트 상자'],
+  toolStamp: ['서명', '사인', '스탬프', '인감'], menuInsertImage: ['이미지 넣기', '사진 넣기', '그림 넣기'], rectTool: ['검게 칠하기', '지우고 덮기', 'redact'],
+  searchToggle: ['검색', 'find'], replaceBtn: ['치환', 'replace'], helpBtn: ['단축키', '도움'],
+  toolHighlight: ['하이라이트', '강조'], toolUnderline: ['언더라인'], toolStrike: ['줄 긋기'], toolNote: ['주석', '코멘트', '댓글', '노트'],
+  toolSquare: ['네모', '상자'], toolCircle: ['동그라미', '타원'], toolLine: ['화살표', '직선'], toolInk: ['그리기', '손글씨'],
+  annotListBtn: ['주석 보기'], annotFlattenBtn: ['주석 굳히기', 'flatten'],
+  rotateLeft: ['회전', '돌리기'], rotateRight: ['회전', '돌리기'], pageBlank: ['쪽 추가', '페이지 추가', '빈 페이지'], pageInsertPdf: ['페이지 삽입', 'pdf 삽입', '쪽 넣기'],
+  menuExtract: ['페이지 삭제', '쪽 지우기', '쪽 추출', '페이지 정리', '추출'], pageNumbers: ['페이지 번호', '번호 매기기'], headerFooterBtn: ['머리글', '바닥글', '헤더', '푸터'],
+  watermarkBtn: ['배경 글자', '투명 글자'], outlineBtn: ['책갈피', '북마크', 'bookmark'],
+  menuMerge: ['합치기', '결합', 'merge'], menuSplit: ['나누기', '자르기', 'split'], menuExportImages: ['png', 'jpg', '그림으로 저장'], menuDownsample: ['압축', '용량', '크기 줄이기', 'compress'],
+  docInfoBtn: ['속성', '메타데이터', '제목', '작성자'], rasterizeBtn: ['래스터', '그림 PDF'],
+  protectBtn: ['암호 걸기', '비밀번호', '잠금', '보호', 'password'], piiBtn: ['개인정보 가리기', '주민등록번호', '전화번호', '이메일'], areaRedactTool: ['영역 가리기'], sanitizeBtn: ['메타데이터 지우기', '숨은 정보'],
+};
+const PDF_ONLY = '문서(PDF)를 열면 쓸 수 있습니다';
+function buildCommands() {
+  const cmds = [], mode = docMode();
+  document.querySelectorAll('#toolbar .rpanel').forEach((panel) => {
+    const tab = panel.dataset.rtab, rtab = $('#rtab-' + tab), tabName = rtab?.textContent || '';
+    panel.querySelectorAll('.tb[id]').forEach((b) => {
+      const short = b.querySelector('.tl')?.textContent.trim() || '', label = (b.dataset.tip ? b.dataset.tip.split(':')[0] : short).trim();
+      const sc = SHORTCUTS.find((s) => s.target === b.id), hidden = b.hidden || b.closest('.tgroup')?.hidden || rtab?.hidden;
+      cmds.push({ id: b.id, label, aliases: [short, ...(CMD_ALIASES[b.id] || [])], tip: b.dataset.tip || '', group: `${tabName} · ${b.closest('.tgroup')?.getAttribute('aria-label') || ''}`,
+        keys: sc ? sc.keys.split(' / ')[0] : '', icon: b.dataset.icon, tab, el: b, disabled: !!(hidden || b.disabled), why: hidden ? (b.hasAttribute('data-electron') && !window.retextPdf ? '설치된 앱에서만 쓸 수 있습니다' : PDF_ONLY) : '지금은 쓸 수 없습니다' });
+    });
+  });
+  const pdf = mode === 'pdf', L = viewLayout;
+  const extra = [
+    ['view:fitPage', '쪽 전체 보기', ['맞춤', '페이지 맞춤'], 'Ctrl+1', 'layoutSingle', () => fitPage(), true],
+    ['view:fitWidth', '폭 맞춤', ['너비 맞춤', '가로 맞춤'], 'Ctrl+0', 'layoutSingle', () => fitWidth(), true],
+    ['view:zoomIn', '확대', ['크게', 'zoom in'], 'Ctrl+=', 'plus', () => zoomStep(1), true, 'zoomIn'],
+    ['view:zoomOut', '축소', ['작게', 'zoom out'], 'Ctrl+−', 'minus', () => zoomStep(-1), true, 'zoomOut'],
+    ['view:single', '한 쪽 보기', ['단면', '한 페이지'], '', 'layoutSingle', () => setViewLayout({ ...L, spread: false, cover: false }), true, 'vbLayout'],
+    ['view:spread', '두 쪽 보기', ['양면', '펼쳐 보기', '두 페이지', '2쪽'], '', 'layoutTwo', () => setViewLayout({ ...L, spread: true, cover: false }), true, 'vbLayout'],
+    ['view:cover', '두 쪽 보기 (표지 따로)', ['표지', '책처럼'], '', 'layoutCover', () => setViewLayout({ ...L, spread: true, cover: true }), true, 'vbLayout'],
+    ['view:scroll', '연속 스크롤', ['스크롤'], '', 'layoutSingle', () => setViewLayout({ ...L, paged: false }), true, 'vbLayout'],
+    ['view:paged', '한 쪽씩 넘기기', ['페이지 넘기기', '넘겨 보기'], '', 'layoutSingle', () => setViewLayout({ ...L, paged: true }), true, 'vbLayout'],
+    ['view:reading', '읽기 모드', ['전체 화면', '프레젠테이션', 'fullscreen'], 'F11', 'reading', () => setReading(true, true), true, 'vbRead'],
+    ['view:hand', '손 도구', ['이동', '끌어 움직이기', 'hand'], 'Space+끌기', 'hand', () => setHand(true), true, 'vbHand'],
+    ['view:select', '선택 도구', ['포인터', 'select'], '', 'pointer', () => setHand(false), true, 'vbSelect'],
+    ['theme:light', '테마: 밝게', ['라이트', 'light', '밝은 테마'], '', 'settings', () => setThemePref('light'), false, 'setBtn'],
+    ['theme:dark', '테마: 어둡게', ['다크', 'dark', '어두운 테마', '야간 모드'], '', 'settings', () => setThemePref('dark'), false, 'setBtn'],
+    ['theme:system', '테마: 시스템 따라가기', ['자동', 'system'], '', 'settings', () => setThemePref('system'), false, 'setBtn'],
+    ['app:settings', '설정', ['환경 설정', '옵션'], '', 'settings', () => toggleSettings(true), false, 'setBtn'],
+  ];
+  for (const [id, label, aliases, keys, ic, run, needPdf, elId] of extra) cmds.push({ id, label, aliases, keys, icon: ic, run, group: id.startsWith('theme') || id.startsWith('app') ? '설정' : '보기', el: elId ? $('#' + elId) : null, disabled: needPdf && !pdf, why: PDF_ONLY });
+  const many = tabs.length > 1;
+  cmds.push(
+    { id: 'tab:next', label: '다음 탭', aliases: ['탭 바꾸기'], keys: 'Ctrl+Tab', icon: 'open', group: '탭', disabled: !many, why: '탭이 하나뿐입니다', run: () => open(UM.tabCycle({ order: tabs, active: cur }, 1)) },
+    { id: 'tab:prev', label: '이전 탭', aliases: ['탭 바꾸기'], keys: 'Ctrl+Shift+Tab', icon: 'open', group: '탭', disabled: !many, why: '탭이 하나뿐입니다', run: () => open(UM.tabCycle({ order: tabs, active: cur }, -1)) },
+    { id: 'tab:close', label: '탭 닫기', aliases: ['문서 닫기', '닫기'], keys: 'Ctrl+W', icon: 'trash', group: '탭', disabled: !cur, why: '연 문서가 없습니다', run: () => removeFile(cur) },
+    { id: 'tab:others', label: '다른 탭 닫기', aliases: [], keys: '', icon: 'trash', group: '탭', disabled: !many || !cur, why: '닫을 다른 탭이 없습니다', run: () => closeTabs('others', cur) },
+    { id: 'tab:all', label: '모든 탭 닫기', aliases: ['전부 닫기'], keys: '', icon: 'trash', group: '탭', disabled: !tabs.length, why: '연 문서가 없습니다', run: () => closeTabs('all', cur || tabs[0]) });
+  return cmds;
+}
+let cmdRows = [], cmdSel = 0;
+function closeCmdList() { $('#cmdList').hidden = true; $('#cmdInput').setAttribute('aria-expanded', 'false'); cmdRows = []; }
+function renderCmdList() {
+  const q = $('#cmdInput').value.trim();
+  if (!q) return closeCmdList();
+  cmdRows = UM.searchCommands(q, buildCommands(), 9); cmdSel = Math.max(0, cmdRows.findIndex((c) => !c.disabled));
+  const list = $('#cmdList');
+  if (!cmdRows.length) list.innerHTML = '<div class="cmdEmpty">맞는 명령이 없습니다</div>';
+  else list.replaceChildren(...cmdRows.map((c, k) => {
+    const row = document.createElement('div'); row.className = 'cmdItem' + (c.disabled ? ' off' : '') + (k === cmdSel ? ' on' : '');
+    row.id = 'cmd-' + k; row.dataset.k = k; row.setAttribute('role', 'option'); row.setAttribute('aria-selected', k === cmdSel);
+    if (c.disabled) { row.setAttribute('aria-disabled', 'true'); row.title = c.why; }
+    row.innerHTML = `${icon(c.icon || 'search')}<span class="cl"></span><span class="cg"></span>${c.keys ? `<span class="ck">${kbdHtml(c.keys)}</span>` : ''}`;
+    row.querySelector('.cl').textContent = c.label; row.querySelector('.cg').textContent = c.disabled ? c.why : c.group;
+    return row;
+  }));
+  list.hidden = false; $('#cmdInput').setAttribute('aria-expanded', 'true');
+  $('#cmdInput').setAttribute('aria-activedescendant', cmdRows.length ? 'cmd-' + cmdSel : '');
+}
+function moveCmdSel(d) {
+  if (!cmdRows.length) return;
+  cmdSel = (cmdSel + d + cmdRows.length) % cmdRows.length;
+  $('#cmdList').querySelectorAll('.cmdItem').forEach((r, k) => { r.classList.toggle('on', k === cmdSel); r.setAttribute('aria-selected', k === cmdSel); if (k === cmdSel) r.scrollIntoView({ block: 'nearest' }); });
+  $('#cmdInput').setAttribute('aria-activedescendant', 'cmd-' + cmdSel);
+}
+function flashButton(b) { if (!b) return; b.classList.remove('cmdFlash'); void b.offsetWidth; b.classList.add('cmdFlash'); setTimeout(() => b.classList.remove('cmdFlash'), 1500); }
+function runCommand(c) {
+  if (!c) return;
+  $('#cmdInput').value = ''; closeCmdList(); $('#cmdInput').blur();
+  if (c.disabled) { flash(c.why || '지금은 쓸 수 없습니다', 3000); return; }
+  if (c.tab) showRibbonTab(c.tab); // 그 버튼이 있는 리본 탭으로
+  flashButton(c.el);
+  if (c.run) c.run(); else c.el.click();
+}
+$('#cmdInput').addEventListener('input', renderCmdList);
+$('#cmdInput').addEventListener('focus', () => { if ($('#cmdInput').value.trim()) renderCmdList(); });
+$('#cmdInput').addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== $('#cmdInput')) closeCmdList(); }, 120));
+$('#cmdInput').addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); moveCmdSel(1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); moveCmdSel(-1); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); $('#cmdInput').value = ''; closeCmdList(); $('#cmdInput').blur(); }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    // 한글 조합 중 Enter: 조합을 마친 글로 다시 찾은 뒤 실행한다
+    if (e.isComposing || e.keyCode === 229) setTimeout(() => { renderCmdList(); runCommand(cmdRows[cmdSel]); }, 0);
+    else { if (!cmdRows.length) renderCmdList(); runCommand(cmdRows[cmdSel]); }
+  }
+});
+$('#cmdList').addEventListener('mousedown', (e) => e.preventDefault()); // 입력칸 초점을 잃지 않게
+$('#cmdList').addEventListener('click', (e) => { const r = e.target.closest('.cmdItem'); if (r) runCommand(cmdRows[+r.dataset.k]); });
+// Ctrl+Q 명령 검색 · F11 읽기 모드(전체 화면) · Esc 읽기 모드 나가기
+document.addEventListener('keydown', (e) => {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyQ') {
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault(); if (reading) setReading(false);
+    $('#cmdInput').focus(); $('#cmdInput').select(); return;
+  }
+  if (e.key === 'F11') { e.preventDefault(); if (reading) setReading(false); else setReading(true, true); return; }
+  if (e.key === 'Escape' && reading && !document.querySelector('dialog[open]')) { setReading(false); }
+});
+
+// ---- 시작 화면 작업 단추: 파일을 고르면 그 작업 창까지 연다(openThen) ----
+document.querySelectorAll('[data-sicon]').forEach((b) => b.insertAdjacentHTML('afterbegin', icon(b.dataset.sicon)));
+$('#startEdit').onclick = () => openThen(() => { setTool('edit'); flash('고칠 글줄을 누르세요 — 그 자리에서 바로 고칩니다', 4000); });
+$('#startPii').onclick = () => openThen(openPiiDialog);
+$('#startRaster').onclick = () => openThen(openRasterDialog);
+$('#startOrganize').onclick = () => openThen(openExtractDialog);
+$('#startProtect').onclick = () => openThen(openProtectDialog);
+updateLayoutButton(); syncHandUi();
+
 // 테스트·화면 찍기용 손잡이(개발 도구에서 상태를 볼 수 있게) — 문서를 바꾸지 않는다
 window.retextPdfP9 = { showRibbonTab, pickPages, checkPageRange, get tool() { return tool; } };
+window.retextPdfC = { get tabs() { return tabs.slice(); }, get cur() { return cur; }, get layout() { return { ...viewLayout }; }, get reading() { return reading; }, get hand() { return handActive(); }, tabView: (p) => tabViews.get(p), setViewLayout, setReading, setThemePref, setHand, closeTabs, commands: (q) => UM.searchCommands(q, buildCommands(), 9).map((c) => c.label) };
 
 showVersion(); initFiles();
 </script>

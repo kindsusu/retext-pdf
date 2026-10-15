@@ -75,7 +75,7 @@ assert.doesNotMatch(html, /id="rotateLeft"[^>]*disabled/, 'rotate-left toolbar b
 assert.match(html, /\$\('#menuSplit'\)\.onclick = openSplitDialog/, 'split is a toolbar button again (밝은 테마·아이콘 개편: 숨은 메뉴 없음)');
 assert.match(html, /id="splitDialog"/, 'split dialog exists (WP-B2)');
 assert.match(html, /id="downsampleFilesDialog"/, 'multi-file downsample dialog exists (WP-B2)');
-assert.match(html, /id="emptyDownsampleFiles"[^>]*>여러 파일 용량 줄이기/, '빈 상태 여러 파일 용량 줄이기 quick tool is enabled (WP-B2)');
+assert.match(html, /id="emptyDownsampleFiles"[^>]*><b>압축\(용량 줄이기\)<\/b><span>여러 파일 용량 줄이기/, '시작 화면 압축(여러 파일 용량 줄이기) 작업 단추 (WP-B2 → v6 Wave C 시작 화면)');
 assert.doesNotMatch(html, /id="emptyDownsampleFiles"[^>]*disabled/, '빈 상태 여러 파일 용량 줄이기 button is no longer disabled (WP-B2)');
 assert.doesNotMatch(html, /id="emptyExportImages"[^>]*disabled/, '빈 상태 이미지로 내보내기 button is no longer disabled (WP-B2)');
 assert.match(html, /function savePagesAs\(indices\)[\s\S]{0,400}\/api\/pdf\/pages\/extract/, 'thumbnail context menu saves the selected pages as a new file (따로 저장…, UI 개편)');
@@ -167,7 +167,7 @@ console.log('OK — P7 배선 단언 통과');
 const preloadSource = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
 assert.match(preloadSource, /pathForFile:\s*\(file\)/, '프리로드는 File 하나를 받는 pathForFile을 노출한다 (P8)');
 {
-  const drop = script.slice(script.indexOf("addEventListener('drop'"));
+  const drop = script.slice(script.indexOf("document.addEventListener('drop'")); // 창 전체의 파일 놓기(문서 탭 줄의 끌어 옮기기 drop과 다르다)
   const body = drop.slice(0, drop.indexOf('});') + 3);
   assert.match(body, /Array\.from\(e\.dataTransfer\?\.files/, 'drop 처리는 렌더러에서 FileList를 배열로 바꾼 뒤 넘긴다 (P8)');
   assert.doesNotMatch(body, /pathsFromFiles\(e\.dataTransfer/, 'FileList를 그대로 프리로드로 넘기지 않는다 (P8)');
@@ -225,7 +225,7 @@ console.log('OK — AI 제거 단언 통과');
 // 2026-10-03: CRLF Markdown은 화면 안에서 LF로 다루고 저장할 때 원래 줄바꿈으로 되돌린다(입력 뒤 되돌려도 미저장 표시가 남던 문제)
 assert.match(script, /mdEol = \/\\r\\n\/\.test\(text\)/, 'Markdown 원래 줄바꿈을 기억한다');
 assert.match(script, /savedText = text\.replace\(\/\\r\\n\/g, '\\n'\)/, '비교 기준(savedText)은 LF로 정규화한다');
-assert.match(script, /if \(mdEol === '\\r\\n'\) text = text\.replace/, '저장할 때 CRLF로 되돌린다');
+assert.match(script, /async function putText\(name, text, eol = mdEol\) \{\s*if \(eol === '\\r\\n'\) text = text\.replace/, '저장할 때 CRLF로 되돌린다(v6 Wave C: 탭마다 원래 줄바꿈)');
 // 2026-10-03: 여러 조각으로 된 줄도 폰트 맞추기가 된다 — 나머지 조각 idx를 remove로 넘긴다
 assert.doesNotMatch(script, /fontButton\.disabled = selectedObj\.objs\.length !== 1/, '폰트 맞추기가 조각 하나짜리 줄로 묶여 있지 않다');
 assert.match(script, /openPdfFontEditor\(\{[^}]*remove: selection\.objs\.slice\(1\)/, '폰트 창에 나머지 조각을 넘긴다');
@@ -415,7 +415,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   }
 
   // B. 왼쪽 패널: PDF는 쪽 목록, Markdown은 파일 목록. 축소본은 보이는 것만(IntersectionObserver)
-  assert.match(script, /showAsideTab\(isPdf \? 'page' : 'file'\)/, 'PDF를 열면 쪽 목록, Markdown을 열면 파일 목록');
+  assert.match(script, /showAsideTab\(view\?\.aside \|\| \(isPdf \? 'page' : 'file'\)\)/, 'PDF를 열면 쪽 목록, Markdown을 열면 파일 목록(탭으로 돌아오면 그 탭에서 보던 패널)');
   assert.match(script, /new IntersectionObserver\([\s\S]{0,200}root: \$\('#pageThumbs'\)/, '축소본은 목록에 보이는 것만 그린다');
   assert.match(script, /const THUMB_W = 140/, '축소본 폭 140px');
   assert.match(html, /<div id="pageThumbs" tabindex="0" role="listbox" aria-multiselectable="true"/, '쪽 목록은 키보드로 움직일 수 있는 여러 선택 목록이다');
@@ -493,17 +493,38 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(css, /\.pdfPage\{[^}]*background:var\(--paper\)[^}]*box-shadow:/, '쪽은 흰 종이에 부드러운 그림자');
   const darkHex = /#(1b1b1f|232329|1f1f25|2c2c34|34343e|2e2e37|3a3a45|33333b|3a3a40|2b2b33|4a4a55|2f2f38|4a3418|6b4c22)\b|#000[0-9a-f]\b|#000[0-9a-f]{2}\b|#f4b9a2|#f0a0a0/i;
   assert.doesNotMatch(html, darkHex, '어두운 테마의 하드코딩 색(#1b1b1f·#2e2e37·#000a 등)이 index.html에 남지 않는다');
-  // :root 밖의 CSS는 색을 토큰으로 쓴다(종이 흰색·검색 강조·의미 색 등 몇 가지 예외만)
-  const outside = css.replace(/:root\{[^}]*\}/, '').match(/#[0-9a-f]{3,8}\b/gi) || [];
+  // :root 밖의 CSS는 색을 토큰으로 쓴다(종이 흰색·검색 강조·의미 색 등 몇 가지 예외만). v6 Wave C 어두운 테마 토큰 칸(:root[data-theme="dark"])도 토큰이다
+  const outside = css.replace(/:root\{[^}]*\}/, '').replace(/:root\[data-theme="dark"\]\{[^}]*\}/, '').match(/#[0-9a-f]{3,8}\b/gi) || [];
   for (const c of outside) assert.ok(['#fff', '#ccc', '#e6e3dc', '#2f74c0', '#1d5fa8'].includes(c.toLowerCase()), `토큰 밖 하드코딩 색 ${c}는 허용 목록에 있다`);
+  // v6 Wave C 어두운 테마: 같은 토큰 이름을 모두 다시 정하고, 바탕은 어둡고(쪽은 흰 종이 그대로) 글자 대비는 밝은 테마와 같은 기준(≥ 4.5)
+  const darkRoot = css.match(/:root\[data-theme="dark"\]\{([^}]*)\}/)?.[1];
+  assert.ok(darkRoot, '어두운 테마 토큰 칸 :root[data-theme="dark"]이 있다');
+  assert.match(darkRoot, /color-scheme:dark/, '어두운 테마는 color-scheme: dark(입력칸·스크롤 막대도 어둡게)');
+  const dtok = Object.fromEntries([...darkRoot.matchAll(/--([\w-]+):(#[0-9a-f]{3,8})/gi)].map((m) => [m[1], m[2]]));
+  for (const k of Object.keys(tok)) assert.ok(dtok[k], `어두운 테마도 --${k}를 정한다`);
+  for (const k of ['bg', 'panel', 'panel2', 'hover', 'sel', 'input', 'btn', 'docBg', 'tabBar']) assert.ok(lum(dtok[k]) < 0.08, `어두운 테마 --${k}(${dtok[k]})는 어두운 바탕이다`);
+  assert.ok(lum(dtok.docBg) > lum(dtok.panel), `어두운 테마의 문서 뒤 바탕(--docBg ${dtok.docBg})은 창 틀보다 조금 밝은 짙은 회색`);
+  assert.strictEqual(dtok.paper.toLowerCase(), '#fff', '어두운 테마에서도 쪽은 흰 종이');
+  const fgPairs = [['fg', ['panel', 'panel2', 'hover', 'sel', 'input', 'btn', 'tabBar']], ['mut', ['panel', 'panel2', 'hover', 'input', 'tabBar']], ['accText', ['panel', 'panel2', 'hover', 'sel', 'input']], ['badText', ['panel', 'input']], ['bannerFg', ['bannerBg']]];
+  for (const [theme, T] of [['밝은', tok], ['어두운', dtok]]) {
+    for (const [fg, bgs] of fgPairs) for (const b of bgs) assert.ok(contrast(T[fg], T[b]) >= 4.5, `${theme} 테마 --${fg} 글자 on --${b}: 대비 ${contrast(T[fg], T[b]).toFixed(2)} ≥ 4.5`);
+    assert.ok(contrast('#ffffff', T.accStrong) >= 4.5, `${theme} 테마 주 버튼(흰 글자 on --accStrong) 대비 ≥ 4.5`);
+    assert.ok(contrast(T.paperInk, T.paper) >= 4.5, `${theme} 테마 쪽 글자 대비`);
+  }
   const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
-  assert.match(mainSrc, /backgroundColor: '#fbf9f4'/, '창 배경(시작할 때 깜빡임)도 아이보리');
-  assert.strictEqual(mainSrc.match(/backgroundColor: '([^']+)'/)[1], tok.panel, '창 배경색 = --panel');
+  const bg = mainSrc.match(/const WINDOW_BG = \{ light: '([^']+)', dark: '([^']+)' \};/);
+  assert.ok(bg, 'main.js가 테마별 창 바탕색을 둔다');
+  assert.strictEqual(bg[1], tok.panel, '창 배경(시작할 때 깜빡임) = 밝은 --panel(아이보리)');
+  assert.strictEqual(bg[2], dtok.panel, '어두운 테마 창 배경 = 어두운 --panel');
+  assert.match(mainSrc, /backgroundColor: WINDOW_BG\[resolvedTheme\(themePref\)\]/, '창을 만들 때 기억한 테마의 바탕색');
+  assert.match(mainSrc, /ipcMain\.handle\('setTheme'[\s\S]{0,200}nativeTheme\.themeSource = pref;[\s\S]{0,120}win\.setBackgroundColor\(WINDOW_BG\[resolvedTheme\(pref\)\]\)/, '테마를 바꾸면 nativeTheme·창 바탕색도 바꾼다');
+  assert.match(preloadSource, /setTheme: \(pref\) => ipcRenderer\.invoke\('setTheme', pref\)/, '프리로드가 setTheme을 노출한다');
+  assert.match(html, /<script>try \{ const t = localStorage\.getItem\('retextpdf\.theme'\);[^<]*prefers-color-scheme: dark[^<]*<\/script>/, '첫 그리기 전에 테마를 정한다(번쩍임 없음)');
 
   // B. 쪽 기준 보기: PDF를 열면 쪽 전체 보기, 맞춤 방식이면 크기가 바뀔 때 다시 맞추고, %를 고르면 그 문서 동안 유지
   assert.match(script, /let zoomMode = 'fitPage';/, '확대 방식 기본 = 쪽 전체 보기');
-  assert.match(fnBody('async function open(name)'), /zoomMode = 'fitPage';/, '문서를 열 때마다 쪽 전체 보기로 시작한다');
-  assert.match(fnBody('async function renderPdfDoc(name)'), /if \(zoomMode !== 'manual' && pdfPages\.length\) pdfScale = fitScale\(zoomMode, keepPage\);[\s\S]*buildPages\(name, pdfScale\)/, '그리기 전에 맞춤 배율을 잰다');
+  assert.match(fnBody('async function open(name'), /zoomMode = 'fitPage';/, '문서를 열 때마다 쪽 전체 보기로 시작한다');
+  assert.match(fnBody('async function renderPdfDoc(name'), /if \(zoomMode !== 'manual' && pdfPages\.length\) pdfScale = fitScale\(zoomMode, keepPage\);[\s\S]*buildPages\(name, pdfScale\)/, '그리기 전에 맞춤 배율을 잰다');
   assert.match(fnBody('function fitScale('), /Math\.min\(w \/ p\.w, h \/ p\.h\)/, '쪽 전체 보기 = 폭·높이가 모두 들어가는 배율');
   assert.match(fnBody('function fitScale('), /Math\.floor\(s \* 100\) \/ 100/, '맞춤 배율은 내려서(쪽 아래가 잘리지 않게)');
   assert.match(script, /new ResizeObserver\([\s\S]{0,200}if \(zoomMode === 'manual'\) return;[\s\S]{0,300}fitPage\(true\); else fitWidth\(\);[\s\S]{0,40}\.observe\(\$\('#pdf'\)\)/, '맞춤 방식이면 문서 영역 크기가 바뀔 때 다시 맞춘다');
@@ -893,8 +914,8 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(fnBodyOf(s, 'async function onPrint('), /if \(!\(await settleInplace\('인쇄'\)\)\) return;/, '인쇄 전에도');
   assert.match(fnBodyOf(s, 'async function open('), /if \(name !== cur && !\(await settleInplace\('열기'\)\)\) return;/, '다른 문서로 바꾸기 전에도');
   assert.match(fnBodyOf(s, 'async function removeFile('), /if \(cur === p && !\(await settleInplace\('닫기'\)\)\) return;/, '문서를 닫기 전에도');
-  assert.match(s, /window\.isDirty = \(\) => !!dirty\(\) \|\| !!\(inplace && inplace\.dirty\(\)\);/, '창 닫기 확인은 적용하지 않은 글도 미저장으로 본다');
-  assert.match(s, /window\.retextPdfSave = async \(\) => \{ await save\(\{ pending: 'apply' \}\); return !dirty\(\); \};/, '창 닫기 → 저장은 적용하고 저장');
+  assert.match(s, /window\.isDirty = \(\) => !!dirty\(\) \|\| !!\(inplace && inplace\.dirty\(\)\) \|\| tabs\.some\(\(p\) => p !== cur && tabDirty\(p\)\);/, '창 닫기 확인은 적용하지 않은 글도(v6 Wave C: 다른 탭의 고친 내용도) 미저장으로 본다');
+  assert.match(s, /window\.retextPdfSave = async \(\) => \{ await save\(\{ pending: 'apply' \}\); return !dirty\(\) && saveOtherTabs\(\); \};/, '창 닫기 → 저장은 적용하고 저장(다른 탭도)');
   for (const id of ['pendingDialog', 'pdApply', 'pdDiscard', 'pdCancel']) assert.match(html, new RegExp(`id="${id}"`), `적용 확인 창 #${id}`);
   assert.match(s, /\$\('#pdApply'\)\.textContent = `적용하고 \$\{verb\}`; \$\('#pdDiscard'\)\.textContent = `버리고 \$\{verb\}`;/, '[적용하고 저장] / [버리고 저장] / [취소]');
   // B. 대체 글꼴 경고 창: 쪽·글·원래 글꼴 → 쓴 글꼴, [그대로 저장]·[취소]·다시 보지 않기(이 문서)
@@ -922,4 +943,182 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.strictEqual(IE.insertedAt(lines, 'Run npm test', 'Run npm tes'), null, '지우기만 했으면 없음');
   console.log('OK — v6 Wave B 저장 전 확인(적용하지 않은 글·대체 글꼴·전자서명)·속성 창 글꼴 안내 단언 통과');
 }
+
+// ── v6 Wave C: 문서 탭 · 명령 검색(Ctrl+Q, 초성) · 어두운 테마 · 시작 화면 · 쪽 보기 방식 · 손 도구 · 읽기 모드 ─────────────
+{
+  const UM = require('./ui-model');
+  const s = script.replace(/\r\n/g, '\n');
+  // A. 탭 모델: 열기(이미 있으면 그 탭으로, 20개까지) · 닫기(오른쪽 이웃 → 왼쪽) · 끌어 옮기기 · 한꺼번에 닫기(고른 탭은 맨 끝) · 순환 · 미저장
+  let st = { order: [], active: null };
+  for (const p of ['a.pdf', 'b.md', 'c.pdf']) st = UM.tabOpen(st, p);
+  assert.deepStrictEqual(st, { order: ['a.pdf', 'b.md', 'c.pdf'], active: 'c.pdf', created: true, full: false }, '새 문서는 끝에 탭으로 더하고 고른다');
+  assert.deepStrictEqual(UM.tabOpen(st, 'a.pdf'), { order: ['a.pdf', 'b.md', 'c.pdf'], active: 'a.pdf', created: false, full: false }, '이미 연 문서는 그 탭으로만 간다');
+  let full = { order: Array.from({ length: UM.MAX_TABS }, (_, i) => `f${i}.pdf`), active: 'f0.pdf' };
+  assert.strictEqual(UM.MAX_TABS, 20, '탭은 20개까지');
+  assert.deepStrictEqual(UM.tabOpen(full, 'new.pdf'), { order: full.order, active: 'f0.pdf', created: false, full: true }, '가득 차면 열지 않는다(고친 탭을 몰래 닫지 않는다)');
+  const s3 = { order: ['a', 'b', 'c'], active: 'b' };
+  assert.deepStrictEqual(UM.tabClose(s3, 'b'), { order: ['a', 'c'], active: 'c' }, '고른 탭을 닫으면 오른쪽 이웃으로');
+  assert.deepStrictEqual(UM.tabClose({ order: ['a', 'b', 'c'], active: 'c' }, 'c'), { order: ['a', 'b'], active: 'b' }, '맨 끝 탭이면 왼쪽 이웃으로');
+  assert.deepStrictEqual(UM.tabClose(s3, 'a'), { order: ['b', 'c'], active: 'b' }, '다른 탭을 닫으면 고른 탭은 그대로');
+  assert.deepStrictEqual(UM.tabClose({ order: ['a'], active: 'a' }, 'a'), { order: [], active: null }, '마지막 탭을 닫으면 시작 화면');
+  assert.deepStrictEqual(UM.tabMove(['a', 'b', 'c', 'd'], 0, 2), ['b', 'c', 'a', 'd'], '끌어 옮기기');
+  assert.deepStrictEqual(UM.tabMove(['a', 'b', 'c', 'd'], 0, UM.dropIndex(0, 2, true)), ['b', 'c', 'a', 'd'], 'c의 오른쪽 절반에 놓으면 c 뒤로');
+  assert.deepStrictEqual(UM.tabMove(['a', 'b', 'c', 'd'], 3, UM.dropIndex(3, 1, false)), ['a', 'd', 'b', 'c'], 'b의 왼쪽 절반에 놓으면 b 앞으로');
+  assert.deepStrictEqual(UM.tabMove(['a', 'b', 'c'], 1, UM.dropIndex(1, 2, false)), ['a', 'b', 'c'], '바로 뒤 탭의 앞 = 제자리');
+  const s4 = { order: ['a', 'b', 'c', 'd'], active: 'b' };
+  assert.deepStrictEqual(UM.tabsToClose(s4, 'others', 'c'), ['a', 'd', 'b'], '다른 탭 닫기: 고른 탭(b)은 맨 끝에 닫는다');
+  assert.deepStrictEqual(UM.tabsToClose(s4, 'all', 'a'), ['a', 'c', 'd', 'b'], '모든 탭 닫기도 고른 탭이 맨 끝');
+  assert.deepStrictEqual(UM.tabsToClose(s4, 'right', 'a'), ['c', 'd', 'b'], '오른쪽 탭 닫기');
+  assert.deepStrictEqual(UM.tabsToClose(s4, 'one', 'd'), ['d']);
+  assert.strictEqual(UM.tabCycle(s4, 1), 'c'); assert.strictEqual(UM.tabCycle({ order: ['a', 'b'], active: 'b' }, 1), 'a', 'Ctrl+Tab은 끝에서 처음으로 돈다');
+  assert.strictEqual(UM.tabCycle({ order: ['a', 'b'], active: 'a' }, -1), 'b', 'Ctrl+Shift+Tab은 처음에서 끝으로');
+  assert.deepStrictEqual(UM.dirtyOf(['a', 'b', 'c'], (p) => p !== 'b'), ['a', 'c']);
+  // 화면 배선: 탭 줄(리본 위)·[+]·닫기 확인 창, 열기는 보던 자리를 기억하고 버리지 않는다
+  for (const id of ['docTabs', 'dtList', 'dtAdd', 'closeTabsDialog', 'ctList', 'ctDiscard', 'ctCancel']) assert.match(html, new RegExp(`id="${id}"`), `탭 #${id}`);
+  assert.ok(html.indexOf('id="docTabs"') < html.indexOf('id="ribbonBar"'), '문서 탭 줄은 리본 위');
+  assert.match(html, /<script src="\/ui-model\.js"><\/script>/); assert.match(serverSource, /url\.pathname === '\/ui-model\.js'/, '서버가 ui-model.js를 내준다');
+  const openFn = fnBodyOf(s, 'async function open(name');
+  assert.doesNotMatch(openFn, /버리고 다른 파일을 열까요/, '탭을 바꿔도 고친 내용을 버리라고 묻지 않는다');
+  assert.doesNotMatch(openFn, /\/api\/pdf\/close/, '탭을 바꿔도 서버의 고친 PDF를 닫지 않는다');
+  assert.match(openFn, /if \(!opts\.noStash\) stashView\(\);/, '떠나는 탭의 보던 자리를 기억한다');
+  assert.match(openFn, /await renderPdfDoc\(name, view\);/, '돌아오면 그 탭의 쪽·위치로 그린다');
+  assert.match(openFn, /if \(view\?\.tool && view\.tool !== 'edit' && pdfPages\.length\) setTool\(view\.tool\);/, '도구도 탭마다');
+  assert.match(openFn, /\$\('#searchInput'\)\.value = view\?\.search\?\.query \|\| '';[\s\S]{0,160}\$\('#searchBar'\)\.hidden = !view\?\.search\?\.open;/, '찾기 상태도 탭마다');
+  assert.match(openFn, /else if \(view\?\.md && view\.md\.text !== view\.md\.saved\)/, '고친 Markdown은 탭 기억의 글로 되살린다(디스크에서 다시 읽어 덮지 않는다)');
+  const stash = fnBodyOf(s, 'function stashView(');
+  for (const k of ['zoomMode', 'pdfScale', 'page: i', 'frac:', 'tool', 'layout:', 'search:', 'v.aside', 'v.md = { text: docText, saved: savedText, eol: mdEol']) assert.ok(stash.includes(k), `stashView가 ${k}를 기억한다`);
+  const rf = fnBodyOf(s, 'async function removeFile(');
+  assert.match(rf, /if \(!opts\.confirmed && tabDirty\(p\) && !\(await confirmCloseTabs\(\[p\]\)\)\) return;/, '고친 탭을 닫을 때(지금 탭이 아니어도) 묻는다');
+  assert.match(rf, /if \(next && !opts\.noSwitch\) await open\(next, \{ noStash: true \}\);/, '고른 탭을 닫으면 이웃 탭으로');
+  assert.match(s, /\$\('#dtList'\)\.addEventListener\('auxclick'[\s\S]{0,120}e\.button === 1[\s\S]{0,60}removeFile/, '가운데 단추로 닫기');
+  assert.match(s, /\$\('#dtList'\)\.addEventListener\('dragstart'/, '끌어 순서 바꾸기');
+  for (const t of ['닫기', '다른 탭 닫기', '오른쪽 탭 닫기', '모든 탭 닫기']) assert.ok(fnBodyOf(s, 'function openTabCtxMenu(').includes(`menuItem('${t}'`), `탭 메뉴 [${t}]`);
+  assert.match(s, /e\.key === 'Tab' && tabs\.length > 1/, 'Ctrl+Tab'); assert.match(s, /e\.code === 'KeyW' && !e\.shiftKey && cur\) \{ e\.preventDefault\(\); removeFile\(cur\); \}/, 'Ctrl+W');
+  // 여러 탭 닫기 흐름을 실제로 돌린다: 미저장 이름을 한 번에 묻고, [취소]면 아무것도 닫지 않고, [닫기]면 고른 탭을 맨 끝에 닫는다
+  const closeTabsSrc = fnBodyOf(s, 'async function closeTabs(') + '\n}';
+  const runClose = async (answer, kind, p) => {
+    const log = { asked: null, removed: [] };
+    const fn = new Function('UM', 'tabs', 'cur', 'tabDirty', 'settleInplace', 'confirmCloseTabs', 'removeFile', `${closeTabsSrc}\nreturn closeTabs;`)(
+      UM, ['a.pdf', 'b.md', 'c.pdf', 'd.pdf'], 'b.md', (x) => x === 'b.md' || x === 'd.pdf', async () => true,
+      async (list) => { log.asked = list; return answer; }, async (x, o) => { log.removed.push([x, !!o.confirmed]); });
+    await fn(kind, p);
+    return log;
+  };
+  (async () => {
+    const no = await runClose(false, 'all', 'a.pdf');
+    assert.deepStrictEqual(no, { asked: ['d.pdf', 'b.md'], removed: [] }, '모든 탭 닫기: 고친 두 문서를 한 번에 묻고, 취소하면 아무것도 닫지 않는다');
+    const yes = await runClose(true, 'all', 'a.pdf');
+    assert.deepStrictEqual(yes.removed, [['a.pdf', true], ['c.pdf', true], ['d.pdf', true], ['b.md', true]], '닫기를 고르면 다시 묻지 않고(confirmed) 고른 탭을 맨 끝에');
+    const others = await runClose(true, 'others', 'b.md');
+    assert.deepStrictEqual([others.asked, others.removed.map((r) => r[0])], [['d.pdf'], ['a.pdf', 'c.pdf', 'd.pdf']], '다른 탭 닫기: 고친 다른 탭만 묻는다');
+    const clean = await runClose(true, 'others', 'd.pdf');
+    assert.deepStrictEqual(clean.asked, ['b.md'], '지금 탭(b.md)이 고쳐졌으면 그것도 묻는다');
+  })().catch((e) => { console.error(e); process.exit(1); });
+  assert.match(s, /window\.dirtyNames = \(\) => tabs\.filter\(tabDirty\)\.map\(basename\);/, '창 닫기 확인에 고친 문서 이름');
+  assert.match(fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8'), /window\.dirtyNames \? window\.dirtyNames\(\) : \[\]/, 'main.js가 고친 문서 이름을 늘어놓는다');
+  assert.match(fnBodyOf(s, 'async function saveAs('), /tabs = tabs\.filter\(\(f\) => f !== to \|\| f === name\)\.map\(\(f\) => \(f === name \? to : f\)\);/, '다른 이름으로 저장하면 탭이 그 자리에서 새 이름으로');
+
+  // B. 명령 검색: 초성·별칭·부분 일치. 실제 리본 버튼 + CMD_ALIASES로 찾아 본다
+  assert.strictEqual(UM.choseong('암호 걸기'), 'ㅇㅎㄱㄱ'); assert.strictEqual(UM.choseong('PDF 열기'), 'pdfㅇㄱ');
+  const aliasSrc = s.slice(s.indexOf('const CMD_ALIASES = {'), s.indexOf('};', s.indexOf('const CMD_ALIASES = {')) + 2);
+  const CMD_ALIASES = new Function(`${aliasSrc}\nreturn CMD_ALIASES;`)();
+  const ribbon = [...html.matchAll(/<button type="button" class="tb" id="(\w+)"[^>]*?(?:data-tip="([^"]*)")?[^>]*><span class="tl">([^<]*)<\/span><\/button>/g)]
+    .map(([, id, tip, short]) => ({ id, label: (tip ? tip.split(':')[0] : short).trim(), aliases: [short, ...(CMD_ALIASES[id] || [])], tip: tip || '' }));
+  assert.ok(ribbon.length >= 40, `리본 명령 ${ribbon.length}개`);
+  for (const id of Object.keys(CMD_ALIASES)) assert.ok(ribbon.some((c) => c.id === id), `별칭의 ${id}는 리본 버튼이다`);
+  const top = (q) => UM.searchCommands(q, ribbon, 5).map((c) => c.id);
+  assert.strictEqual(top('ㅇㅎ')[0], 'protectBtn', '"ㅇㅎ" → 암호');
+  assert.strictEqual(top('암호')[0], 'protectBtn', '"암호" → 암호');
+  assert.strictEqual(top('압축')[0], 'menuDownsample', '"압축" → 용량 줄이기(별칭)');
+  assert.strictEqual(top('ㅎㄱㅍ')[0], 'toolHighlight', '"ㅎㄱㅍ" → 형광펜');
+  assert.strictEqual(top('쪽정')[0], 'menuExtract', '"쪽정" → 쪽 정리(띄엄띄엄이 아니라 앞부분)');
+  assert.strictEqual(top('merge')[0], 'menuMerge', '영문 별칭');
+  assert.strictEqual(top('워터')[0], 'watermarkBtn');
+  assert.strictEqual(top('개인정')[0], 'piiBtn');
+  assert.strictEqual(top('비밀')[0], 'protectBtn', '"비밀(번호)" → 암호');
+  assert.ok(top('ㅁㄹㅁ').includes('headerFooterBtn'), '"ㅁㄹㅁ" → 머리말·꼬리말');
+  assert.deepStrictEqual(top('zzzz'), [], '없으면 빈 목록');
+  assert.ok(top('아').includes('protectBtn'), '조합 중인 "아"도 "암호"의 앞부분으로 맞는다');
+  const dis = UM.searchCommands('저장', [{ label: '저장', disabled: true }, { label: '저장' }]);
+  assert.ok(!dis[0].disabled, '점수가 같으면 쓸 수 있는 명령이 먼저');
+  for (const id of ['cmdBox', 'cmdInput', 'cmdList']) assert.match(html, new RegExp(`id="${id}"`), `명령 검색 #${id}`);
+  assert.match(html, /placeholder="명령 검색 \(Ctrl\+Q\)"/);
+  assert.ok(html.indexOf('id="cmdBox"') > html.indexOf('id="ribbonTabs"') && html.indexOf('id="cmdBox"') < html.indexOf('id="toolbar"'), '명령 검색은 리본 탭 줄 오른쪽');
+  assert.match(s, /e\.code === 'KeyQ'[\s\S]{0,200}\$\('#cmdInput'\)\.focus\(\)/, 'Ctrl+Q로 명령 검색');
+  const run = fnBodyOf(s, 'function runCommand(');
+  assert.match(run, /if \(c\.tab\) showRibbonTab\(c\.tab\);[\s\S]*flashButton\(c\.el\);[\s\S]*c\.el\.click\(\)/, '실행: 그 리본 탭으로 → 버튼을 빛내고 → 누른다');
+  assert.match(fnBodyOf(s, 'function buildCommands('), /SHORTCUTS\.find\(\(s\) => s\.target === b\.id\)/, '단축키도 명령 목록에 보인다');
+  assert.doesNotMatch(aliasSrc, /마스킹/, '별칭에도 옛 낱말(마스킹)을 쓰지 않는다');
+
+  // C. 테마 설정(밝게·어둡게·시스템 따라가기) — 대비는 위 "밝은 아이보리 테마" 칸에서 두 테마 모두 잰다
+  assert.strictEqual(UM.resolveTheme('dark', false), 'dark'); assert.strictEqual(UM.resolveTheme('system', true), 'dark');
+  assert.strictEqual(UM.resolveTheme('system', false), 'light'); assert.strictEqual(UM.resolveTheme('light', true), 'light');
+  for (const v of ['light', 'dark', 'system']) assert.match(html, new RegExp(`<input type="radio" name="themePref" value="${v}">`), `⚙ 설정 테마 ${v}`);
+  assert.match(html, /id="setOutlines"/, '⚙ 설정의 상자 테두리');
+  assert.match(fnBodyOf(s, 'function applyTheme('), /document\.documentElement\.dataset\.theme = UM\.resolveTheme\(pref, darkMQ\.matches\);[\s\S]*window\.retextPdf\?\.setTheme/, '테마를 고르면 화면과 창(nativeTheme)에 같이');
+  assert.match(s, /darkMQ\.addEventListener\('change', \(\) => \{ if \(themePref\(\) === 'system'\) applyTheme\(\); \}\);/, '시스템 따라가기는 OS 테마가 바뀌면 따라간다');
+
+  // D. 시작 화면: 큰 작업 단추 · 최근 파일(이름·폴더·마지막으로 연 때)
+  for (const id of ['emptyOpen', 'startEdit', 'emptyMerge', 'emptyDownsampleFiles', 'startPii', 'startRaster', 'startOrganize', 'emptyExportImages', 'startProtect', 'startRecent', 'emptyRecent']) assert.match(html, new RegExp(`id="${id}"`), `시작 화면 #${id}`);
+  assert.match(html, /<b>개인정보 가리기<\/b>/); assert.match(html, /<b>이미지 PDF로<\/b>/); assert.match(html, /끌어다 놓아도 열립니다/);
+  assert.match(s, /\$\('#startPii'\)\.onclick = \(\) => openThen\(openPiiDialog\);/, '개인정보 가리기 = 파일을 고르면 개인정보 찾기 창까지');
+  assert.match(s, /if \(pendingAfterOpen && pendingAfterOpen\.name === name\)/, '연 뒤 그 작업을 띄운다');
+  const recent = fnBodyOf(s, 'function renderEmptyRecent(');
+  assert.ok(recent.includes("'.rn'") && recent.includes("'.rd'") && recent.includes('UM.whenText(at[p], Date.now())'), '최근 파일: 이름 · 폴더 · 때');
+  assert.match(fnBodyOf(s, 'function pushRecent('), /at\[p\] = Date\.now\(\);/, '연 때를 기억한다');
+  const now = new Date(2026, 9, 15, 15, 0).getTime();
+  assert.strictEqual(UM.whenText(new Date(2026, 9, 15, 9, 5).getTime(), now), '오늘 09:05');
+  assert.strictEqual(UM.whenText(new Date(2026, 9, 14, 23, 59).getTime(), now), '어제 23:59');
+  assert.strictEqual(UM.whenText(new Date(2026, 9, 11, 10, 0).getTime(), now), '4일 전');
+  assert.strictEqual(UM.whenText(new Date(2026, 8, 1).getTime(), now), '2026. 9. 1.');
+  assert.strictEqual(UM.whenText(undefined, now), '');
+
+  // E. 쪽 보기 방식: 두 쪽(표지 따로)·한 쪽씩 넘기기의 줄·이동·맞춤 배율
+  assert.deepStrictEqual(UM.spreadRows(5, false), [[0, 1], [2, 3], [4]]);
+  assert.deepStrictEqual(UM.spreadRows(5, true), [[0], [1, 2], [3, 4]], '표지 따로: 1쪽 혼자');
+  assert.deepStrictEqual(UM.spreadRows(0, true), []);
+  assert.strictEqual(UM.stepPage(2, 1, 6, {}), 3); assert.strictEqual(UM.stepPage(5, 1, 6, {}), 5, '끝에서 멈춘다');
+  assert.strictEqual(UM.stepPage(0, 1, 6, { spread: true }), 2, '두 쪽: 줄 단위로');
+  assert.strictEqual(UM.stepPage(3, -1, 6, { spread: true }), 0);
+  assert.strictEqual(UM.stepPage(0, 1, 6, { spread: true, cover: true }), 1, '표지 다음은 2-3쪽 줄');
+  assert.strictEqual(UM.stepPage(2, 1, 6, { spread: true, cover: true }), 3);
+  assert.deepStrictEqual(UM.visiblePages(4, 6, { spread: true, cover: true }), [3, 4]); assert.deepStrictEqual(UM.visiblePages(4, 6, {}), [4]);
+  const pages = [{ w: 600, h: 800 }, { w: 600, h: 800 }, { w: 800, h: 600 }];
+  assert.strictEqual(UM.fitScale({ mode: 'fitPage', viewW: 1000, viewH: 700, pages, idx: 0 }), 0.87, '한 쪽 전체 보기 = min(1000/600, 700/800) 내림');
+  assert.strictEqual(UM.fitScale({ mode: 'fitPage', viewW: 1000, viewH: 700, pages, idx: 0, layout: { spread: true }, gap: 12 }), 0.82, '두 쪽 전체 보기 = 두 쪽 + 사이가 폭에 들어가게');
+  assert.strictEqual(UM.fitScale({ mode: 'fitWidth', viewW: 1000, viewH: 700, pages, layout: { spread: true }, gap: 12 }), 0.62, '두 쪽 폭 맞춤 = 가장 넓은 쪽 두 칸');
+  assert.strictEqual(UM.fitScale({ mode: 'fitPage', viewW: 1000, viewH: 700, pages, idx: 0, layout: { spread: true, cover: true }, gap: 12 }), 0.82, '표지 혼자여도 같은 두 칸 폭 기준');
+  assert.strictEqual(UM.fitScale({ mode: 'fitPage', viewW: 0, viewH: 700, pages }), null, '잴 수 없으면 null(그대로 둔다)');
+  assert.strictEqual(UM.fitScale({ mode: 'fitWidth', viewW: 100000, viewH: 700, pages }), 4, '최대 400%');
+  const css = html.slice(html.indexOf('<style>'), html.indexOf('</style>'));
+  assert.match(css, /\.pdf\.spread\{display:grid;grid-template-columns:repeat\(2,max-content\);justify-content:safe center/, '두 쪽 보기는 두 칸 격자(넓으면 왼쪽부터 스크롤)');
+  assert.match(css, /\.pdf\.spread\.cover>\.pdfPage:first-child\{grid-column:2\}/, '표지는 오른쪽 칸에 혼자');
+  assert.match(css, /\.pdf\.paged>\.pdfPage\.offView\{display:none\}/, '한 쪽씩 넘기기는 지금 쪽만');
+  assert.match(fnBodyOf(s, 'function fitScale('), /if \(viewLayout\.spread\) return UM\.fitScale\(/, '맞춤 배율은 두 쪽 보기를 따른다');
+  assert.match(fnBodyOf(s, 'function currentPageIndex('), /if \(viewLayout\.paged\) return/, '한 쪽씩 넘기기의 지금 쪽');
+  assert.match(fnBodyOf(s, 'function goToPage('), /if \(viewLayout\.paged\) \{ pagedIdx = /, '한 쪽씩 넘기기에서 쪽 이동');
+  assert.match(s, /goToPage\(UM\.stepPage\(currentPageIndex\(\), 1, pdfPages\.length, viewLayout\)\)/, 'PageDown은 두 쪽 보기면 줄 단위');
+  assert.match(fnBodyOf(s, 'function searchStep('), /revealPage\(hit\.i\);/, '찾기 결과 쪽을 보인다');
+  // F. 상태줄 보기 도구 · 손 도구(Space) · 읽기 모드(F11·Esc)
+  const sb = html.slice(html.indexOf('<div class="statusbar" id="statusbar">'), html.indexOf('<div id="dropOverlay"'));
+  for (const id of ['viewBox', 'vbSelect', 'vbHand', 'vbLayout', 'vbRead']) assert.ok(sb.includes(`id="${id}"`), `상태줄 #${id}`);
+  assert.ok(sb.indexOf('id="viewBox"') < sb.indexOf('id="pdfZoom"'), '보기 도구는 확대 묶음 앞');
+  assert.match(s, /\$\('#pdf'\)\.addEventListener\('mousedown', \(e\) => \{\s*if \(!handActive\(\) \|\| e\.button !== 0\) return;\s*e\.preventDefault\(\); e\.stopPropagation\(\);/, '손 도구는 잡기 단계에서 도구 누르기를 막는다');
+  assert.match(s, /\}, true\);\nfor \(const type of \['click', 'dblclick', 'contextmenu'\]\)/, '손 도구 중에는 상자 누르기·두 번 누르기도 막는다');
+  assert.match(s, /e\.code !== 'Space'[\s\S]{0,200}isTyping\(document\.activeElement\)/, 'Space 손 도구는 입력 중이면 끈다');
+  assert.ok(SH(s).some((x) => /Space/.test(x.keys)) && SH(s).some((x) => /F11/.test(x.keys)) && SH(s).some((x) => x.keys === 'Ctrl+Q'), '단축키 표에 Space·F11·Ctrl+Q');
+  assert.ok(!SH(s).some((x) => x.keys === 'H' && x.target !== 'toolHighlight'), 'H는 그대로 형광펜(손 도구와 겹치지 않는다)');
+  assert.match(css, /body\.reading \.docTabs,body\.reading \.ribbonBar,body\.reading \.toolbar,body\.reading \.ctxbar,body\.reading aside,body\.reading \.propPanel,body\.reading \.statusbar\{display:none!important\}/, '읽기 모드는 리본·패널·상태줄을 숨긴다');
+  assert.match(s, /if \(e\.key === 'F11'\)/, 'F11'); assert.match(s, /e\.key === 'Escape' && reading/, 'Esc로 읽기 모드 나가기');
+  assert.match(s, /document\.addEventListener\('fullscreenchange'/, '전체 화면을 나가면 읽기 모드도');
+  // G. 같은 창에 읽히는 일반 스크립트들은 맨 위 이름(const·let·function)이 겹치지 않는다 — 겹치면 뒤 파일이 통째로 읽히지 않는다(find-replace.js의 api가 그랬다)
+  const classic = [...html.matchAll(/<script src="\/([\w-]+\.js)"><\/script>/g)].map((m) => m[1]).filter((f) => fs.existsSync(path.join(__dirname, f)));
+  const seen = new Map();
+  for (const f of classic) for (const m of fs.readFileSync(path.join(__dirname, f), 'utf8').matchAll(/^(?:const|let|class|function) ([A-Za-z_$][\w$]*)/gm)) {
+    assert.ok(!seen.has(m[1]), `${f}의 맨 위 이름 ${m[1]}이(가) ${seen.get(m[1])}와 겹친다`); seen.set(m[1], f);
+  }
+  assert.ok(classic.includes('ui-model.js') && classic.includes('find-replace.js'), '일반 스크립트 목록');
+  console.log('OK — v6 Wave C 문서 탭·명령 검색·테마·시작 화면·쪽 보기 방식·손 도구·읽기 모드 단언 통과');
+}
+function SH(src) { const a = src.indexOf('const SHORTCUTS = ['); return new Function(`return ${src.slice(a + 'const SHORTCUTS = '.length, src.indexOf('];', a) + 1)};`)(); }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }
