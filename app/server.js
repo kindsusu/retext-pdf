@@ -22,6 +22,8 @@ const { parseOutlineText } = require('./outline-text');
 const { jpegSize, decodePng, encodePng, sniff, MIME } = require('./image-util');
 const pdfMarkdown = require('./pdf-markdown'); // v6 Wave D: PDF → Markdown·텍스트
 const pdfCompare = require('./pdf-compare');   // v6 Wave D: 두 문서 비교
+const pdfForms = require('./pdf-forms');       // v6 Wave E: 양식 외형(한글)·고정 정리·양식 데이터
+const pdfOffice = require('./pdf-office');     // v6 Wave E: Word(.docx)·한글(.hwpx) 내보내기
 const stamps = require('./stamp-store');
 const { buildPrintHtml } = require('./print-html');
 const APP_VERSION = require('../package.json').version;
@@ -490,6 +492,34 @@ async function exportMarkdown(doc, list, q, step = async () => true) {
   writeAtomic(to, Buffer.from(r.text, 'utf8'));
   return { path: to, format, images, stats: r.stats, chars: r.text.length };
 }
+// v6 Wave E: Word·한글 내보내기. 구조는 Markdown 변환과 같은 모델(pdf-markdown convert blocks) — 제목·문단·목록·표·글 조각(굵게·기울임·색·크기·글꼴)·그림.
+// images:'embed'(기본)면 그림 자리를 PNG로 그려 문서 안에 넣는다. PDF 쪽 사이는 쪽 나눔(pageBreaks:false면 이어 쓴다)
+async function exportOffice(doc, list, q, step = async () => true) {
+  const pages = [];
+  for (let k = 0; k < list.length; k++) {
+    if (!(await step(k))) return null;
+    pages.push({ ...doc.pageSize(list[k]), objs: doc.objects(list[k]) });
+  }
+  if (!(await step(list.length))) return null;
+  const to = q.to, format = /\.hwpx$/i.test(to) ? 'hwpx' : 'docx';
+  const embed = q.images !== 'omit' && q.images !== false;
+  const r = pdfMarkdown.convert(pages, { format: 'md', blocks: true, stripHeaderFooter: q.stripHeaderFooter !== false, images: embed ? 'files' : 'omit', imageName: (p, k) => `p${list[p] + 1}-${k}.png` });
+  const images = new Map();
+  for (const im of r.images) images.set(im.name, { data: doc.renderArea(list[im.page], im.rect, 2), w: im.rect.x1 - im.rect.x0, h: im.rect.y1 - im.rect.y0 });
+  const title = path.basename(to).replace(/\.(docx|hwpx)$/i, '');
+  const opts = { images, pageBreaks: q.pageBreaks !== false, title };
+  const bytes = format === 'hwpx' ? pdfOffice.toHwpx(r.pages, opts) : pdfOffice.toDocx(r.pages, opts);
+  writeAtomic(to, bytes);
+  return { path: to, format, bytes: bytes.length, stats: r.stats, images: images.size };
+}
+// v6 Wave E: 양식 값을 쓴 뒤 — 한글처럼 표준 글꼴로 못 그리는 값을 가진 칸의 외형을 맑은 고딕 서브셋으로 다시 쓰고(바이트 손질) 그 바이트로 다시 연다.
+// 실패하면 PDFium 외형(그 글자가 빈칸)을 그대로 두고 경고만 돌려준다 — 값(/V)은 이미 들어 있다
+async function fixFormAppearances(entry, unicode) {
+  if (!unicode || !unicode.length) return null;
+  try { await swapDoc(entry, pdfForms.fixUnicodeAppearances(entry.doc.save(), unicode)); return null; }
+  catch (e) { console.error('form appearance:', e.message); return `한글 값의 모양을 만들지 못했습니다(값은 들어 있습니다): ${e.message}`; }
+}
+const formFieldsOf = (doc) => { const r = doc.formFields(); return { type: r.type, fields: r.fields.map(({ objNum, flags, ...f }) => f) }; };
 const batesOpts = (q) => ({ prefix: q.prefix, suffix: q.suffix, digits: q.digits, start: q.start, position: q.position, size: q.size, margin: q.margin, color: q.color, fontId: q.font });
 // 픽셀 비교: A의 i쪽을 scale로, B의 i쪽을 같은 폭이 되게 그려 채널 차 합이 60 넘는 픽셀을 빨강(알파 150)으로. B에 그 쪽이 없으면 전부 바뀐 것
 function pixelDiff(A, B, i, scale) {
@@ -522,7 +552,7 @@ function piiRedactDoc(doc, kinds) {
   for (let i = 0; i < doc.pageCount; i++) left += pii.findPii(doc.pageChars(i).text, { kinds, limit: PII_LIMIT }).length;
   return { found, redacted: Math.max(0, found - left), left };
 }
-const BATCH_ACTIONS = ['watermark', 'headerFooter', 'pageNumbers', 'sanitize', 'pii', 'protect', 'rasterize', 'downsample', 'markdown', 'bates'];
+const BATCH_ACTIONS = ['watermark', 'headerFooter', 'pageNumbers', 'sanitize', 'pii', 'protect', 'rasterize', 'downsample', 'markdown', 'bates', 'docx', 'hwpx'];
 // 파일 하나에 동작 하나: 반환 { bytes?(쓸 PDF 바이트), info?, images?, next?(베이츠 다음 번호), doc?(바꿔 연 문서), cancelled? }
 async function batchOne(action, doc, bytes, o, ctx) {
   const file = path.basename(ctx.src).replace(/\.pdf$/i, '');
@@ -577,6 +607,11 @@ async function batchOne(action, doc, bytes, o, ctx) {
     case 'markdown': {
       const r = await exportMarkdown(doc, Array.from({ length: doc.pageCount }, (_, k) => k), { ...o, to: ctx.out });
       return { info: { chars: r.chars, stats: r.stats }, images: r.images };
+    }
+    case 'docx':
+    case 'hwpx': { // v6 Wave E: Word·한글로 내보내기(원본 PDF는 그대로)
+      const r = await exportOffice(doc, Array.from({ length: doc.pageCount }, (_, k) => k), { ...o, to: ctx.out });
+      return { info: { bytes: r.bytes, stats: r.stats, images: r.images } };
     }
     case 'bates': {
       const r = doc.addBates({ ...batesOpts(o), start: ctx.batesNext });
@@ -1532,6 +1567,89 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { job.error = e.message; throw e; }
       finally { entry.busy = false; endJob(job); }
     }
+    // ── v6 Wave E: Word·한글 내보내기 · 양식 채우기 ──
+    // Word(.docx)·한글(.hwpx): 열린 문서(미저장 편집 포함)를 내보낸다. 문서는 바꾸지 않는다(긴 작업: 쪽 1장 = 진행 1)
+    if (url.pathname === '/api/pdf/export-office' && req.method === 'POST') {
+      const q = await readJson(req);
+      if (typeof q.to !== 'string' || !/\.(docx|hwpx)$/i.test(q.to)) return json(res, 400, { error: '저장할 파일 이름은 .docx 또는 .hwpx로 끝나야 합니다' });
+      const entry = await getEditableDoc(q.name), { doc } = entry;
+      const list = pageRange(q.pages, doc.pageCount);
+      const job = startJob(q.jobId, 'export-office', list.length + 1);
+      entry.busy = true;
+      try {
+        const r = await exportOffice(doc, list, { ...q, to: safe(q.to) }, async (k) => { await tick(); return progress(job, { done: k, message: `${list[k] != null ? list[k] + 1 + '쪽 읽는 중' : '쓰는 중'}` }); });
+        if (!r) return json(res, 200, { cancelled: true });
+        progress(job, { done: list.length + 1 });
+        return json(res, 200, { ok: true, ...r });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { entry.busy = false; endJob(job); }
+    }
+    // 양식 칸 목록: { type('none'·'acroform'·'xfa-full'·'xfa-foreground'), fields:[…] }. XFA 전용은 칸이 없다(화면이 "지원하지 않는 XFA 양식"을 알린다)
+    if (url.pathname === '/api/pdf/form' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, formFieldsOf(doc));
+    }
+    // 칸 하나에 값 쓰기 — 실행 취소 한 번. 한글 값은 외형을 맑은 고딕으로 다시 쓴다
+    if (url.pathname === '/api/pdf/form/set' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const i = pageIndex(entry.doc, q.i);
+      const r = await mutate(entry, i, () => entry.doc.setFormValue(i, Number(q.index), q.value));
+      const warning = r.ok === false ? null : await fixFormAppearances(entry, r.unicode);
+      const { unicode, ...rest } = r;
+      return json(res, 200, { ...rest, ...(warning ? { warning } : {}), ...stacks(entry) });
+    }
+    // 양식 초기화(모든 칸을 기본값·빈 값으로) — 실행 취소 한 번
+    if (url.pathname === '/api/pdf/form/reset' && req.method === 'POST') {
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.resetForm());
+      const warning = r.ok === false ? null : await fixFormAppearances(entry, r.unicode);
+      const { unicode, ...rest } = r;
+      return json(res, 200, { ...rest, reloadAll: true, ...(warning ? { warning } : {}), ...stacks(entry) });
+    }
+    // 양식 데이터 내보내기: to의 확장자로 형식(.json · .fdf · .xfdf). 문서는 바꾸지 않는다
+    if (url.pathname === '/api/pdf/form/export' && req.method === 'POST') {
+      const q = await readJson(req);
+      const m = /\.(json|fdf|xfdf)$/i.exec(String(q.to || ''));
+      if (!m) return json(res, 400, { error: '저장할 파일 이름은 .json · .fdf · .xfdf로 끝나야 합니다' });
+      const { doc } = await getPdfDoc(q.name);
+      const { fields } = doc.formFields();
+      if (!fields.length) return json(res, 400, { error: '이 문서에는 양식 칸이 없습니다' });
+      const src = path.basename(safe(q.name)), fmt = m[1].toLowerCase();
+      const data = fmt === 'json' ? pdfForms.toJson(fields, src) : fmt === 'fdf' ? pdfForms.toFdf(fields, src) : pdfForms.toXfdf(fields, src);
+      writeAtomic(safe(q.to), Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8'));
+      return json(res, 200, { ok: true, path: q.to, format: fmt, count: Object.keys(pdfForms.collectValues(fields)).length });
+    }
+    // 양식 데이터 가져오기(JSON·FDF·XFDF — 내용으로 알아낸다): 이름이 맞는 칸에 한꺼번에 — 실행 취소 한 번. 없는 이름은 unknown으로 알린다
+    if (url.pathname === '/api/pdf/form/import' && req.method === 'POST') {
+      const q = await readJson(req);
+      if (typeof q.path !== 'string' || !q.path) return json(res, 400, { error: '가져올 파일을 고르세요' });
+      const parsed = pdfForms.parseData(fs.readFileSync(safe(q.path)));
+      const entry = await getEditableDoc(q.name);
+      const r = await mutate(entry, null, () => entry.doc.setFormValues(parsed.values));
+      const warning = r.ok === false ? null : await fixFormAppearances(entry, r.unicode);
+      const { unicode, ...rest } = r;
+      return json(res, 200, { ...rest, format: parsed.format, reloadAll: true, ...(warning ? { warning } : {}), ...stacks(entry) });
+    }
+    // 양식 고정(평면화): 상태별 외형(확인란·라디오)을 지금 상태 하나로 → 엔진이 칸을 쪽 내용으로 굳힌다 → /AcroForm을 뗀다. 실행 취소 한 번
+    if (url.pathname === '/api/pdf/form/flatten' && req.method === 'POST') {
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const before = entry.doc.save();
+      let r, tmp = null;
+      try {
+        tmp = await pdfEngine.open(pdfForms.resolveAppearanceStates(before).bytes);
+        r = tmp.flattenForm();
+        if (!r.ok) { tmp.close(); return json(res, 200, { ...r, ...stacks(entry) }); }
+        const bytes = pdfForms.stripAcroForm(tmp.save());
+        tmp.close(); tmp = null;
+        await swapDoc(entry, bytes);
+      } catch (e) { if (tmp) tmp.close(); await restore(entry, null, before); throw e; }
+      snapshot(entry, null, before);
+      entry.dirty = true;
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
     // 쪽 상자(자르기 창이 지금 값을 채운다): { media, crop, view, rotation, content?(내용 외곽 — detect=1일 때) }
     if (url.pathname === '/api/pdf/boxes' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
@@ -1707,7 +1825,7 @@ const server = http.createServer(async (req, res) => {
           let doc = null;
           try {
             const src = safe(p);
-            const ext = q.action === 'markdown' ? (o.format === 'txt' ? '.txt' : '.md') : '.pdf';
+            const ext = q.action === 'markdown' ? (o.format === 'txt' ? '.txt' : '.md') : q.action === 'docx' ? '.docx' : q.action === 'hwpx' ? '.hwpx' : '.pdf';
             const out = path.join(outDir || path.dirname(src), path.basename(src).replace(/\.pdf$/i, '') + nameSuffix + ext);
             if (docKey(out) === docKey(src)) throw new Error('원본과 같은 파일에는 쓸 수 없습니다 — 다른 폴더를 고르거나 이름 뒤에 붙일 글을 넣으세요');
             if (pdfDocs[docKey(out)]) throw new Error('결과 파일이 지금 앱에서 열려 있습니다 — 그 탭을 닫고 다시 하세요');

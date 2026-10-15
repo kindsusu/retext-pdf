@@ -491,6 +491,17 @@ async function open(buffer, password) {
     return { x0: Math.max(0, Math.min(ax, bx)), x1: Math.min(pw - 1, Math.max(ax, bx)), y0: Math.max(0, Math.min(ay, by)), y1: Math.min(ph - 1, Math.max(ay, by)) };
   };
 
+  // 쪽 그리기. v6 Wave E: FPDF_RenderPageBitmap(FPDF_ANNOT)은 양식 칸(위젯)을 그리지 않는다(실측 2026-10-15: 채운 양식도 빈칸으로 나온다) →
+  //   양식 칸이 있는 쪽은 양식 환경으로 위에 덧그린다(FPDF_FFLDraw). XFA 전용 양식은 PDFium이 칸을 모르므로 쪽 내용만
+  const renderInto = (bmp, i, x, y, w, h) => {
+    P.FPDF_RenderPageBitmap(bmp, page(i), x, y, w, h, 0, RENDER_FLAGS);
+    const ft = P.FPDF_GetFormType(doc);
+    if (ft !== 1 && ft !== 3) return;
+    const p = page(i);
+    let has = false;
+    for (let k = 0, n = P.FPDFPage_GetAnnotCount(p); k < n && !has; k++) { const a = P.FPDFPage_GetAnnot(p, k); if (a) { has = P.FPDFAnnot_GetSubtype(a) === 20; P.FPDFPage_CloseAnnot(a); } }
+    if (has) withFormPage(i, (form) => P.FPDF_FFLDraw(form, bmp, p, x, y, w, h, 0, RENDER_FLAGS));
+  };
   const withBitmap = (i, scale, fn) => {
     const { w, h } = api.pageSize(i);
     const pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
@@ -498,7 +509,7 @@ async function open(buffer, password) {
     if (!bmp) throw new Error('비트맵 생성 실패');
     try {
       P.FPDFBitmap_FillRect(bmp, 0, 0, pw, ph, 0xffffffff);
-      P.FPDF_RenderPageBitmap(bmp, page(i), 0, 0, pw, ph, 0, RENDER_FLAGS);
+      renderInto(bmp, i, 0, 0, pw, ph);
       return fn(bmp, pw, ph);
     } finally { P.FPDFBitmap_Destroy(bmp); }
   };
@@ -1041,6 +1052,149 @@ async function open(buffer, password) {
     return hits.length ? removeAnnots(p, hits) : 0;
   };
 
+  // ── v6 Wave E: 양식(AcroForm) ───────────────────────────────────────────────
+  // 양식 채우기 환경(FPDFDOC_InitFormFillEnvironment)은 양식 기능을 처음 부를 때만 만든다 — 양식 없는 문서·다른 편집은 예전과 똑같다.
+  // FORM_OnAfterLoadPage는 부르지 않는다(쪽 보기를 만들면 쪽을 닫을 때마다 OnBeforeClosePage가 필요하다). 실측 2026-10-15: 값 쓰기
+  // (EPDFAnnot_SetFormFieldValue)와 외형 만들기(EPDFAnnot_GenerateFormFieldAP)는 쪽 보기 없이 된다 — 라디오는 같은 묶음의 /AS까지 바꾼다
+  let formEnv = null; // { info, handle }
+  const formHandle = () => {
+    if (formEnv) return formEnv.handle;
+    const info = P.PDFiumExt_OpenFormFillInfo();
+    const handle = info ? P.PDFiumExt_InitFormFillEnvironment(doc, info) : 0;
+    if (!handle) { if (info) P.PDFiumExt_CloseFormFillInfo(info); throw new Error('양식 기능을 시작하지 못했습니다.'); }
+    formEnv = { info, handle };
+    return handle;
+  };
+  // FPDF_FORMFIELD_* → 이름. FPDF_GetFormType: 0 없음 · 1 AcroForm · 2 XFA 전용(full) · 3 XFA 앞면(foreground — AcroForm 칸도 있다)
+  const FIELD_TYPES = { 1: 'button', 2: 'checkbox', 3: 'radio', 4: 'combo', 5: 'list', 6: 'text', 7: 'signature' };
+  const FORM_TYPES = ['none', 'acroform', 'xfa-full', 'xfa-foreground'];
+  const FF_READONLY = 1, FF_REQUIRED = 2, FF_MULTILINE = 1 << 12, FF_PASSWORD = 1 << 13, FF_EDIT = 1 << 18, FF_MULTISELECT = 1 << 21, FF_COMB = 1 << 24;
+  const ANNOT_FLAG_HIDDEN = 2, ANNOT_FLAG_NOVIEW = 32;
+  // 양식 문자열 읽기(UTF-16, 길이 질의 → 다시 읽기)
+  const formStr = (call) => {
+    const n = call(0, 0);
+    if (!(n > 2)) return '';
+    const b = mal(n);
+    try { call(b, n); return M.UTF16ToString(b); } finally { free(b); }
+  };
+  // WinAnsi(표준 14 글꼴 /Helv 등)로 그릴 수 있는 글자인가 — 아니면(한글·한자 등) 외형을 맑은 고딕 서브셋으로 다시 만든다(pdf-forms.js)
+  const WINANSI_EXTRA = new Set('€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ');
+  const needsUnicodeFont = (s) => [...String(s)].some((c) => { const k = c.codePointAt(0); return k > 0xff && !WINANSI_EXTRA.has(c); });
+  const readField = (form, a, i, index, rotation) => {
+    const b = mal(16);
+    try {
+      const type = FIELD_TYPES[P.FPDFAnnot_GetFormFieldType(form, a)] || 'unknown';
+      const flags = P.FPDFAnnot_GetFormFieldFlags(form, a) >>> 0, aflags = P.FPDFAnnot_GetFlags(a) >>> 0;
+      const f = {
+        i, index, rotation, type,
+        name: formStr((p, n) => P.FPDFAnnot_GetFormFieldName(form, a, p, n)),
+        alt: formStr((p, n) => P.FPDFAnnot_GetFormFieldAlternateName(form, a, p, n)),
+        value: formStr((p, n) => P.FPDFAnnot_GetFormFieldValue(form, a, p, n)),
+        rect: annotRect(a), flags,
+        required: !!(flags & FF_REQUIRED), readOnly: !!(flags & FF_READONLY) || type === 'signature',
+        hidden: !!(aflags & (ANNOT_FLAG_HIDDEN | ANNOT_FLAG_NOVIEW)),
+        objNum: P.EPDFAnnot_GetObjectNumber(a),
+      };
+      if (P.FPDFAnnot_GetFontSize(form, a, b)) f.fontSize = Math.round(f32(b) * 100) / 100;
+      if (P.FPDFAnnot_GetFontColor(form, a, b, b + 4, b + 8)) f.color = hexColor([i32(b), i32(b + 4), i32(b + 8)]);
+      if (P.FPDFAnnot_GetNumberValue(a, 'Q', b)) f.align = Math.round(f32(b));
+      if (type === 'text') {
+        f.multiline = !!(flags & FF_MULTILINE); f.password = !!(flags & FF_PASSWORD); f.comb = !!(flags & FF_COMB);
+        if (P.FPDFAnnot_GetNumberValue(a, 'MaxLen', b)) f.maxLen = Math.round(f32(b));
+      }
+      if (type === 'checkbox' || type === 'radio') {
+        f.exportValue = formStr((p, n) => P.FPDFAnnot_GetFormFieldExportValue(form, a, p, n)) || 'Yes';
+        f.checked = !!P.FPDFAnnot_IsChecked(form, a);
+        f.control = P.FPDFAnnot_GetFormControlIndex(form, a); f.controls = P.FPDFAnnot_GetFormControlCount(form, a);
+      }
+      if (type === 'combo' || type === 'list') {
+        f.editable = type === 'combo' && !!(flags & FF_EDIT); f.multiSelect = type === 'list' && !!(flags & FF_MULTISELECT);
+        f.options = [];
+        for (let k = 0, n = Math.min(1000, P.FPDFAnnot_GetOptionCount(form, a)); k < n; k++) {
+          f.options.push({ label: formStr((p, len) => P.FPDFAnnot_GetOptionLabel(form, a, k, p, len)), selected: !!P.FPDFAnnot_IsOptionSelected(form, a, k) });
+        }
+      }
+      return f;
+    } finally { free(b); }
+  };
+  // 쪽 보기(FORM_OnAfterLoadPage)를 fn 동안만 붙인다. 내보내기 값·체크 여부·글자 크기·목록 고르기는 쪽 보기가 있어야 읽힌다(실측 2026-10-15: 없으면
+  // GetFormFieldExportValue가 빈 값, IsChecked가 늘 false). 쪽 보기를 남겨 두면 그 쪽의 주석을 지우거나 고정할 때 PDFium이 옛 위젯을 가리키므로 곧바로 뗀다
+  const withFormPage = (i, fn) => {
+    const form = formHandle(), p = page(i);
+    P.FORM_OnAfterLoadPage(p, form);
+    try { return fn(form, p); } finally { P.FORM_OnBeforeClosePage(p, form); }
+  };
+  // 문서의 모든 양식 칸(위젯) 훑기. fn(form, a, i, k) — 위젯마다. false를 돌려주면 멈춘다
+  const eachWidget = (fn) => {
+    for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
+      const p = page(i);
+      let has = false;
+      for (let k = 0, m = P.FPDFPage_GetAnnotCount(p); k < m && !has; k++) { const a = P.FPDFPage_GetAnnot(p, k); if (a) { has = P.FPDFAnnot_GetSubtype(a) === 20; P.FPDFPage_CloseAnnot(a); } }
+      if (!has) continue; // 양식 칸이 없는 쪽에는 쪽 보기를 붙이지 않는다
+      const stop = withFormPage(i, (form) => {
+        for (let k = 0, m = P.FPDFPage_GetAnnotCount(p); k < m; k++) {
+          const a = P.FPDFPage_GetAnnot(p, k);
+          if (!a) continue;
+          try { if (P.FPDFAnnot_GetSubtype(a) === 20 && fn(form, a, i, k) === false) return true; } finally { P.FPDFPage_CloseAnnot(a); }
+        }
+        return false;
+      });
+      if (stop) return;
+    }
+  };
+  // 한 칸에 값 쓰기(검사 포함). 반환 쓴 값. f: readField 결과
+  const writeField = (form, a, f, value, p) => {
+    if (f.readOnly || f.type === 'button' || f.type === 'unknown') throw bad(`「${f.name}」은(는) ${f.type === 'signature' ? '서명 칸이라' : '읽기 전용이라'} 값을 바꿀 수 없습니다.`);
+    let v;
+    if (f.type === 'checkbox') v = value === true || (value !== false && value != null && String(value) !== 'Off' && String(value) !== '') ? f.exportValue : 'Off';
+    else if (f.type === 'radio') v = value === true ? f.exportValue : value === false || value == null || value === '' ? 'Off' : String(value);
+    else if (f.type === 'combo' || f.type === 'list') {
+      v = Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '');
+      // 내보내기 값(/Opt [[(ko) (Korean)]]의 ko)으로 준 값은 그 값을 가진 항목의 이름으로 바꾼다 — 항목을 하나씩 골라 보고 칸 값이 같아지는 것을 찾는다
+      if (v && !f.editable && !f.options.some((o) => o.label === v) && f.type === 'list') {
+        const hit = f.options.find((o) => { writeField(form, a, { ...f, options: f.options.map((x) => ({ ...x, selected: false })) }, o.label, p); return formStr((q, n) => P.FPDFAnnot_GetFormFieldValue(form, a, q, n)) === v; });
+        if (hit) v = hit.label;
+      }
+      if (v && !f.editable && !f.options.some((o) => o.label === v)) throw bad(`「${f.name}」에 없는 항목입니다: ${v}`);
+    } else {
+      v = String(value ?? '').replace(/\r\n?/g, '\n');
+      if (!f.multiline) v = v.replace(/\n/g, ' ');
+      if (f.maxLen > 0 && [...v].length > f.maxLen) throw bad(`「${f.name}」은(는) ${f.maxLen}자까지 넣을 수 있습니다.`);
+      if (v.length > 20000) throw bad('양식 값은 20,000자 이하로 넣으세요.');
+    }
+    if (f.type === 'list') {
+      // 목록 상자는 EPDFAnnot_SetFormFieldValue가 받지 않는다(실측) → 칸에 초점을 주고 항목을 고른다(FORM_SetIndexSelected, 쪽 보기 필요)
+      const want = f.options.findIndex((o) => o.label === v);
+      let ok = P.FORM_SetFocusedAnnot(form, a);
+      if (ok) {
+        f.options.forEach((o, k) => { if (o.selected && k !== want) ok = P.FORM_SetIndexSelected(form, p, k, false) && ok; });
+        if (want >= 0) ok = P.FORM_SetIndexSelected(form, p, want, true) && ok;
+      }
+      P.FORM_ForceToKillFocus(form);
+      if (!ok) throw new Error(`「${f.name}」에서 항목을 고르지 못했습니다.`);
+      return v;
+    }
+    const u = utf16(v);
+    try { if (!P.EPDFAnnot_SetFormFieldValue(form, a, u)) throw new Error(`「${f.name}」에 값을 쓰지 못했습니다.`); } finally { free(u); }
+    return v;
+  };
+  // 같은 이름의 글·선택 칸 위젯 외형을 모두 다시 만든다(한 칸이 여러 쪽에 나뉜 양식). 확인란·라디오는 /AS가 바뀌면 그 상태 외형을 그대로 쓴다.
+  // 반환: 한글처럼 표준 글꼴로 못 그리는 값을 가진 위젯 목록(pdf-forms.js가 맑은 고딕 서브셋으로 외형을 다시 쓴다)
+  const regenFields = (names) => {
+    const unicode = [];
+    eachWidget((form, a, i, k) => {
+      const name = formStr((p, n) => P.FPDFAnnot_GetFormFieldName(form, a, p, n));
+      if (!names.has(name)) return;
+      const t = FIELD_TYPES[P.FPDFAnnot_GetFormFieldType(form, a)];
+      if (t !== 'text' && t !== 'combo' && t !== 'list') return;
+      P.EPDFAnnot_GenerateFormFieldAP(a);
+      if (t === 'list') return; // 목록 상자는 고른 항목을 칠할 뿐 값 글자를 새로 그리지 않는다
+      const f = readField(form, a, i, k, 0);
+      if (f.value && needsUnicodeFont(f.value)) unicode.push({ i, index: k, objNum: f.objNum, value: f.value, kind: t, fontSize: f.fontSize || 0, color: f.color || '#000000', align: f.align || 0, multiline: !!f.multiline, comb: !!f.comb, maxLen: f.maxLen || 0, password: !!f.password });
+    });
+    return unicode;
+  };
+
   const api = {
     get pageCount() { return P.FPDF_GetPageCount(doc); },
 
@@ -1132,7 +1286,7 @@ async function open(buffer, password) {
       if (!bmp) { free(outPP); throw new Error('미리보기 생성 실패'); }
       try {
         P.FPDFBitmap_FillRect(bmp, 0, 0, pw, ph, 0xffffffff);
-        P.FPDF_RenderPageBitmap(bmp, page(i), -Math.round(x * s), -Math.round(top * s), Math.round(size.w * s), Math.round(size.h * s), 0, RENDER_FLAGS);
+        renderInto(bmp, i, -Math.round(x * s), -Math.round(top * s), Math.round(size.w * s), Math.round(size.h * s));
         const len = P.EPDF_PNG_EncodeRGBA(P.FPDFBitmap_GetBuffer(bmp), pw, ph, P.FPDFBitmap_GetStride(bmp), 6, outPP);
         const ptr = i32(outPP);
         if (!len || !ptr) throw new Error('미리보기 PNG 생성 실패');
@@ -1681,7 +1835,19 @@ async function open(buffer, password) {
       return { idx: P.FPDFPage_CountObjects(p) - 1 };
     },
     // v6 Wave B: 전자서명 수(PDFium FPDF_GetSignatureCount — 서명 값 /V가 있는 /Sig 칸). 못 읽으면 0
-    get signatureCount() { try { return Math.max(0, P.FPDF_GetSignatureCount ? P.FPDF_GetSignatureCount(doc) : 0); } catch { return 0; } },
+    // v6 Wave E: FPDF_GetSignatureCount는 값이 없는 빈 서명 칸(/FT /Sig, /V 없음)까지 센다(실측 2026-10-15: 빈 양식이 "서명된 문서"로 잡혀 저장이 막혔다)
+    //   → 서명 사전에 /Contents나 /ByteRange가 있는 것만 센다
+    get signatureCount() {
+      try {
+        const n = Math.max(0, P.FPDF_GetSignatureCount ? P.FPDF_GetSignatureCount(doc) : 0);
+        let signed = 0;
+        for (let k = 0; k < n; k++) {
+          const sig = P.FPDF_GetSignatureObject(doc, k);
+          if (sig && (P.FPDFSignatureObj_GetContents(sig, 0, 0) > 0 || P.FPDFSignatureObj_GetByteRange(sig, 0, 0) > 0)) signed++;
+        }
+        return signed;
+      } catch { return 0; }
+    },
     // 한 객체를 글자 위치 cuts(오름차순, 0 < k < 글자 수)에서 여러 객체로 가른다(15d: TJ 안의 큰 점프로 두 칸이 된 객체).
     // 앞 조각은 제자리(같은 인덱스), 뒤 조각들은 원래 글꼴로 새 객체를 만들어 그 글자의 기준선 시작점에 놓고 맨 뒤에 넣는다.
     // 원래 글꼴로 다시 그릴 수 없는 글자(글자 대응이 없는 서브셋)면 가르지 않는다 — 모양이 바뀌면 안 되는 "고치지 않은" 글자다
@@ -2912,6 +3078,93 @@ async function open(buffer, password) {
       return { ok: flattened > 0, flattened, skipped, failed };
     },
 
+    // ── v6 Wave E: 양식(AcroForm) ───────────────────────────────────────────
+    // 양식 종류: 'none' · 'acroform' · 'xfa-full'(XFA 전용 — 칸을 채울 수 없다) · 'xfa-foreground'(XFA와 AcroForm 칸이 함께 — AcroForm 칸만 채운다)
+    formType() { return FORM_TYPES[P.FPDF_GetFormType(doc)] || 'none'; },
+    // 모든 칸: [{ i, index(그 쪽 /Annots 안 위치), name, alt(/TU), type, value, rect[l,b,r,t](회전 전 쪽 좌표), rotation(쪽 회전),
+    //   required, readOnly, hidden, fontSize(0 = 자동), color, align(/Q), multiline, password, comb, maxLen, exportValue, checked, options[{label, selected}] … }]
+    // 순서 = 쪽 순서 → 그 쪽 /Annots 순서(탭 순서)
+    formFields() {
+      const type = api.formType();
+      if (type === 'none' || type === 'xfa-full') return { type, fields: [] };
+      const fields = [], rot = new Map();
+      eachWidget((form, a, i, k) => {
+        if (!rot.has(i)) rot.set(i, P.FPDFPage_GetRotation(page(i)));
+        fields.push(readField(form, a, i, k, rot.get(i)));
+      });
+      return { type, fields };
+    },
+    // 칸 하나에 값 쓰기. value: 글·콤보·목록은 문자열, 확인란은 true/false(또는 내보내기 값·'Off'), 라디오는 고른 위젯의 내보내기 값('Off'면 해제)
+    // 반환 { ok, name, type, value, unicode:[…](외형을 맑은 고딕으로 다시 써야 할 위젯) }
+    setFormValue(i, index, value) {
+      const r = withFormPage(i, (form) => withAnnot(i, index, (a) => {
+        if (P.FPDFAnnot_GetSubtype(a) !== 20) throw bad('양식 칸이 아닙니다.');
+        const f = readField(form, a, i, index, 0);
+        return { ok: true, name: f.name, type: f.type, value: writeField(form, a, f, value, page(i)) };
+      }));
+      return { ...r, unicode: regenFields(new Set([r.name])) };
+    },
+    // 이름 → 값 여러 개 한꺼번에(가져오기). 라디오는 그 값을 내보내기 값으로 가진 위젯에 쓴다. 반환 { ok, set, unknown[], failed[{name, error}], unicode }
+    setFormValues(values = {}) {
+      const want = new Map(Object.entries(values || {}).map(([k, v]) => [String(k), v]));
+      const done = new Set(), failed = [];
+      eachWidget((form, a, i, k) => {
+        const f = readField(form, a, i, k, 0);
+        if (!want.has(f.name) || done.has(f.name)) return;
+        const v = want.get(f.name);
+        if (f.type === 'radio' && v !== 'Off' && v !== false && v != null && v !== '' && String(v) !== f.exportValue) return; // 다른 위젯이 그 값을 가진다
+        try { writeField(form, a, f, v, page(i)); done.add(f.name); } catch (e) { failed.push({ name: f.name, error: e.message }); done.add(f.name); }
+      });
+      const set = [...done].filter((n) => !failed.some((x) => x.name === n));
+      const unknown = [...want.keys()].filter((n) => !done.has(n));
+      return { ok: set.length > 0, set: set.length, names: set, unknown, failed, unicode: set.length ? regenFields(new Set(set)) : [] };
+    },
+    // 양식 초기화: 글·선택 칸은 기본값(/DV, 없으면 빈 값), 확인란·라디오는 해제. 읽기 전용·서명 칸은 그대로
+    resetForm() {
+      const names = new Set();
+      let changed = 0;
+      eachWidget((form, a, i, k) => {
+        const f = readField(form, a, i, k, 0);
+        if (f.readOnly || names.has(f.name) || !['text', 'combo', 'list', 'checkbox', 'radio'].includes(f.type)) return;
+        names.add(f.name);
+        const dv = annotStr(a, 'DV');
+        const target = f.type === 'checkbox' || f.type === 'radio' ? 'Off' : dv;
+        const isEmpty = f.type === 'checkbox' || f.type === 'radio' ? f.value === 'Off' || f.value === '' : f.value === target;
+        if (isEmpty) return;
+        try { writeField(form, a, f, f.type === 'checkbox' ? false : target, page(i)); changed++; } catch {}
+      });
+      return { ok: changed > 0, reset: changed, unicode: changed ? regenFields(names) : [] };
+    },
+    // 양식 고정(평면화): 모든 칸의 지금 외형을 쪽 내용으로 굳히고 칸을 뺀다. 숨은 칸·외형 없는 칸(빈 서명 칸)은 그냥 뺀다.
+    // /AcroForm 사전 정리는 서버가 pdf-forms.stripAcroForm으로 한다(PDFium API에 카탈로그를 고치는 길이 없다)
+    flattenForm() {
+      let flattened = 0, removed = 0;
+      for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
+        const p = page(i), flat = [], drop = [];
+        for (let k = 0, m = P.FPDFPage_GetAnnotCount(p); k < m; k++) {
+          const a = P.FPDFPage_GetAnnot(p, k);
+          if (!a) continue;
+          try {
+            if (P.FPDFAnnot_GetSubtype(a) !== 20) continue;
+            const hidden = (P.FPDFAnnot_GetFlags(a) >>> 0) & (ANNOT_FLAG_HIDDEN | ANNOT_FLAG_NOVIEW);
+            (hidden ? drop : flat).push(k); // 외형 없는 칸(빈 서명 칸)은 고정이 실패하면 아래에서 뺀다 — 확인란처럼 상태별 외형(/N 사전)은 HasAppearanceStream이 false라 먼저 거르지 않는다
+          } finally { P.FPDFPage_CloseAnnot(a); }
+        }
+        if (!flat.length && !drop.length) continue;
+        // 뒤에서부터 — 앞 칸의 번호가 밀리지 않는다
+        for (const k of [...flat, ...drop].sort((x, y) => y - x)) {
+          if (drop.includes(k)) { if (P.FPDFPage_RemoveAnnot(p, k)) removed++; continue; }
+          const a = P.FPDFPage_GetAnnot(p, k);
+          if (!a) continue;
+          const ok = P.EPDFAnnot_Flatten(p, a);
+          P.FPDFPage_CloseAnnot(a);
+          if (ok) flattened++; else if (P.FPDFPage_RemoveAnnot(p, k)) removed++;
+        }
+        regen(p);
+      }
+      return { ok: flattened + removed > 0, flattened, removed };
+    },
+
     // ── 목차(책갈피) ─────────────────────────────────────────────────────────
     // 읽기: [{ title, page(0 기준, 목적지가 없거나 다른 파일이면 null), children }]. 순환·과도한 깊이(64)·개수(10,000)에서 멈춘다
     outline() {
@@ -3161,7 +3414,7 @@ async function open(buffer, password) {
       if (!bmp) { free(outPP); throw new Error('그림을 만들지 못했습니다(메모리 부족).'); }
       try {
         P.FPDFBitmap_FillRect(bmp, 0, 0, pw, ph, 0xffffffff);
-        P.FPDF_RenderPageBitmap(bmp, page(i), -dx0, -dy0, PW, PH, 0, RENDER_FLAGS);
+        renderInto(bmp, i, -dx0, -dy0, PW, PH);
         const len = P.EPDF_PNG_EncodeRGBA(P.FPDFBitmap_GetBuffer(bmp), pw, ph, P.FPDFBitmap_GetStride(bmp), 6, outPP);
         const ptr = i32(outPP);
         if (!len || !ptr) throw new Error('PNG를 만들지 못했습니다.');
@@ -3333,6 +3586,7 @@ async function open(buffer, password) {
       pending.clear();
       for (const h of pages.values()) P.FPDF_ClosePage(h);
       pages.clear();
+      if (formEnv) { P.PDFiumExt_ExitFormFillEnvironment(formEnv.handle); P.PDFiumExt_CloseFormFillInfo(formEnv.info); formEnv = null; } // v6 Wave E: 양식 환경은 문서보다 먼저 닫는다
       P.FPDF_CloseDocument(doc);
       free(srcPtr);
       for (const p of fbPtrs.splice(0)) free(p);

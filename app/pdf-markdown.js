@@ -147,6 +147,54 @@
       return lead + (b && i ? `**_${e}_**` : b ? `**${e}**` : i ? `_${e}_` : e) + trail;
     }).join('');
   }
+  // v6 Wave E: Word·한글 내보내기용 글 조각(runs) — 굵게·기울임에 더해 색·크기·글꼴까지 같은 것끼리 묶는다.
+  //   run: { text, b, i, color('#rrggbb'), size(pt, 0.5 단위), font(글꼴 이름 — 서브셋 접두어·굵기 꼬리를 뗀 것) }
+  const hex2 = (v) => Math.max(0, Math.min(255, Math.round(v || 0))).toString(16).padStart(2, '0');
+  const familyOf = (o) => baseFont(o).replace(/[-,]?(PSMT|MT)$/, '').replace(/[-,]?(bold|italic|oblique|regular|medium|light|semibold|demibold|heavy)+$/i, '').trim();
+  const sameStyle = (a, b) => a.b === b.b && a.i === b.i && a.color === b.color && a.size === b.size && a.font === b.font;
+  function richRuns(box) {
+    const out = [], seps = box.seps || [];
+    box.objs.forEach((o, j) => {
+      const sep = j ? seps[j - 1] || '' : '';
+      const t = normText(o.text || '');
+      const c = o.color || [0, 0, 0];
+      const st = { b: isBold(o), i: isItalic(o), color: '#' + hex2(c[0]) + hex2(c[1]) + hex2(c[2]), size: Math.round(sizeOf(o) * 2) / 2, font: familyOf(o) };
+      const last = out[out.length - 1];
+      if (last && (sameStyle(last, st) || !t.trim())) last.text += sep + t; // 같은 모양이거나 빈 조각이면 앞 조각에 붙인다
+      else { if (last) last.text += sep; out.push({ text: t, ...st }); }
+    });
+    return out.filter((r) => r.text);
+  }
+  // 여러 줄을 한 문단의 runs로 — 줄 잇기 규칙은 joinLines와 같다(하이픈 · 줄 끝 공백 · 한글끼리 붙임)
+  function joinRuns(lines) {
+    const out = [];
+    lines.forEach((l, k) => {
+      const runs = richRuns(l.box).map((r) => ({ ...r }));
+      if (!runs.length) return;
+      runs[0].text = runs[0].text.replace(/^\s+/, '');
+      if (k && out.length) {
+        const prev = out[out.length - 1], prevRaw = lines[k - 1].box.text, next = runs[0].text;
+        prev.text = prev.text.replace(/\s+$/, '');
+        if (/[A-Za-z][-‐]$/.test(prev.text) && /^[a-z]/.test(next)) prev.text = prev.text.slice(0, -1);
+        else if (/\s$/.test(prevRaw) || !(CJK.test(prev.text.slice(-1)) && CJK.test(next.charAt(0)))) runs[0].text = ' ' + next;
+      }
+      for (const r of runs) { const last = out[out.length - 1]; if (last && sameStyle(last, r)) last.text += r.text; else out.push(r); }
+    });
+    if (out.length) out[out.length - 1].text = out[out.length - 1].text.replace(/\s+$/, '');
+    return out.filter((r) => r.text);
+  }
+  // runs 맨 앞의 글머리·번호 표시를 뗀다
+  function stripMarker(runs, re) {
+    const out = runs.map((r) => ({ ...r }));
+    while (out.length) {
+      const m = out[0].text.match(re);
+      if (m) { out[0].text = out[0].text.slice(m[0].length); if (!out[0].text) out.shift(); return out; }
+      if (out[0].text.trim()) return out;
+      out.shift();
+    }
+    return out;
+  }
+
   // 줄 잇기: 줄 끝 하이픈 + 소문자로 시작 → 하이픈을 빼고 붙임 · 줄 끝에 공백이 있으면 한 칸 · 한글·한자끼리는 붙임(줄 끝 음절 나눔) · 나머지는 한 칸
   function joinLines(parts) {
     let out = '';
@@ -195,6 +243,7 @@
 
     const blocks = []; // 쪽마다 [문자열]
     const images = [];
+    const model = opts.blocks ? [] : null; // v6 Wave E: 쪽마다 { w, h, blocks:[구조 블록] } — Word·한글 내보내기(pdf-office.js)가 쓴다
     pages.forEach((pg, p) => {
       const lines = kept[p];
       const paths = (pg.objs || []).filter((o) => o.type === 'path' && o.bounds && !o.mask && !o.deco);
@@ -208,7 +257,8 @@
         const text = md
           ? [rows[0], rows[0].map(() => '---'), ...rows.slice(1)].map((r) => `| ${r.join(' | ')} |`).join('\n')
           : rows.map((r) => r.join('\t')).join('\n');
-        items.push({ pos: t.first, top: t.top, text });
+        const block = model ? { type: 'table', rows: t.grid.map((r) => r.map((c) => (c ? { runs: joinRuns([c]) } : null))) } : null;
+        items.push({ pos: t.first, top: t.top, text, block });
       }
       const rest = lines.filter((l) => !inTable.has(l));
       const infoOf = new Map(rest.map((l) => [l.box, l]));
@@ -228,6 +278,16 @@
           const allBold = g.lines.every((l) => l.box.objs.filter((o) => (o.text || '').trim()).every(isBold));
           const parts = g.lines.map((l) => ({ raw: l.box.text, text: styledText(l.box, { md, plainStyle: level ? { b: allBold } : null }) }));
           let text = joinLines(parts);
+          let block = null;
+          if (model) {
+            const runs = joinRuns(g.lines);
+            if (g.marker) {
+              const indent = Math.max(0, Math.min(3, Math.round((first.x0 - minX) / (1.5 * first.size))));
+              block = g.marker === 'number' ? { type: 'list', ordered: true, n: Number(normText(first.box.text).match(NUMBERED)[1]), level: indent, runs: stripMarker(runs, NUMBERED) }
+                : { type: 'list', ordered: false, level: indent, runs: g.marker === 'bullet' ? stripMarker(runs, TEXT_BULLET) : runs };
+            } else if (level && text.length <= 200 && g.lines.length <= 3) block = { type: 'heading', level, runs };
+            else block = { type: 'para', runs };
+          }
           if (g.marker) {
             stats.lists++;
             const indent = md ? '  '.repeat(Math.max(0, Math.min(3, Math.round((first.x0 - minX) / (1.5 * first.size))))) : '';
@@ -240,7 +300,7 @@
             stats.paragraphs++;
             if (md) text = text.replace(/^(\s*)([#>+-]|\d{1,3}[.)])(\s)/, '$1\\$2$3');
           }
-          items.push({ pos: first.k, top: first.top, text, list: !!g.marker });
+          items.push({ pos: first.k, top: first.top, text, list: !!g.marker, block });
         }
       }
       items.sort((a, b) => a.pos - b.pos);
@@ -255,7 +315,7 @@
           images.push({ page: p, rect: { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 }, name });
           stats.images++;
           const at = items.findIndex((it) => it.top <= b.y1 + 1);
-          const it = { pos: -1, top: b.y1, text: md ? `![](${encodeURI(name)})` : `[그림: ${name}]` };
+          const it = { pos: -1, top: b.y1, text: md ? `![](${encodeURI(name)})` : `[그림: ${name}]`, block: model ? { type: 'image', name, page: p, rect: { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 } } : null };
           if (at < 0) items.push(it); else items.splice(at, 0, it);
         }
       }
@@ -263,12 +323,13 @@
       const out = [];
       items.forEach((it, k) => { if (k && !(it.list && items[k - 1].list)) out.push(''); out.push(it.text); });
       blocks.push(out.join('\n'));
+      if (model) model.push({ w: pg.w, h: pg.h, rotation: pg.rotation || 0, blocks: items.map((it) => it.block).filter(Boolean) });
     });
     const sep = opts.pageBreaks ? (md ? '\n\n---\n\n' : '\n\n\f\n') : '\n\n';
     const text = blocks.filter((b, k) => b || opts.pageBreaks || k === 0).join(sep).replace(/\n{3,}/g, '\n\n').trim() + '\n';
-    return { text, images, stats };
+    return model ? { text, images, stats, pages: model } : { text, images, stats };
   }
 
-  const api = { convert, isBold, isItalic, findTables, joinLines, PAGE_NUM };
+  const api = { convert, isBold, isItalic, findTables, joinLines, richRuns, joinRuns, PAGE_NUM };
   if (typeof module !== 'undefined') module.exports = api;
 })();

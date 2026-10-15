@@ -517,6 +517,23 @@
   .ctList{margin:6px 0 10px;padding:8px 10px 8px 28px;max-height:220px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px}
   .ctList li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   dialog.panel button.danger{color:var(--badText)}
+  /* ---- v6 Wave E: 양식 칸 덮개 — 평소에는 투명(쪽 그림의 칸 외형이 보인다), 누르면 흰 바탕 입력칸. 돌린 쪽은 안쪽 입력칸을 같은 각도로 돌린다 ---- */
+  .fmField{position:absolute;z-index:5;border-radius:1px}
+  .pdf.fmHi .fmField{background:rgba(96,140,255,.16);box-shadow:inset 0 0 0 1px rgba(96,140,255,.45)}
+  .pdf.fmHi .fmField.req{box-shadow:inset 0 0 0 1.5px rgba(220,50,50,.85)}
+  .fmField.fm-signature{cursor:not-allowed}
+  .pdf.fmHi .fmField.fm-signature{background:rgba(140,140,140,.12);box-shadow:inset 0 0 0 1px rgba(120,120,120,.6);outline:1px dashed rgba(120,120,120,.6)}
+  .fmField:focus-within,.fmField.editing{box-shadow:0 0 0 2px var(--acc) !important}
+  .fmCtl{position:absolute;left:0;top:0;margin:0;padding:0 2px;border:0;outline:none;background:transparent;color:transparent;caret-color:var(--paperInk);font-family:'Malgun Gothic',sans-serif;line-height:1.15;resize:none;box-sizing:border-box;transform-origin:center center}
+  .fmCtl.rot{left:50%;top:50%}
+  .fmCtl:focus,.fmCtl.editing{background:var(--paper);color:var(--fmColor,var(--paperInk))}
+  textarea.fmCtl{padding:1px 2px;overflow:auto}
+  select.fmCtl{appearance:none;-webkit-appearance:none;cursor:pointer}select.fmCtl option{color:var(--paperInk);background:var(--paper)}
+  select.fmCtl[size]{appearance:auto;-webkit-appearance:auto;overflow-y:auto}
+  select.fmCtl[size]:not(.editing){opacity:0} /* 목록 상자: 평소에는 쪽 그림(고른 항목 칠)이 보이게 */
+  input.fmCtl.fmChoice{opacity:0;cursor:pointer;padding:0}
+  .frList{margin:6px 0 12px 18px;max-height:220px;overflow:auto;line-height:1.6}
+  .fmCtl[readonly]{cursor:default}
   /* ---- v6 Wave D: 끌기 도구(자르기·링크·스냅샷) · 링크 상자 · 첨부 목록 · 비교 보기 · 일괄 처리 ---- */
   .pdf.toolDrag,.pdf.toolDrag .pdfBox{cursor:crosshair}
   .wdBox{position:absolute;z-index:6;border:1.5px dashed var(--acc);background:var(--accBg);pointer-events:none}
@@ -705,8 +722,18 @@
     <button type="button" class="tb" id="rasterizeBtn" data-icon="rasterize" data-tip="이미지 PDF로 저장: 쪽을 그림으로 바꾼 새 PDF를 저장합니다(숨은 글자·주석·메타데이터가 모두 빠집니다)"><span class="tl">이미지 PDF</span></button>
     <button type="button" class="tb" id="attachBtn" data-icon="attach" data-tip="첨부 파일: 문서에 든 파일을 보고 꺼내거나 넣고 지웁니다(왼쪽 패널)"><span class="tl">첨부 파일</span></button>
   </div>
+  <!-- v6 Wave E 양식: 칸은 늘 쪽 위에서 바로 채운다(Tab·Shift+Tab으로 다음·앞 칸). 이 묶음은 강조·초기화·데이터 내보내기/가져오기·고정 -->
+  <div class="tgroup" id="groupForm" data-modes="pdf" role="group" aria-label="양식">
+    <button type="button" class="tb" id="formHighlightBtn" data-icon="formHighlight" aria-pressed="true" data-tip="양식 필드 강조: 채울 수 있는 칸을 옅은 파란색으로, 꼭 채울 칸은 빨간 테두리로 보입니다"><span class="tl">필드 강조</span></button>
+    <button type="button" class="tb" id="formResetBtn" data-icon="formReset" data-tip="양식 초기화: 모든 칸을 처음 값(빈칸)으로 되돌립니다 — 실행 취소할 수 있습니다"><span class="tl">양식 초기화</span></button>
+    <button type="button" class="tb" id="formExportBtn" data-icon="formExport" data-tip="양식 데이터 내보내기: 칸에 넣은 값을 JSON·FDF·XFDF 파일로 저장합니다"><span class="tl">데이터 내보내기</span></button>
+    <button type="button" class="tb" id="formImportBtn" data-icon="formImport" data-electron data-tip="양식 데이터 가져오기: JSON·FDF·XFDF 파일의 값을 이름이 같은 칸에 채웁니다"><span class="tl">데이터 가져오기</span></button>
+    <button type="button" class="tb" id="formFlattenBtn" data-icon="formFlatten" data-tip="양식 고정: 채운 값을 쪽 내용으로 굳혀 더는 고칠 수 없게 합니다(실행 취소는 됩니다)"><span class="tl">양식 고정</span></button>
+  </div>
   <div class="tgroup" id="groupConvert" data-modes="empty pdf" role="group" aria-label="변환·비교">
     <button type="button" class="tb" id="mdExportBtn" data-icon="markdown" data-modes="pdf" data-tip="Markdown·텍스트로 내보내기: 제목·목록·표·굵게를 살려 .md(.txt)로 저장하고 Markdown 탭으로 엽니다"><span class="tl">Markdown</span></button>
+    <button type="button" class="tb" id="docxExportBtn" data-icon="word" data-modes="pdf" data-tip="Word로 내보내기: 제목·문단·목록·표·굵게·색을 살려 .docx 문서로 저장합니다"><span class="tl">Word로</span></button>
+    <button type="button" class="tb" id="hwpxExportBtn" data-icon="hwp" data-modes="pdf" data-tip="한글(HWPX)로 내보내기: 제목·문단·목록·표·굵게·색을 살려 한컴오피스 한글 .hwpx 문서로 저장합니다"><span class="tl">한글(HWPX)로</span></button>
     <button type="button" class="tb" id="compareBtn" data-icon="compare" data-modes="pdf" data-tip="두 문서 비교: 다른 PDF와 글을 견주어 넣은·지운·바뀐 곳을 나란히 보여 줍니다"><span class="tl">비교</span></button>
     <button type="button" class="tb" id="batchBtn" data-icon="batch" data-tip="일괄 처리: 여러 PDF에 워터마크·쪽 번호·암호·개인정보 가리기 같은 작업을 한꺼번에 합니다"><span class="tl">일괄 처리…</span></button>
   </div>
@@ -1016,6 +1043,26 @@
   <div class="row"><span class="sp"></span><button id="mdRun" class="pri" type="button">내보내기…</button><button id="mdCancel" type="button">취소</button></div>
 </div></dialog>
 
+<!-- v6 Wave E: Word·한글 내보내기 — 형식(.docx·.hwpx)은 누른 버튼이 정한다 → /api/pdf/export-office(진행 창) -->
+<dialog id="officeDialog" class="panel" aria-labelledby="officeTitle"><div class="card" style="width:520px">
+  <h2 id="officeTitle">Word로 내보내기</h2>
+  <p class="hint2" id="officeHint">큰 글자는 제목, 글머리·번호는 목록, 칸이 맞는 줄은 표로 바꾸고 굵게·기울임·색·글자 크기·글꼴을 살립니다. 지금 고친 내용 그대로 내보냅니다.</p>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="officeRange" data-default="all"></span></div>
+  <div class="checks col">
+    <label><input type="checkbox" id="officeStripHf" checked>머리말·꼬리말·쪽 번호 빼기 <span class="hint2">— 여러 쪽 위·아래에 되풀이되는 줄</span></label>
+    <label><input type="checkbox" id="officePageBreaks" checked>PDF 쪽마다 새 쪽에서 시작</label>
+    <label><input type="checkbox" id="officeImages" checked>그림 넣기 <span class="hint2">— 그림 자리를 그려 문서에 넣습니다</span></label>
+  </div>
+  <div class="row" style="min-height:20px;margin:0"><span id="officeError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><span class="sp"></span><button id="officeRun" class="pri" type="button">내보내기…</button><button id="officeCancel" type="button">취소</button></div>
+</div></dialog>
+<!-- v6 Wave E: 저장 전 — 꼭 채울 칸(필수)이 비어 있으면 알린다(그래도 저장할 수 있다) -->
+<dialog id="formReqDialog" class="panel" aria-labelledby="frTitle"><div class="card" style="max-width:480px">
+  <h2 id="frTitle">꼭 채울 칸이 비어 있습니다</h2>
+  <p class="hint2">아래 칸은 양식에서 필수로 정한 칸입니다. 비워 둔 채 저장하면 받는 쪽에서 양식을 돌려보낼 수 있습니다.</p>
+  <ul id="frList" class="frList"></ul>
+  <div class="row"><button type="button" id="frSave">그래도 저장</button><span class="sp"></span><button type="button" id="frFill" class="pri">칸 채우기</button></div>
+</div></dialog>
 <!-- 쪽 자르기: 끈 사각형 · 여백(pt) · 내용에 맞춰 자동 · 풀기 → /api/pdf/crop(실행 취소 한 번) -->
 <dialog id="cropDialog" class="panel" aria-labelledby="cropTitle"><div class="card" style="width:500px">
   <h2 id="cropTitle">쪽 자르기</h2>
@@ -1110,7 +1157,8 @@
   <div class="row"><span class="pnLbl">작업</span><select id="batchAction">
     <option value="watermark">워터마크</option><option value="headerFooter">머리말·꼬리말</option><option value="pageNumbers">쪽 번호</option><option value="bates">베이츠 번호(이어서)</option>
     <option value="sanitize">숨은 데이터 제거</option><option value="pii">개인정보 찾아 가리기</option><option value="protect">암호 걸기</option>
-    <option value="rasterize">이미지 PDF로</option><option value="downsample">용량 줄이기</option><option value="markdown">Markdown 내보내기</option></select></div>
+    <option value="rasterize">이미지 PDF로</option><option value="downsample">용량 줄이기</option><option value="markdown">Markdown 내보내기</option>
+    <option value="docx">Word(.docx)로 내보내기</option><option value="hwpx">한글(.hwpx)로 내보내기</option></select></div>
   <div class="batchOpts" id="batchOpts">
     <div data-act="watermark"><span class="pnLbl">글자</span><input id="bwText" type="text" value="대외비" style="width:140px"> 크기 <input id="bwSize" type="number" min="6" max="400" value="60" style="width:60px"> pt 불투명도 <input id="bwOpacity" type="number" min="5" max="100" value="25" style="width:56px">% 색 <input id="bwColor" type="color" value="#c0392b"></div>
     <div data-act="headerFooter"><span class="pnLbl">위 가운데</span><input id="bhTop" type="text" value="{file}" style="width:150px"> 아래 가운데 <input id="bhBottom" type="text" value="{page} / {pages}" style="width:150px"> <span class="hint2">{page} {pages} {date} {file} {title}</span></div>
@@ -1121,6 +1169,8 @@
     <div data-act="protect"><span class="pnLbl">여는 암호</span><input id="bpwUser" type="password" autocomplete="new-password" style="width:150px"> 한 번 더 <input id="bpwUser2" type="password" autocomplete="new-password" style="width:150px"></div>
     <div data-act="rasterize"><span class="pnLbl">해상도</span><input id="brDpi" type="number" min="36" max="600" value="150" style="width:70px"> dpi <span class="hint2">글자·숨은 데이터가 모두 빠진 그림 PDF</span></div>
     <div data-act="downsample"><span class="pnLbl">최대 dpi</span><input id="bdDpi" type="number" min="30" max="600" value="150" style="width:70px"> 품질 <input id="bdQuality" type="number" min="1" max="100" value="75" style="width:60px"></div>
+    <div data-act="docx"><label><input type="checkbox" id="bxDocxImages" checked> 그림 넣기</label> <label><input type="checkbox" id="bxDocxHf" checked> 머리말·꼬리말·쪽 번호 빼기</label></div>
+    <div data-act="hwpx"><label><input type="checkbox" id="bxHwpxImages" checked> 그림 넣기</label> <label><input type="checkbox" id="bxHwpxHf" checked> 머리말·꼬리말·쪽 번호 빼기</label></div>
     <div data-act="markdown"><span class="pnLbl">형식</span><select id="bmFormat"><option value="md">Markdown (.md)</option><option value="txt">텍스트 (.txt)</option></select> <label><input type="checkbox" id="bmImages"> 그림을 PNG로</label></div>
   </div>
   <div class="row"><span class="pnLbl">저장 폴더</span><button id="batchDir" type="button" data-electron>폴더…</button><span id="batchDirName" class="hint2">원본과 같은 폴더</span>
@@ -2024,6 +2074,7 @@ async function save(opts = {}) {
       signedAck.add(cur);
     }
     if (!(await confirmSubstitutions(cur))) return;
+    if (!(await confirmRequiredFields(cur))) return; // v6 Wave E
   }
   const name = cur, seq = mutationSeq, text = $('#src').value; // 저장하는 동안 다른 파일로 가거나 편집이 생길 수 있다
   try {
@@ -2053,6 +2104,7 @@ async function saveAs(opts = {}) {
   if (cur.endsWith('.pdf') && !opts.checked) {
     if (!(await settleInplace('저장', opts.pending))) return;
     if (!(await confirmSubstitutions(cur))) return;
+    if (!(await confirmRequiredFields(cur))) return; // v6 Wave E
   }
   const name = cur, seq = mutationSeq;
   const to = await window.retextPdf.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
@@ -2180,7 +2232,8 @@ $('#redoBtn').onclick = redo;
 document.addEventListener('keydown', (e) => {
   if (!cur || !cur.endsWith('.pdf') || !e.ctrlKey) return;
   const tag = (document.activeElement || {}).tagName;
-  if (tag === 'TEXTAREA' || tag === 'INPUT' || document.activeElement?.isContentEditable) return; // MD 에디터·패널 텍스트박스·쪽 위 편집기는 브라우저 기본 실행취소 유지
+  const fmChoice = !!document.activeElement?.classList?.contains('fmChoice'); // v6 Wave E: 양식 확인란·라디오에 초점이 있어도 문서 실행 취소
+  if ((!fmChoice && (tag === 'TEXTAREA' || tag === 'INPUT')) || document.activeElement?.isContentEditable) return; // MD 에디터·패널 텍스트박스·쪽 위 편집기는 브라우저 기본 실행취소 유지
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
@@ -4808,6 +4861,13 @@ const ICONS = {
   markdown: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 15V9l2.5 3L11 9v6"/><path d="M16.5 9v6"/><path d="m14.5 13 2 2 2-2"/>',
   compare: '<rect x="3" y="4" width="7.5" height="16" rx="1"/><rect x="13.5" y="4" width="7.5" height="16" rx="1"/><path d="M5.5 9h2.5"/><path d="M16 9h2.5"/><path d="M5.5 13h2.5"/><path d="M16 14h2.5"/>',
   batch: '<path d="M8 3h9l3 3v11"/><path d="M5 6h9l3 3v12H5z"/><path d="m8.5 15 2 2 3.5-4"/>',
+  formHighlight: '<rect x="3" y="5" width="18" height="5" rx="1"/><rect x="3" y="14" width="18" height="5" rx="1"/><path d="M6 7.5h5"/><path d="M6 16.5h3"/>',
+  formReset: '<rect x="3" y="4" width="14" height="5" rx="1"/><path d="M3 13h8"/><path d="M3 17h6"/><path d="M14 17a4 4 0 1 0 1.2-2.9L14 15.3"/><path d="M14 12.5v2.8h2.8"/>',
+  formExport: '<rect x="3" y="4" width="12" height="4" rx="1"/><rect x="3" y="11" width="12" height="4" rx="1"/><path d="M14 19h7"/><path d="m18 16 3 3-3 3"/>',
+  formImport: '<rect x="9" y="4" width="12" height="4" rx="1"/><rect x="9" y="11" width="12" height="4" rx="1"/><path d="M3 19h7"/><path d="m7 16 3 3-3 3"/>',
+  formFlatten: '<rect x="4" y="4" width="16" height="5" rx="1"/><path d="M7 6.5h6"/><path d="m4 14 8 4 8-4"/><path d="m4 18 8 4 8-4"/>',
+  word: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><rect x="2.5" y="9" width="10" height="9" rx="1.2"/><path d="m4.5 11.5 1.2 4.5 1.8-4 1.8 4 1.2-4.5"/>',
+  hwp: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><rect x="2.5" y="9" width="10" height="9" rx="1.2"/><path d="M5 12h5"/><circle cx="7.5" cy="14.8" r="1.6"/>',
   attach: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`;
@@ -6648,6 +6708,7 @@ function p9AfterRender(name) {
   if (!$('#annotTab').hidden) loadAnnotList();
   if (!$('#outlineTab').hidden) loadOutline();
   wdAfterRender(name); // v6 Wave D: 링크 자리·첨부 목록
+  fmAfterRender(name); // v6 Wave E: 양식 칸
 }
 // 한 쪽을 다시 그린 뒤(refreshPage): 그 쪽 캐시를 비우고 주석 자리·개인정보 표시를 다시, 주석·목차 목록도 다시 읽는다(실행 취소로 바뀌었을 수 있다)
 function p9AfterRefresh(i, wrap) {
@@ -6658,10 +6719,12 @@ function p9AfterRefresh(i, wrap) {
   scheduleAnnotList();
   if (!$('#outlineTab').hidden) loadOutline();
   wdAfterRefresh(i); // v6 Wave D: 그 쪽 링크 자리
+  fmAfterRefresh(i); // v6 Wave E: 양식 칸 값
 }
 // 확대·축소 뒤: 화면 px로 그린 것들을 새 배율로
 function p9AfterZoom() {
   wdAfterZoom(); // v6 Wave D
+  fmDrawAll(); // v6 Wave E: 양식 칸을 새 배율로
   $('#pdf').querySelectorAll('.annHit, .annSel').forEach((el) => el.remove());
   if (annotPress) cancelAnnotPress();
   if (isAnnotTool(tool)) scheduleAnnotHits();
@@ -6833,7 +6896,11 @@ const CMD_ALIASES = {
   snapTool: ['캡처', '화면 복사', '영역 복사', '그림 복사', 'snapshot'], linkTool: ['하이퍼링크', 'url', 'link', '바로가기'], linkListBtn: ['링크 보기', '하이퍼링크 목록'],
   cropTool: ['크롭', '잘라내기', 'crop', '쪽 잘라내기'], cropBtn: ['여백 자동', '자르기 풀기', '크롭 설정', '여백 없애기'], pageSizeBtn: ['용지 크기', '페이지 크기', 'a4', 'letter', '크기 바꾸기'],
   batesBtn: ['bates', '일련번호', '증거 번호', '문서 번호'], mdExportBtn: ['마크다운', 'md', '텍스트로', 'txt', '변환', '내보내기'], compareBtn: ['diff', '차이', '문서 비교', '대조', '버전 비교'],
-  batchBtn: ['배치', '일괄', '여러 파일', 'batch', '한꺼번에'], attachBtn: ['첨부', '파일 첨부', 'attachment', '포함된 파일'],
+  batchBtn: ['배치', '일괄', '여러 파일', 'batch', '한꺼번에'],
+  docxExportBtn: ['워드', 'word', 'docx', 'ms word', '워드로 변환'], hwpxExportBtn: ['한글', '한컴', 'hwp', 'hwpx', '아래아한글', '한글로 변환'],
+  formHighlightBtn: ['양식', '폼', 'form', '필드', '입력란', '양식 채우기', '서식'], formResetBtn: ['양식 지우기', '폼 초기화', 'reset form', '입력 지우기'],
+  formExportBtn: ['fdf', 'xfdf', 'json', '양식 저장', '폼 데이터', '양식 데이터'], formImportBtn: ['양식 불러오기', '폼 데이터 불러오기', 'fdf 가져오기', 'import form'],
+  formFlattenBtn: ['양식 굳히기', '폼 평면화', 'flatten form', '양식 평면화'], attachBtn: ['첨부', '파일 첨부', 'attachment', '포함된 파일'],
   protectBtn: ['암호 걸기', '비밀번호', '잠금', '보호', 'password'], piiBtn: ['개인정보 가리기', '주민등록번호', '전화번호', '이메일'], areaRedactTool: ['영역 가리기'], sanitizeBtn: ['메타데이터 지우기', '숨은 정보'],
 };
 const PDF_ONLY = '문서(PDF)를 열면 쓸 수 있습니다';
@@ -7361,7 +7428,7 @@ $('#batesMulti').onclick = () => {
 
 // ---- 일괄 처리 ----
 let batchPaths = [], batchOutDir = null, batchSuffixTouched = false;
-const BATCH_SUFFIX = { watermark: '-워터마크', headerFooter: '-머리말', pageNumbers: '-쪽번호', bates: '-베이츠', sanitize: '-정리', pii: '-가림', protect: '-암호', rasterize: '-이미지', downsample: '-축소', markdown: '' };
+const BATCH_SUFFIX = { watermark: '-워터마크', headerFooter: '-머리말', pageNumbers: '-쪽번호', bates: '-베이츠', sanitize: '-정리', pii: '-가림', protect: '-암호', rasterize: '-이미지', downsample: '-축소', markdown: '', docx: '', hwpx: '' };
 function renderBatchFiles() {
   const ol = $('#batchFiles'); ol.innerHTML = '';
   batchPaths.forEach((p, k) => {
@@ -7416,6 +7483,8 @@ function batchOptions(action) {
     case 'rasterize': return { dpi: +$('#brDpi').value };
     case 'downsample': return { maxDpi: +$('#bdDpi').value, quality: +$('#bdQuality').value };
     case 'markdown': return { format: $('#bmFormat').value, images: $('#bmImages').checked ? 'files' : 'omit' };
+    case 'docx': return { images: $('#bxDocxImages').checked ? 'embed' : 'omit', stripHeaderFooter: $('#bxDocxHf').checked };
+    case 'hwpx': return { images: $('#bxHwpxImages').checked ? 'embed' : 'omit', stripHeaderFooter: $('#bxHwpxHf').checked };
     default: return {};
   }
 }
@@ -7603,6 +7672,284 @@ $('#cmpReport').onclick = async () => {
 // 시험·화면 찍기용 손잡이(문서를 바꾸지 않는다)
 window.retextPdfD = { openMdDialog, openCropDialog, openPageSizeDialog, openBatesDialog, openBatchDialog, openComparePick, runCompare, openLinksDialog, openLinkPop, loadAttachList, wdLoadLinks,
   get links() { return wdState.links.slice(); }, get compare() { return cmpState.res; }, set batchPaths(v) { batchPaths = v.slice(); renderBatchFiles(); }, set batchOutDir(v) { batchOutDir = v; $('#batchDirName').textContent = v || '원본과 같은 폴더'; } };
+
+// ==== v6 Wave E: 양식 채우기 · Word·한글 내보내기 ====
+// ---- 양식 칸: 문서를 그릴 때 칸 목록(/api/pdf/form)을 읽어 쪽 위에 HTML 입력칸을 겹친다. 평소에는 투명해 쪽 그림의 칸 외형(다른 뷰어와 같은 모양)이 보이고,
+// 누르면 흰 입력칸이 된다. 값을 바꾸면(글 칸은 칸을 떠나거나 Enter, 확인란·라디오·목록은 바로) 서버에 한 칸씩 쓴다 — 실행 취소 한 번.
+// 순서(Tab·Shift+Tab) = 쪽 순서 → 그 쪽 /Annots 순서(양식을 만든 프로그램이 정한 탭 순서). XFA 전용 양식은 칸을 채울 수 없다고 알린다
+const fmState = { doc: null, type: 'none', fields: [], seq: 0, queue: Promise.resolve(), highlight: (() => { try { return localStorage.getItem('retextpdf.formHighlight') !== '0'; } catch { return true; } })() };
+const fmKey = (f) => `${f.i}:${f.index}`;
+const FM_TYPE_LABEL = { text: '글 칸', checkbox: '확인란', radio: '라디오 단추', combo: '콤보 상자', list: '목록 상자', signature: '서명 칸', button: '단추' };
+function fmApplyHighlight() {
+  $('#pdf').classList.toggle('fmHi', fmState.highlight);
+  $('#formHighlightBtn').setAttribute('aria-pressed', String(fmState.highlight));
+}
+function fmUpdateButtons() {
+  const has = fmState.doc === cur && fmState.fields.some((f) => !['signature', 'button', 'unknown'].includes(f.type));
+  for (const id of ['#formResetBtn', '#formExportBtn', '#formFlattenBtn']) $(id).disabled = !has;
+  $('#formImportBtn').disabled = !has;
+}
+async function fmLoad(name = cur) {
+  const seq = ++fmState.seq;
+  let r;
+  try { r = await apiGet(`/api/pdf/form?${qs({ name })}`); } catch { r = { type: 'none', fields: [] }; }
+  if (seq !== fmState.seq || cur !== name) return false;
+  fmState.doc = name; fmState.type = r.type || 'none'; fmState.fields = Array.isArray(r.fields) ? r.fields : [];
+  fmUpdateButtons();
+  return true;
+}
+function fmAfterRender(name) {
+  fmState.doc = null; fmState.fields = []; fmState.type = 'none';
+  $('#pdf').querySelectorAll('.fmField').forEach((el) => el.remove());
+  fmApplyHighlight(); fmUpdateButtons();
+  if (cur !== name || !pdfOpen()) return;
+  fmLoad(name).then((ok) => {
+    if (!ok) return;
+    fmDrawAll();
+    if (fmState.type === 'xfa-full' && notedOnce(name, 'xfa')) toast('지원하지 않는 XFA 양식입니다 — 이 문서의 칸은 Adobe의 XFA 형식이라 여기서 채울 수 없습니다. 쪽 내용은 볼 수 있습니다.', { kind: 'warning', ms: 9000 });
+    else if (fmState.type === 'xfa-foreground' && notedOnce(name, 'xfa')) toast('XFA 양식이 함께 든 문서입니다 — 일반(AcroForm) 칸만 채웁니다. XFA 부분은 지원하지 않습니다.', { kind: 'info', ms: 7000 });
+    else if (fmState.fields.length && notedOnce(name, 'form')) flash(`양식 칸 ${fmState.fields.filter((f) => !f.readOnly).length}개 — 칸을 눌러 채우고 Tab으로 다음 칸으로 갑니다`, 5000);
+  });
+}
+function fmAfterRefresh() {
+  if (!pdfOpen() || fmState.doc !== cur) return;
+  const name = cur;
+  fmLoad(name).then((ok) => { if (ok) fmDrawAll(); });
+}
+// 쪽 위 칸을 모두 다시 만든다. 초점이 있던 칸은 다시 그린 뒤에도 초점·쓰던 글·커서를 지킨다
+function fmDrawAll() {
+  const active = document.activeElement?.closest?.('.fmField');
+  const keep = active ? { key: active.dataset.key, ctl: document.activeElement, value: document.activeElement.value, s: document.activeElement.selectionStart, e: document.activeElement.selectionEnd } : null;
+  $('#pdf').querySelectorAll('.fmField').forEach((el) => el.remove());
+  if (fmState.doc !== cur || !pdfOpen()) return;
+  for (const f of fmState.fields) {
+    if (f.hidden || !f.rect || ['button', 'unknown'].includes(f.type)) continue;
+    const wrap = $('#pdf').children[f.i], pg = pdfPages[f.i];
+    if (!wrap || !pg) continue;
+    const s = pdfToScreen(pg, { x0: f.rect[0], y0: f.rect[1], x1: f.rect[2], y1: f.rect[3] });
+    const box = document.createElement('div');
+    box.className = `fmField fm-${f.type}${f.required ? ' req' : ''}${f.readOnly ? ' ro' : ''}`;
+    box.dataset.key = fmKey(f);
+    Object.assign(box.style, { left: s.left + 'px', top: s.top + 'px', width: Math.max(4, s.width) + 'px', height: Math.max(4, s.height) + 'px' });
+    box.title = `${f.alt || f.name}${f.required ? ' (꼭 채울 칸)' : ''} — ${FM_TYPE_LABEL[f.type] || f.type}${f.type === 'signature' ? ': 서명은 [도장] 도구로 넣습니다' : f.readOnly ? ' (읽기 전용)' : ''}`;
+    const ctl = f.type === 'signature' ? null : fmControl(f, pg);
+    if (ctl) box.appendChild(ctl);
+    box.addEventListener('mousedown', (e) => e.stopPropagation()); // 칸을 누른 것은 글자 고치기·끌기 도구가 받지 않는다
+    wrap.appendChild(box);
+  }
+  if (keep) {
+    const ctl = $('#pdf').querySelector(`.fmField[data-key="${keep.key}"] .fmCtl`);
+    if (ctl) {
+      if ((ctl.tagName === 'TEXTAREA' || (ctl.tagName === 'INPUT' && !ctl.classList.contains('fmChoice'))) && keep.value != null) ctl.value = keep.value;
+      ctl.focus({ preventScroll: true });
+      if (document.activeElement === ctl) { ctl.classList.add('editing'); ctl.closest('.fmField')?.classList.add('editing'); }
+      try { if (keep.s != null && ctl.setSelectionRange) ctl.setSelectionRange(keep.s, keep.e); } catch {}
+    }
+  }
+}
+// 칸 하나의 입력칸. 크기는 돌리기 전(칸 자체) 크기 — 돌린 쪽이면 가운데를 맞춰 쪽 회전만큼 돌린다
+function fmControl(f, pg) {
+  const rot = (((pg.rotation || 0) % 4) + 4) % 4;
+  const uw = (f.rect[2] - f.rect[0]) * pdfScale, uh = (f.rect[3] - f.rect[1]) * pdfScale;
+  let ctl;
+  const commit = (value) => fmCommit(f, value);
+  if (f.type === 'text') {
+    ctl = document.createElement(f.multiline ? 'textarea' : 'input');
+    if (!f.multiline) ctl.type = f.password ? 'password' : 'text';
+    ctl.value = f.value || '';
+    if (f.maxLen > 0) ctl.maxLength = f.maxLen;
+    ctl.spellcheck = false; ctl.autocomplete = 'off';
+    const auto = f.multiline ? 12 : Math.max(6, Math.min(12, (f.rect[3] - f.rect[1]) * 0.62));
+    ctl.style.fontSize = ((f.fontSize > 0 ? f.fontSize : auto) * pdfScale) + 'px';
+    if (f.comb && f.maxLen > 0) { ctl.style.letterSpacing = Math.max(0, uw / f.maxLen - (f.fontSize || auto) * pdfScale * 0.6) + 'px'; }
+    if (f.align === 1) ctl.style.textAlign = 'center'; else if (f.align === 2) ctl.style.textAlign = 'right';
+    ctl.addEventListener('change', () => commit(ctl.value));
+    ctl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !f.multiline) { e.preventDefault(); ctl.blur(); ctl.focus(); } // 한 줄 칸: Enter로 넣기(change가 쓴다)
+      else if (e.key === 'Escape') { e.preventDefault(); ctl.value = f.value || ''; ctl.blur(); }
+    });
+  } else if (f.type === 'checkbox' || f.type === 'radio') {
+    ctl = document.createElement('input');
+    ctl.type = f.type; ctl.classList.add('fmChoice'); ctl.checked = !!f.checked;
+    if (f.type === 'radio') ctl.name = `fmRadio:${f.name}`;
+    ctl.addEventListener('change', () => commit(f.type === 'checkbox' ? ctl.checked : ctl.checked ? f.exportValue : 'Off'));
+    ctl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); ctl.click(); } });
+  } else if (f.type === 'combo' || f.type === 'list') {
+    if (f.type === 'combo' && f.editable) {
+      ctl = document.createElement('input'); ctl.type = 'text'; ctl.value = f.value || '';
+      const dl = document.createElement('datalist'); dl.id = `fmList-${fmKey(f).replace(':', '-')}`;
+      for (const o of f.options || []) { const op = document.createElement('option'); op.value = o.label; dl.appendChild(op); }
+      ctl.setAttribute('list', dl.id); ctl.addEventListener('change', () => commit(ctl.value));
+      setTimeout(() => ctl.parentNode?.appendChild(dl));
+    } else {
+      ctl = document.createElement('select');
+      if (f.type === 'list') ctl.size = Math.max(2, Math.min(8, (f.options || []).length));
+      else { const blank = document.createElement('option'); blank.value = ''; blank.textContent = ''; ctl.appendChild(blank); }
+      for (const o of f.options || []) { const op = document.createElement('option'); op.value = o.label; op.textContent = o.label; if (o.selected) op.selected = true; ctl.appendChild(op); }
+      if (!(f.options || []).some((o) => o.selected) && f.type === 'combo') ctl.value = (f.options || []).some((o) => o.label === f.value) ? f.value : '';
+      ctl.addEventListener('change', () => commit(ctl.value));
+    }
+    ctl.style.fontSize = ((f.fontSize > 0 ? f.fontSize : 10) * pdfScale) + 'px';
+  }
+  if (!ctl) return null;
+  ctl.classList.add('fmCtl');
+  ctl.style.width = uw + 'px'; ctl.style.height = uh + 'px';
+  if (f.color && f.color !== '#000000') ctl.style.setProperty('--fmColor', f.color);
+  if (rot) { ctl.classList.add('rot'); ctl.style.transform = `translate(-50%, -50%) rotate(${rot * 90}deg)`; }
+  if (f.readOnly) { ctl.disabled = f.type !== 'text'; ctl.readOnly = true; }
+  ctl.setAttribute('aria-label', `${f.alt || f.name}${f.required ? ' (필수)' : ''}`);
+  if (f.required) ctl.setAttribute('aria-required', 'true');
+  ctl.addEventListener('keydown', (e) => { if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) { e.preventDefault(); fmFocusNext(f, e.shiftKey ? -1 : 1); } });
+  // 쓰는 중 표시는 focus·blur로 단다(창에 OS 초점이 없으면 :focus가 맞지 않아 쓰는 글이 투명하게 남는다)
+  ctl.addEventListener('focus', () => { ctl.classList.add('editing'); ctl.closest('.fmField')?.classList.add('editing'); });
+  ctl.addEventListener('blur', () => { ctl.classList.remove('editing'); ctl.closest('.fmField')?.classList.remove('editing'); });
+  return ctl;
+}
+// Tab 순서: 채울 수 있는 칸만(읽기 전용·숨은 칸·서명 칸은 건너뛴다). 끝에서는 처음으로 돌아간다. 라디오 묶음은 첫 단추만 들른다
+function fmTabOrder() {
+  const seen = new Set();
+  return fmState.fields.filter((f) => {
+    if (f.hidden || f.readOnly || !f.rect || !['text', 'checkbox', 'radio', 'combo', 'list'].includes(f.type)) return false;
+    if (f.type === 'radio') { if (seen.has(f.name)) return false; seen.add(f.name); }
+    return true;
+  });
+}
+function fmFocusNext(f, dir) {
+  const order = fmTabOrder();
+  if (!order.length) return;
+  let k = order.findIndex((x) => x.i === f.i && x.index === f.index);
+  if (k < 0 && f.type === 'radio') k = order.findIndex((x) => x.name === f.name);
+  const next = order[((k < 0 ? (dir > 0 ? -1 : 0) : k) + dir + order.length) % order.length];
+  fmFocusField(next);
+}
+function fmFocusField(f) {
+  if (!f) return;
+  revealPage(f.i);
+  const ctl = $('#pdf').querySelector(`.fmField[data-key="${fmKey(f)}"] .fmCtl`);
+  if (!ctl) return;
+  ctl.focus({ preventScroll: true });
+  ctl.closest('.fmField').scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (ctl.select && ctl.tagName !== 'SELECT' && !ctl.classList.contains('fmChoice')) ctl.select();
+}
+// 칸 값 쓰기 — 차례로(앞 요청이 끝난 뒤) 보낸다. 같은 이름의 칸이 있는 쪽을 모두 다시 그린다
+function fmCommit(f, value) {
+  const name = cur;
+  fmState.queue = fmState.queue.then(async () => {
+    if (cur !== name) return;
+    let r;
+    try { r = await pdfMutate('/api/pdf/form/set', { name, i: f.i, index: f.index, value }, { silent: true }); }
+    catch (error) { if (!error.cancelled) flash('⚠ ' + error.message, 5000); if (cur === name) { await fmLoad(name); fmDrawAll(); } return; }
+    if (cur !== name) return;
+    if (r.warning) flash('⚠ ' + r.warning, 6000);
+    const pages = [...new Set(fmState.fields.filter((x) => x.name === f.name).map((x) => x.i))];
+    for (const i of pages) await refreshPage(i); // 쪽 그림(칸 외형) 새로 — refreshPage → fmAfterRefresh가 칸 값을 다시 읽는다
+  }).catch(() => {});
+  return fmState.queue;
+}
+// 저장 전: 꼭 채울 칸이 비었으면 묻는다. [칸 채우기]는 첫 빈 칸으로 간다
+async function confirmRequiredFields(name) {
+  if (!name.endsWith('.pdf') || fmState.doc !== name) return true;
+  await fmState.queue; // 쓰는 중인 값이 끝난 뒤에 본다
+  const empty = [], seen = new Set();
+  for (const f of fmState.fields) {
+    if (!f.required || f.readOnly || seen.has(f.name)) continue;
+    seen.add(f.name);
+    const blank = f.type === 'checkbox' || f.type === 'radio' ? !fmState.fields.some((x) => x.name === f.name && x.checked) : !String(f.value || '').trim();
+    if (blank) empty.push(f);
+  }
+  if (!empty.length) return true;
+  return new Promise((resolve) => {
+    const d = $('#formReqDialog');
+    $('#frList').replaceChildren(...empty.map((f) => Object.assign(document.createElement('li'), { textContent: `${f.i + 1}쪽 · ${f.alt || f.name} (${FM_TYPE_LABEL[f.type] || f.type})` })));
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); if (!v) setTimeout(() => fmFocusField(empty[0]), 0); };
+    $('#frSave').onclick = () => finish(true); $('#frFill').onclick = () => finish(false);
+    d.onclose = () => finish(false);
+    d.showModal(); $('#frFill').focus();
+  });
+}
+$('#formHighlightBtn').onclick = () => {
+  fmState.highlight = !fmState.highlight;
+  try { localStorage.setItem('retextpdf.formHighlight', fmState.highlight ? '1' : '0'); } catch {}
+  fmApplyHighlight();
+  if (pdfOpen() && fmState.doc === cur && !fmState.fields.length) flash(fmState.type === 'xfa-full' ? '지원하지 않는 XFA 양식입니다 — 채울 수 있는 칸이 없습니다' : '이 문서에는 양식 칸이 없습니다', 3000);
+};
+$('#formResetBtn').onclick = async () => {
+  if (!pdfOpen()) return;
+  const name = cur;
+  await fmState.queue;
+  let r; try { r = await pdfMutate('/api/pdf/form/reset', { name }); } catch { return; }
+  if (r.ok === false) return flash('되돌릴 값이 없습니다 — 칸이 이미 비어 있습니다', 3000);
+  if (r.warning) flash('⚠ ' + r.warning, 6000);
+  await afterDocChange(name, `양식 칸 ${r.reset}개를 초기화했습니다`);
+};
+$('#formExportBtn').onclick = async () => {
+  if (!pdfOpen()) return;
+  const name = cur;
+  await fmState.queue;
+  const to = await wdSavePath(wdJoin(wdDir(name), `${wdStem(name)}-양식.json`), [{ name: 'JSON', extensions: ['json'] }, { name: 'FDF (Acrobat)', extensions: ['fdf'] }, { name: 'XFDF (Acrobat XML)', extensions: ['xfdf'] }]);
+  if (!to) return;
+  if (!/\.(json|fdf|xfdf)$/i.test(to)) return flash('⚠ 파일 이름은 .json · .fdf · .xfdf로 끝나야 합니다', 5000);
+  try { const r = await apiPost('/api/pdf/form/export', { name, to }); toast(`양식 값 ${r.count}개를 ${basename(r.path)}에 저장했습니다`, { ms: 5000 }); } catch {}
+};
+$('#formImportBtn').onclick = async () => {
+  if (!pdfOpen()) return;
+  if (!window.retextPdf?.openAnyFile) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const name = cur;
+  const p = await window.retextPdf.openAnyFile();
+  if (!p || cur !== name) return;
+  await fmState.queue;
+  let r; try { r = await pdfMutate('/api/pdf/form/import', { name, path: p }); } catch { return; }
+  const extra = [r.unknown?.length && `없는 칸 ${r.unknown.length}개`, r.failed?.length && `못 넣은 칸 ${r.failed.length}개(${r.failed.slice(0, 3).map((x) => x.name).join(', ')})`].filter(Boolean).join(' · ');
+  if (r.ok === false) return toast(`가져올 값이 없습니다${extra ? ' — ' + extra : ''}`, { kind: 'warning', ms: 7000 });
+  if (r.warning) flash('⚠ ' + r.warning, 6000);
+  await afterDocChange(name, `${(r.format || '').toUpperCase()}에서 양식 값 ${r.set}개를 가져왔습니다${extra ? ' — ' + extra : ''}`);
+};
+$('#formFlattenBtn').onclick = async () => {
+  if (!pdfOpen()) return;
+  if (!confirm('양식 칸에 넣은 값을 쪽 내용으로 굳힐까요?\n굳힌 뒤에는 칸을 채우거나 고칠 수 없습니다(실행 취소는 됩니다).')) return;
+  const name = cur;
+  await fmState.queue;
+  let r; try { r = await pdfMutate('/api/pdf/form/flatten', { name }); } catch { return; }
+  if (r.ok === false) return flash('굳힐 양식 칸이 없습니다', 3000);
+  await afterDocChange(name, `양식 칸 ${r.flattened}개를 고정했습니다`);
+};
+
+// ---- Word(.docx)·한글(.hwpx) 내보내기: 리본 [Word로]·[한글(HWPX)로] → 같은 대화상자, 형식만 다르다 ----
+let officeFormat = 'docx';
+function openOfficeDialog(format) {
+  if (!pdfOpen()) return;
+  officeFormat = format === 'hwpx' ? 'hwpx' : 'docx';
+  const o = loadJson('retextpdf.officeExport', {});
+  $('#officeTitle').textContent = officeFormat === 'hwpx' ? '한글(HWPX)로 내보내기' : 'Word로 내보내기';
+  $('#officeStripHf').checked = o.stripHeaderFooter !== false; $('#officePageBreaks').checked = o.pageBreaks !== false; $('#officeImages').checked = o.images !== false;
+  setRangePick($('#officeRange')); showError('#officeError', '');
+  $('#officeDialog').showModal();
+}
+$('#docxExportBtn').onclick = () => openOfficeDialog('docx');
+$('#hwpxExportBtn').onclick = () => openOfficeDialog('hwpx');
+$('#officeCancel').onclick = () => $('#officeDialog').close();
+$('#officeRun').onclick = async () => {
+  const range = readRangePick($('#officeRange'));
+  if (!range.ok) return showError('#officeError', range.error);
+  const o = { stripHeaderFooter: $('#officeStripHf').checked, pageBreaks: $('#officePageBreaks').checked, images: $('#officeImages').checked };
+  const name = cur, ext = officeFormat;
+  const to = await wdSavePath(wdJoin(wdDir(name), `${wdStem(name)}.${ext}`), [ext === 'hwpx' ? { name: '한글 문서(HWPX)', extensions: ['hwpx'] } : { name: 'Word 문서', extensions: ['docx'] }]);
+  if (!to) return;
+  if (!new RegExp(`\\.${ext}$`, 'i').test(to)) return showError('#officeError', `파일 이름은 .${ext}로 끝나야 합니다`);
+  showError('#officeError', ''); $('#officeRun').disabled = true;
+  let r;
+  try { r = await runJob(ext === 'hwpx' ? '한글(HWPX)로 내보내기' : 'Word로 내보내기', (jobId) => apiPost('/api/pdf/export-office', { name, to, pages: range.idxs.map((k) => k + 1).join(','), stripHeaderFooter: o.stripHeaderFooter, pageBreaks: o.pageBreaks, images: o.images ? 'embed' : 'omit', jobId }, { silent: true })); }
+  catch (error) { return showError('#officeError', error.message); } finally { $('#officeRun').disabled = false; }
+  if (r.cancelled) return flash('내보내기를 취소했습니다');
+  saveJson('retextpdf.officeExport', o);
+  $('#officeDialog').close();
+  const st = r.stats || {}, bits = [st.headings && `제목 ${st.headings}`, st.lists && `목록 ${st.lists}`, st.tables && `표 ${st.tables}`, r.images && `그림 ${r.images}`].filter(Boolean);
+  toast(`${basename(r.path)}로 내보냈습니다${bits.length ? ' — ' + bits.join(' · ') : ''}${ext === 'hwpx' ? ' · 한컴오피스 한글에서 엽니다' : ''}`, { ms: 7000 });
+};
+
+// 시험·화면 찍기용 손잡이(문서를 바꾸지 않는다)
+window.retextPdfE = { get forms() { return { doc: fmState.doc, type: fmState.type, fields: fmState.fields.map((f) => ({ ...f })) }; }, fmLoad, fmDrawAll, fmFocusField, fmTabOrder, openOfficeDialog, confirmRequiredFields, get formQueue() { return fmState.queue; } };
 
 // 테스트·화면 찍기용 손잡이(개발 도구에서 상태를 볼 수 있게) — 문서를 바꾸지 않는다
 window.retextPdfP9 = { showRibbonTab, pickPages, checkPageRange, get tool() { return tool; } };

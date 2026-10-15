@@ -1189,5 +1189,71 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(fnBodyOf(s, 'function showAsideTab('), /else if \(tab === 'attach'\) loadAttachList\(\);/);
   console.log('OK — v6 Wave D 리본·명령 검색·대화상자·서버 길·링크 따라가기·자른 쪽 좌표 단언 통과');
 }
+// ── v6 Wave E: 양식 채우기 · Word·한글 내보내기 ─────────────────────────────────────────────
+{
+  const UM = require('./ui-model');
+  const s = script.replace(/\r\n/g, '\n');
+  const btn = (id) => html.match(new RegExp(`<button type="button" class="tb" id="${id}" data-icon="(\\w+)"[^>]*data-tip="([^"]+)"[^>]*><span class="tl">([^<]+)</span></button>`));
+  const panelOf = (id) => { const k = html.indexOf(`id="${id}"`), p = html.lastIndexOf('<div class="rpanel" id="', k); return html.slice(p + 24, html.indexOf('"', p + 24)); };
+  // A. 리본: 문서 탭에 「양식」 묶음(강조·초기화·내보내기·가져오기·고정)과 변환 묶음의 [Word로]·[한글(HWPX)로]
+  const ids = ['formHighlightBtn', 'formResetBtn', 'formExportBtn', 'formImportBtn', 'formFlattenBtn', 'docxExportBtn', 'hwpxExportBtn'];
+  for (const id of ids) {
+    const m = btn(id);
+    assert.ok(m, `#${id}: 아이콘 + 설명 + 짧은 이름`);
+    assert.ok(new RegExp(`\\n  ${m[1]}: '<`).test(s), `#${id} 아이콘 ${m[1]}이 ICONS에 있다`);
+    assert.strictEqual(panelOf(id), 'rpanel-doc', `#${id}는 문서 탭에`);
+    assert.match(s, new RegExp(`\\$\\('#${id}'\\)\\.onclick = `), `#${id}에 처리기가 있다`);
+  }
+  assert.match(html, /<div class="tgroup" id="groupForm" data-modes="pdf" role="group" aria-label="양식">/, '「양식」 묶음은 PDF일 때만');
+  assert.match(html, /id="formHighlightBtn" data-icon="formHighlight" aria-pressed="true"/, '필드 강조는 켜고 끄는 단추');
+  assert.match(html, /id="formImportBtn" data-icon="formImport" data-electron/, '가져오기는 앱(파일 선택 창)에서만');
+  assert.match(html, /id="docxExportBtn" data-icon="word" data-modes="pdf"/); assert.match(html, /id="hwpxExportBtn" data-icon="hwp" data-modes="pdf"/);
+  assert.ok(html.indexOf('id="docxExportBtn"') > html.indexOf('id="groupConvert"') && html.indexOf('id="docxExportBtn"') < html.indexOf('id="compareBtn"'), 'Word·한글은 변환 묶음(Markdown 옆)');
+  // B. 명령 검색
+  const aliases = new Function(`return ${s.slice(s.indexOf('const CMD_ALIASES = ') + 'const CMD_ALIASES = '.length, s.indexOf('};', s.indexOf('const CMD_ALIASES = ')) + 1)}`)();
+  const cmds = [...ids, 'mdExportBtn', 'batchBtn'].map((id) => { const m = btn(id); return { id, label: m[2].split(':')[0].trim(), aliases: [m[3], ...(aliases[id] || [])], tip: m[2], group: '' }; });
+  for (const [q, id] of [['워드', 'docxExportBtn'], ['word', 'docxExportBtn'], ['docx', 'docxExportBtn'], ['한글', 'hwpxExportBtn'], ['hwp', 'hwpxExportBtn'], ['한컴', 'hwpxExportBtn'],
+    ['양식', 'formHighlightBtn'], ['폼', 'formHighlightBtn'], ['fdf', 'formExportBtn'], ['양식 초기화', 'formResetBtn'], ['양식 고정', 'formFlattenBtn'], ['데이터 가져오기', 'formImportBtn'], ['ㅇㅅ ㄱㅈ', 'formFlattenBtn']]) {
+    assert.strictEqual(UM.searchCommands(q, cmds, 3)[0]?.id, id, `명령 검색 "${q}" → ${id}`);
+  }
+  // C. 일괄 처리: Word·한글 동작과 옵션 칸, 서버가 처리한다
+  for (const a of ['docx', 'hwpx']) {
+    assert.ok(html.includes(`<option value="${a}">`) && html.includes(`<div data-act="${a}">`), `일괄 처리 동작 ${a}`);
+    assert.ok(serverSource.includes(`case '${a}':`), `서버 batchOne이 ${a}를 처리한다`);
+    assert.match(fnBodyOf(s, 'function batchOptions('), new RegExp(`case '${a}': return \\{ images: `), `batchOptions ${a}`);
+  }
+  assert.match(serverSource, /const BATCH_ACTIONS = \[[^\]]*'docx', 'hwpx'\]/);
+  // D. 대화상자·서버 길
+  for (const id of ['officeDialog', 'formReqDialog']) assert.match(html, new RegExp(`<dialog id="${id}" class="panel`), `#${id}`);
+  assert.match(html, /class="rangePick" id="officeRange"/, 'Word·한글: 쪽 범위 고르기');
+  for (const route of ['/api/pdf/export-office', '/api/pdf/form', '/api/pdf/form/set', '/api/pdf/form/reset', '/api/pdf/form/export', '/api/pdf/form/import', '/api/pdf/form/flatten']) {
+    assert.ok(s.includes(route), `화면이 ${route}를 부른다`);
+    assert.ok(serverSource.includes(`'${route}'`), `서버에 ${route}`);
+  }
+  assert.match(fnBodyOf(s, "$('#officeRun').onclick = async () =>"), /runJob\(ext === 'hwpx' \? '한글\(HWPX\)로 내보내기' : 'Word로 내보내기', \(jobId\) => apiPost\('\/api\/pdf\/export-office'/, 'Word·한글 내보내기는 진행 창(runJob)');
+  // E. 양식 칸: 다시 그리기·쪽 새로 고침·확대 고리, 값은 한 칸씩(pdfMutate → 실행 취소 한 번), Tab 순서, 회전, 저장 전 필수 칸
+  assert.match(fnBodyOf(s, 'function p9AfterRender('), /fmAfterRender\(name\);/);
+  assert.match(fnBodyOf(s, 'function p9AfterRefresh('), /fmAfterRefresh\(i\);/);
+  assert.match(fnBodyOf(s, 'function p9AfterZoom('), /fmDrawAll\(\);/);
+  assert.match(fnBodyOf(s, 'function fmCommit('), /pdfMutate\('\/api\/pdf\/form\/set', \{ name, i: f\.i, index: f\.index, value \}/, '칸 하나 = 요청 하나');
+  assert.match(fnBodyOf(s, 'function fmCommit('), /fmState\.queue = fmState\.queue\.then\(/, '값 쓰기는 차례로');
+  assert.match(fnBodyOf(s, 'function fmControl('), /e\.key === 'Tab'[^\n]*fmFocusNext\(f, e\.shiftKey \? -1 : 1\)/, 'Tab·Shift+Tab');
+  assert.match(fnBodyOf(s, 'function fmControl('), /rotate\(\$\{rot \* 90\}deg\)/, '돌린 쪽은 입력칸도 돌린다');
+  assert.match(fnBodyOf(s, 'function fmDrawAll('), /pdfToScreen\(pg, \{ x0: f\.rect\[0\], y0: f\.rect\[1\], x1: f\.rect\[2\], y1: f\.rect\[3\] \}\)/, '칸 자리는 pdfToScreen으로');
+  assert.match(fnBodyOf(s, 'function fmAfterRender('), /지원하지 않는 XFA 양식입니다/, 'XFA 전용 양식 알림');
+  assert.match(html, /<span class="tl">양식 고정<\/span>/);
+  for (const fn of ['async function save(', 'async function saveAs(']) assert.match(fnBodyOf(s, fn), /if \(!\(await confirmRequiredFields\(cur\)\)\) return;/, `${fn} 저장 전 필수 칸 확인`);
+  assert.match(s, /if \(\(!fmChoice && \(tag === 'TEXTAREA' \|\| tag === 'INPUT'\)\) \|\| document\.activeElement\?\.isContentEditable\) return;/, '양식 확인란에 초점이 있어도 Ctrl+Z는 문서 실행 취소');
+  // 순서·다음 칸 계산(fmTabOrder · fmFocusNext)을 따로 돌려 본다
+  const T = new Function('fmState', 'fmKey', 'calls', `${fnBodyOf(s, 'function fmTabOrder(')}\n}\n${fnBodyOf(s, 'function fmFocusNext(')}\n}\nconst fmFocusField = (f) => calls.push(f.name);\nreturn { fmTabOrder, fmFocusNext };`);
+  const fields = [{ i: 0, index: 0, name: 'a', type: 'text', rect: [0, 0, 1, 1] }, { i: 0, index: 1, name: 'ro', type: 'text', readOnly: true, rect: [0, 0, 1, 1] },
+    { i: 0, index: 2, name: 'r', type: 'radio', rect: [0, 0, 1, 1] }, { i: 0, index: 3, name: 'r', type: 'radio', rect: [0, 0, 1, 1] }, { i: 0, index: 4, name: 's', type: 'signature', readOnly: true, rect: [0, 0, 1, 1] },
+    { i: 1, index: 0, name: 'b', type: 'combo', rect: [0, 0, 1, 1] }];
+  const calls = [], t = T({ fields }, (f) => `${f.i}:${f.index}`, calls);
+  assert.deepStrictEqual(t.fmTabOrder().map((f) => f.name), ['a', 'r', 'b'], '읽기 전용·서명 칸은 건너뛰고 라디오 묶음은 한 번');
+  t.fmFocusNext(fields[0], 1); t.fmFocusNext(fields[3], 1); t.fmFocusNext(fields[5], 1); t.fmFocusNext(fields[0], -1);
+  assert.deepStrictEqual(calls, ['r', 'b', 'a', 'b'], 'Tab은 다음 칸, 끝에서는 처음으로, Shift+Tab은 앞으로');
+  console.log('OK — v6 Wave E 양식(리본·칸 덮개·Tab 순서·필수 칸)·Word·한글 내보내기(리본·대화상자·일괄 처리·서버 길) 단언 통과');
+}
 function SH(src) { const a = src.indexOf('const SHORTCUTS = ['); return new Function(`return ${src.slice(a + 'const SHORTCUTS = '.length, src.indexOf('];', a) + 1)};`)(); }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }

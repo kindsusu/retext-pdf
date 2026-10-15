@@ -379,4 +379,71 @@ function buildMonoSubsetPdf(ttfPath) {
   ]);
 }
 
-module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf };
+// v6 Wave E: AcroForm 양식 PDF. 두 쪽 — 1쪽(세로 420×520), 2쪽(/Rotate 90, 돌린 쪽의 칸 위치 시험).
+//   name   : 글 칸(/DA /Helv 12 Tf, 필수 Ff 2)          · addr  : 글 칸(/DA /Helv 10 Tf, 한글 값을 넣어 볼 칸)
+//   memo   : 여러 줄 글 칸(Ff 4096)                       · agree : 확인란(/AP /N /Yes·/Off, /AS /Off)
+//   color  : 라디오 묶음(Red·Blue 두 위젯, Ff 49152)       · city  : 콤보 상자(Ff 131072, /Opt Seoul·Busan·Daegu, /V Seoul)
+//   langs  : 목록 상자(/Opt ko·en·ja)                      · sig   : 빈 서명 칸(/FT /Sig, 읽기 전용으로 보여야 한다)
+//   note2  : 2쪽(돌린 쪽)의 글 칸
+// opts.xfa: true면 /AcroForm에 /XFA만 있고 칸이 없는 "XFA 전용" 양식
+function buildFormPdf(opts = {}) {
+  const objs = [], ids = new Map();
+  const ref = (k) => { if (!ids.has(k)) { ids.set(k, objs.length + 1); objs.push(null); } return `${ids.get(k)} 0 R`; };
+  const def = (k, body) => { ref(k); objs[ids.get(k) - 1] = body; };
+  const stream = (k, dict, text) => { const data = Buffer.from(text, 'latin1'); def(k, { dict: dict.replace(/>>$/, ` /Length ${data.length} >>`), data }); };
+  const form = (w, h, extra = '') => `<< /Type /XObject /Subtype /Form /BBox [0 0 ${w} ${h}] ${extra}>>`;
+  ref('cat'); ref('pages');
+  def('helv', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+  const res = `/Resources << /Font << /F1 ${ref('helv')} >> >>`;
+  if (opts.xfa) {
+    stream('xfa', '<< >>', '<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"><template xmlns="http://www.xfa.org/schema/xfa-template/3.3/"><subform name="form1"/></template></xdp:xdp>');
+    def('cat', `<< /Type /Catalog /Pages ${ref('pages')} /AcroForm << /Fields [] /XFA ${ref('xfa')} >> /NeedsRendering true >>`);
+    stream('c1', '<< >>', 'BT /F1 14 Tf 40 300 Td (Please wait... XFA form) Tj ET');
+    def('p1', `<< /Type /Page /Parent ${ref('pages')} /MediaBox [0 0 420 420] ${res} /Contents ${ref('c1')} >>`);
+    def('pages', `<< /Type /Pages /Kids [${ref('p1')}] /Count 1 >>`);
+    return buildRawPdf(objs);
+  }
+  def('zadb', '<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>');
+  const label = (x, y, s) => `BT /F1 10 Tf ${x} ${y} Td (${s}) Tj ET\n`;
+  stream('c1', '<< >>', 'BT /F1 16 Tf 40 480 Td (Application Form) Tj ET\n' + label(40, 444, 'Name') + label(40, 404, 'Address') + label(40, 364, 'Memo')
+    + label(40, 290, 'Agree') + label(40, 254, 'Color') + label(130, 254, 'Red') + label(200, 254, 'Blue') + label(40, 214, 'City') + label(40, 174, 'Language') + label(40, 100, 'Signature'));
+  stream('c2', '<< >>', label(40, 360, 'Rotated page note'));
+  const widget = (k, page, rect, extra = '') => def(k, `<< /Type /Annot /Subtype /Widget /F 4 /P ${ref(page)} /Rect [${rect.join(' ')}] ${extra} >>`);
+  const mk = '/MK << /BC [0 0 0] /BG [1 1 1] >>';
+  const empty = (k, w, h) => stream(k, form(w, h), '/Tx BMC EMC');
+  // 글 칸
+  empty('nameAP', 200, 20);
+  widget('name', 'p1', [110, 438, 310, 458], `${mk} /FT /Tx /T (name) /TU (Full name) /Ff 2 /DA (/Helv 12 Tf 0 g) /AP << /N ${ref('nameAP')} >>`);
+  empty('addrAP', 260, 20);
+  widget('addr', 'p1', [110, 398, 370, 418], `${mk} /FT /Tx /T (addr) /DA (/Helv 10 Tf 0 g) /AP << /N ${ref('addrAP')} >>`);
+  empty('memoAP', 260, 50);
+  widget('memo', 'p1', [110, 320, 370, 370], `${mk} /FT /Tx /T (memo) /Ff 4096 /DA (/Helv 9 Tf 0 0 1 rg) /AP << /N ${ref('memoAP')} >>`);
+  // 확인란
+  stream('agreeOn', form(16, 16, `/Resources << /Font << /ZaDb ${ref('zadb')} >> >> `), '0 G 1 1 14 14 re S q 0 g BT /ZaDb 12 Tf 2.5 3 Td (4) Tj ET Q');
+  stream('agreeOff', form(16, 16), '0 G 1 1 14 14 re S');
+  widget('agree', 'p1', [110, 286, 126, 302], `/MK << /BC [0 0 0] /CA (4) >> /FT /Btn /T (agree) /V /Off /AS /Off /DA (/ZaDb 0 Tf 0 g) /AP << /N << /Yes ${ref('agreeOn')} /Off ${ref('agreeOff')} >> >>`);
+  // 라디오 묶음(부모 color, 위젯 둘)
+  const dot = (k, on) => stream(k, form(14, 14), `0 G 1 w 1 1 12 12 re S${on ? ' 0 g 4 4 6 6 re f' : ''}`);
+  dot('redOn', true); dot('redOff', false); dot('blueOn', true); dot('blueOff', false);
+  def('color', `<< /FT /Btn /T (color) /Ff 49152 /V /Off /Kids [${ref('red')} ${ref('blue')}] >>`);
+  def('red', `<< /Type /Annot /Subtype /Widget /F 4 /P ${ref('p1')} /Parent ${ref('color')} /Rect [110 250 124 264] /AS /Off /MK << /BC [0 0 0] /CA (l) >> /AP << /N << /Red ${ref('redOn')} /Off ${ref('redOff')} >> >> >>`);
+  def('blue', `<< /Type /Annot /Subtype /Widget /F 4 /P ${ref('p1')} /Parent ${ref('color')} /Rect [180 250 194 264] /AS /Off /MK << /BC [0 0 0] /CA (l) >> /AP << /N << /Blue ${ref('blueOn')} /Off ${ref('blueOff')} >> >> >>`);
+  // 콤보·목록
+  stream('cityAP', form(120, 20, `/Resources << /Font << /Helv ${ref('helv')} >> >> `), '/Tx BMC q BT /Helv 11 Tf 0 g 2 5 Td (Seoul) Tj ET Q EMC');
+  widget('city', 'p1', [110, 208, 230, 228], `${mk} /FT /Ch /T (city) /Ff 131072 /Opt [(Seoul) (Busan) (Daegu)] /V (Seoul) /DA (/Helv 11 Tf 0 g) /AP << /N ${ref('cityAP')} >>`);
+  empty('langsAP', 120, 40);
+  widget('langs', 'p1', [110, 150, 230, 190], `${mk} /FT /Ch /T (langs) /Opt [[(ko) (Korean)] [(en) (English)] [(ja) (Japanese)]] /DA (/Helv 10 Tf 0 g) /AP << /N ${ref('langsAP')} >>`);
+  // 빈 서명 칸
+  widget('sig', 'p1', [110, 80, 300, 120], '/FT /Sig /T (sig)');
+  // 2쪽(돌린 쪽)
+  empty('note2AP', 160, 20);
+  widget('note2', 'p2', [120, 340, 280, 360], `${mk} /FT /Tx /T (note2) /DA (/Helv 10 Tf 0 g) /AP << /N ${ref('note2AP')} >>`);
+  const fields = ['name', 'addr', 'memo', 'agree', 'color', 'city', 'langs', 'sig', 'note2'];
+  def('cat', `<< /Type /Catalog /Pages ${ref('pages')} /AcroForm << /Fields [${fields.map(ref).join(' ')}] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv ${ref('helv')} /ZaDb ${ref('zadb')} >> >> >> >>`);
+  def('p1', `<< /Type /Page /Parent ${ref('pages')} /MediaBox [0 0 420 520] ${res} /Contents ${ref('c1')} /Annots [${['name', 'addr', 'memo', 'agree', 'red', 'blue', 'city', 'langs', 'sig'].map(ref).join(' ')}] >>`);
+  def('p2', `<< /Type /Page /Parent ${ref('pages')} /MediaBox [0 0 420 420] /Rotate 90 ${res} /Contents ${ref('c2')} /Annots [${ref('note2')}] >>`);
+  def('pages', `<< /Type /Pages /Kids [${ref('p1')} ${ref('p2')}] /Count 2 >>`);
+  return buildRawPdf(objs);
+}
+
+module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf, buildFormPdf };
