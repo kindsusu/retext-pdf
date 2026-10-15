@@ -14,6 +14,7 @@ const pdfEncrypt = require('./pdf-encrypt');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
 const { applyEdits, verifyEdits, maskParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc } = require('./pdf-edit-service');
+const { groupLines } = require('./text-grouping');
 const pdfRewrite = require('./pdf-rewrite');
 const pii = require('./pii');
 const { parsePageRange } = require('./page-range');
@@ -76,8 +77,23 @@ async function openPdf(bytes, password) {
     throw Object.assign(httpError(401, e.message), { extra: { needPassword: true, wrong: e.code === 'PASSWORD_WRONG' } });
   }
 }
-const newEntry = (doc, mtimeMs, password) => ({ doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false,
-  security: { ...(doc.security || PLAIN) }, ...(password ? { password } : {}) });
+// v6 Wave B: 전자서명 감지. PDFium FPDF_GetSignatureCount(서명 값이 있는 /Sig 칸)를 먼저 보고, 0이면 파일 바이트에서
+// 서명 사전의 흔적(/ByteRange [숫자… 와 /Type /Sig 또는 /DocTimeStamp)을 찾는다 — 양식이 깨져 PDFium이 칸을 못 읽어도 잡는다.
+// /SigFlags만으로는 보지 않는다(SignaturesExist는 빈 서명 칸만 있어도 선다). 고쳐 저장하면 서명이 무효가 되므로 덮어쓰기 저장은 409 needSaveAs
+function signatureInfo(doc, bytes) {
+  let count = 0;
+  try { count = Number(doc.signatureCount) || 0; } catch {}
+  if (!count && bytes) {
+    const text = bytes.toString('latin1');
+    if (/\/ByteRange\s*\[\s*\d/.test(text) && /\/Type\s*\/(Sig|DocTimeStamp)\b/.test(text)) count = Math.max(1, (text.match(/\/ByteRange\s*\[\s*\d/g) || []).length);
+  }
+  return count;
+}
+const newEntry = (doc, mtimeMs, password, bytes) => {
+  const signatures = signatureInfo(doc, bytes);
+  return { doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false,
+    security: { ...(doc.security || PLAIN), ...(signatures ? { signed: true, signatures } : {}) }, ...(password ? { password } : {}) };
+};
 
 // 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다.
 // 미저장 편집이 있으면(또는 긴 작업 중이면) 다시 열지 않는다 — 편집과 실행 취소 기록을 지키고
@@ -92,9 +108,10 @@ async function getPdfDoc(name, password) {
   if (cached && (cached.dirty || cached.busy)) { if (cached.dirty) cached.externalChange = true; return cached; }
   const pw = password || cached?.password;
   if (cached) { delete pdfDocs[key]; cached.doc.close(); } // 다시 열기가 실패해도 닫힌 문서가 캐시에 남지 않게 먼저 뺀다
-  const doc = await openPdf(fs.readFileSync(p), pw);
+  const bytes = fs.readFileSync(p);
+  const doc = await openPdf(bytes, pw);
   if (pdfDocs[key]) { doc.close(); return pdfDocs[key]; } // 같은 파일을 동시에 연 다른 요청이 먼저 넣었다
-  return (pdfDocs[key] = newEntry(doc, mtimeMs, doc.security?.openPassword ? pw : null));
+  return (pdfDocs[key] = newEntry(doc, mtimeMs, doc.security?.openPassword ? pw : null, bytes));
 }
 // 문서를 바꾸는 요청용: 긴 작업이 같은 문서를 쓰는 중이면 409. 끼어들면 작업의 되돌리기·스냅샷이 엉킨다.
 // 긴 작업 라우트는 이것으로 문서를 얻은 뒤 (await 없이) entry.busy = true, finally에서 푼다
@@ -128,6 +145,7 @@ function trimStacks(entry) { // 합계를 다시 재고(최대 20+20개라 비�
   return entry.undoBytes;
 }
 function snapshot(entry, i, bytes = entry.doc.save()) {
+  if (i == null) entry.structural = true; // 쪽 삭제·순서 바꾸기 등 — 대체 글꼴 찾기(textPages)가 쪽 번호를 믿지 못하니 모든 쪽을 본다
   entry.undo.push({ bytes, page: i });
   if (entry.undo.length > UNDO_MAX) entry.undo.shift();
   entry.redo = [];
@@ -182,7 +200,36 @@ async function textTransaction(entry, i, apply, verify) {
   entry.doc = persisted;
   entry.dirty = true;
   doc.close();
+  // v6 Wave B: 글을 고친 쪽(대체 글꼴이 생길 수 있는 쪽) — 저장 전 대체 글꼴 목록(/api/pdf/substitutions)이 이 쪽들만 훑는다
+  entry.textPages ||= new Set();
+  if (Number.isInteger(i)) entry.textPages.add(i);
+  for (const k of result?.pages || []) if (Number.isInteger(k)) entry.textPages.add(k);
   return result;
+}
+// v6 Wave B: 이번 실행에서 원래 글꼴 대신 다른 글꼴로 그린 글(RetextPdfSubst — 엔진 objects()의 subst.session) — 줄마다 한 줄.
+// 반환 [{ page(1부터), text(줄 글 앞 40자), orig(원래 글꼴), used(쓴 글꼴), kind }]. 실행 취소로 되돌린 것은 문서에 없으므로 빠진다
+const SUBST_LIMIT = 200;
+function listSubstitutions(entry) {
+  const doc = entry.doc, n = doc.pageCount;
+  const pages = entry.structural ? Array.from({ length: n }, (_, k) => k) : [...(entry.textPages || [])].filter((k) => k >= 0 && k < n).sort((a, b) => a - b);
+  const out = [];
+  for (const i of pages) {
+    const objs = doc.objects(i);
+    if (!objs.some((o) => o.subst?.session)) continue;
+    for (const line of groupLines(objs, { mergeStyledRuns: true })) {
+      const seen = new Set();
+      for (const o of line.objs) {
+        if (!o.subst?.session) continue;
+        const key = o.subst.orig + '|' + o.subst.used;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const text = line.text.replace(/­/g, '').trim();
+        out.push({ page: i + 1, text: text.length > 40 ? text.slice(0, 40) + '…' : text, orig: o.subst.orig || '(이름 없음)', used: o.subst.used || '맑은 고딕', kind: o.subst.kind || 'fallback' });
+        if (out.length >= SUBST_LIMIT) return out;
+      }
+    }
+  }
+  return out;
 }
 // v6 넘침 줄이기: overflow:'shrink'면 글자 배율을 1부터 0.05씩 낮춰 가며(0.6까지) 아래 내용을 밀어도 쪽 안에 들어갈 때까지 다시 시도한다.
 // 시도마다 트랜잭션이 실패하면 문서를 되돌리므로 성공한 한 번만 실행 취소 스택에 남는다
@@ -831,6 +878,24 @@ const server = http.createServer(async (req, res) => {
       finally { endJob(job); }
     }
     if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
+    // v6 Wave B: 고른 설치 폰트에 없는 글자(속성 창 "선택한 글꼴에 없는 문자" 안내)
+    if (url.pathname === '/api/fonts/missing' && req.method === 'POST') {
+      const q = await readJson(req), font = pdfFonts.get(String(q.id || ''));
+      return json(res, 200, { missing: pdfFonts.missing(font, String(q.text || '').slice(0, 2000)).slice(0, 20), label: font.label });
+    }
+    // v6 Wave B: 이 글을 그 조각에 쓰면 원래 글꼴로 그려지나, 아니면 어떤 대체 글꼴인가(문서는 바꾸지 않는다)
+    if (url.pathname === '/api/pdf/glyph-check' && req.method === 'POST') {
+      const q = await readJson(req), { doc } = await getPdfDoc(q.name);
+      const i = pageIndex(doc, q.i);
+      if (!Number.isInteger(q.idx) || doc.objects(i)[q.idx]?.type !== 'text') return json(res, 400, { error: '텍스트 상자를 다시 선택하세요.' });
+      return json(res, 200, doc.glyphCheck(i, q.idx, String(q.text || '').slice(0, 2000)));
+    }
+    // v6 Wave B: 저장 전 경고 — 이번 실행에서 대체 글꼴로 그린 글 목록
+    if (url.pathname === '/api/pdf/substitutions' && req.method === 'GET') {
+      const entry = await getPdfDoc(url.searchParams.get('name'));
+      const list = listSubstitutions(entry);
+      return json(res, 200, { substitutions: list, truncated: list.length >= SUBST_LIMIT });
+    }
     if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
       const { path: file } = await readJson(req);
       return json(res, 200, pdfFonts.publicInfo(pdfFonts.register(file)));
@@ -1006,6 +1071,10 @@ const server = http.createServer(async (req, res) => {
       // P7: 암호·권한이 걸린 원본을 그대로 덮어쓰면 암호가 풀린 파일로 바뀐다 → 처음에는 409로 "다른 이름으로 저장"을 유도하고, force:true면 덮어쓴다
       if (entry.security?.encrypted && !force) {
         throw Object.assign(httpError(409, '암호나 권한 제한이 걸린 원본입니다. 저장하면 암호가 풀린 파일이 되므로 다른 이름으로 저장하세요.'), { extra: { needSaveAs: true } });
+      }
+      // v6 Wave B: 전자서명이 있는 원본에 덮어쓰면 서명이 무효가 된다 → 암호 문서처럼 다른 이름으로 저장을 유도한다(force면 덮어쓴다)
+      if (entry.security?.signed && !force) {
+        throw Object.assign(httpError(409, '전자서명이 있는 원본입니다. 그 자리에 저장하면 서명이 무효가 되므로 다른 이름으로 저장하세요.'), { extra: { needSaveAs: true, signed: true } });
       }
       const p = safe(name);
       writeAtomic(p, entry.doc.save());

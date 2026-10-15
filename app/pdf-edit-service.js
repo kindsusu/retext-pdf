@@ -116,11 +116,56 @@ function mergeLineCovers(covers) {
   return [...lines.map((g) => g.rect), ...loose];
 }
 
+// ── v6 Wave B: 회전·기울어진 줄의 가림 덮개 ─────────────────────────────────────
+// 예전에는 회전 글자(세로 제목·기울어진 도장 문구)를 객체 상자(쪽 축에 맞춘 사각형)로 덮어, 글자마다 객체인 PDF(Chromium·한글)는
+// 글자 수만큼 덮개가 생겼다(12번 말뭉치: 세로 제목 한 줄 → 덮개 17개, 기울어진 줄 → 20개). 이제 줄마다 글자 방향으로 돌린 사각형 하나.
+// 줄 높이는 가로 줄(엔진 lineBand)과 같은 규칙: 기준선 −0.25em ~ +0.85em, 글자 잉크가 그보다 넓으면(쪽 축 상자를 글자 방향으로 잰 값, 0.15em까지) 넓힌다.
+// 글자 방향 좌표: u = x·cos + y·sin(진행), v = −x·sin + y·cos(기준선 높이). o: objects() 항목(글자를 지우기 전). 못 재면 null
+const TILT_PAD = 0.5;
+function tiltCover(o) {
+  const m = o?.matrix, t = o?.text || '', g = o?.glyphs;
+  if (!m || !g || g.length !== t.length || !t.trim()) return null;
+  const len = Math.hypot(m[0], m[1]);
+  if (!(len > 0)) return null;
+  const cos = m[0] / len, sin = m[1] / len, U = (x, y) => x * cos + y * sin, V = (x, y) => -x * sin + y * cos;
+  // 글자 공간의 위(0,1) = 쪽에서 (c,d): 기준선에 수직인 성분 vc, 진행 방향 성분 uc(기울임 — 글자 윗부분이 옆으로 밀린다)
+  const uc = m[2] * cos + m[3] * sin, vc = -m[2] * sin + m[3] * cos, size = o.size || 0, em = size * Math.abs(vc);
+  if (!(em > 0)) return null;
+  const ink = g.filter((q, k) => !/\s/.test(t[k]));
+  const v = V(ink[0][0], ink[0][1]);
+  let u0 = Math.min(...ink.map((q) => U(q[0], q[1]))), u1 = Math.max(...ink.map((q) => U(q[0], q[1]) + q[2]));
+  const lo = -0.25 * size, hi = 0.85 * size;
+  u0 += Math.min(0, lo * uc, hi * uc); u1 += Math.max(0, lo * uc, hi * uc);
+  let v0 = Math.min(v + lo * vc, v + hi * vc), v1 = Math.max(v + lo * vc, v + hi * vc);
+  if (o.bounds) { // 잉크가 줄 높이·진행 폭 밖으로 나온 만큼(90° 단위 회전이면 정확, 그 밖에는 0.15em까지만)
+    const b = o.bounds, cs = [[b.x0, b.y0], [b.x1, b.y0], [b.x0, b.y1], [b.x1, b.y1]];
+    const bu = cs.map(([x, y]) => U(x, y)), bv = cs.map(([x, y]) => V(x, y)), lim = 0.15 * em;
+    u0 = Math.min(u0, Math.max(Math.min(...bu), u0 - lim)); u1 = Math.max(u1, Math.min(Math.max(...bu), u1 + lim));
+    v0 = Math.min(v0, Math.max(Math.min(...bv), v0 - lim)); v1 = Math.max(v1, Math.min(Math.max(...bv), v1 + lim));
+  }
+  return { theta: Math.atan2(sin, cos) * 180 / Math.PI, cos, sin, v, em, u0, u1, v0, v1, flat: Math.abs(sin) < 1e-3 && cos > 0 };
+}
+// 같은 방향(1° 안)·같은 기준선(0.2em 안)·같은 크기(10% 안)의 덮개를 하나로. 반환 [{ pts(쪽 좌표 꼭짓점 4개), bounds(쪽 축 상자) }]
+function mergeTiltCovers(tilts) {
+  const groups = [];
+  for (const c of tilts) {
+    const g = groups.find((q) => Math.abs(q.theta - c.theta) <= 1 && Math.abs(q.v - c.v) <= 0.2 * Math.max(q.em, c.em) && Math.abs(q.em - c.em) <= 0.1 * Math.max(q.em, c.em));
+    if (!g) { groups.push({ ...c }); continue; }
+    g.u0 = Math.min(g.u0, c.u0); g.u1 = Math.max(g.u1, c.u1); g.v0 = Math.min(g.v0, c.v0); g.v1 = Math.max(g.v1, c.v1);
+  }
+  return groups.map((q) => {
+    const P = (u, v) => [u * q.cos - v * q.sin, u * q.sin + v * q.cos];
+    const pts = [P(q.u0 - TILT_PAD, q.v0 - TILT_PAD), P(q.u1 + TILT_PAD, q.v0 - TILT_PAD), P(q.u1 + TILT_PAD, q.v1 + TILT_PAD), P(q.u0 - TILT_PAD, q.v1 + TILT_PAD)];
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    return { pts, bounds: { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) } };
+  });
+}
+
 // 가리기(/api/pdf/mask와 tools/demo-assets.js가 같이 쓴다). parts: [{ idx, from, to }] — 글자를 텍스트에서 실제로 지우고(redact),
 // 덮개는 다 지운 뒤 줄마다 하나씩 그린다(4.0.1 이전에는 글자·조각마다 따로 그려 높이가 들쭉날쭉했다).
 // 하나라도 가렸으면 ok:true(건너뛴 조각은 skipped). 아무것도 못 가렸으면 ok:false — 호출한 쪽(mutate)이 문서를 되돌린다
 function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
-  const covers = [], skipped = [], rects = [];
+  const covers = [], tilts = [], skipped = [], rects = [], polys = [];
   const colFor = (b) => (color === 'auto' ? doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
   // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
   const sorted = [...parts].sort((a, b) => b.idx - a.idx);
@@ -136,6 +181,8 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
     if (r.reason === 'charmap' || r.reason === 'rotated') {
       const all = doc.objects(i), obj = all[idx];
       const band = obj && obj.bounds ? doc.lineBand(i, obj, all) : null; // 글자를 지우기 전에 줄 높이를 잰다
+      // v6 Wave B: 회전·기울임 글자는 글자 방향 덮개(지우기 전 글자 자리로 잰다). 가로 기울임(이탤릭)은 가로 줄 덮개와 합쳐지게 줄 정보를 단다
+      const tilt = r.reason === 'rotated' && typeof doc.addPolygon === 'function' ? tiltCover(obj) : null;
       const cleared = doc.setText(i, idx, ' ');
       if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
       // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
@@ -144,7 +191,9 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
         const t = doc._setOneRaw(i, j, ' ');
         if (!t?.ok) skipped.push({ idx: j, reason: t?.reason || 'twin' });
       }
-      if (obj && obj.bounds) {
+      if (tilt?.flat) covers.push({ rect: { x0: tilt.u0 - TILT_PAD, x1: tilt.u1 + TILT_PAD, y0: tilt.v0 - TILT_PAD, y1: tilt.v1 + TILT_PAD }, line: { y: tilt.v, em: tilt.em } });
+      else if (tilt) tilts.push(tilt);
+      else if (obj && obj.bounds) {
         const b = obj.bounds;
         covers.push(band ? { rect: { x0: b.x0, x1: b.x1, y0: Math.min(b.y0, band.y0), y1: Math.max(b.y1, band.y1) }, line: { y: band.y, em: band.em } } : { rect: b });
       }
@@ -152,8 +201,10 @@ function maskParts(doc, i, parts, { color, fallbackRects = [] } = {}) {
   }
   // 덮개 색은 글자를 다 지운 뒤 합친 상자에서 잰다('auto')
   for (const b of mergeLineCovers(covers)) { doc.addRect(i, b, colFor(b)); rects.push(b); }
+  // 회전 줄: 줄마다 돌린 사각형 하나. rects에는 쪽 축 상자(겹치는 주석 지우기·화면 표시용), polys에 꼭짓점
+  for (const q of mergeTiltCovers(tilts)) { doc.addPolygon(i, q.pts, colFor(q.bounds)); rects.push(q.bounds); polys.push(q.pts); }
   for (const b of fallbackRects || []) { doc.addRect(i, b, colFor(b)); rects.push(b); }
-  return { ok: rects.length > 0, rects, skipped };
+  return { ok: rects.length > 0, rects, skipped, ...(polys.length ? { polys } : {}) };
 }
 
 // 가리기 조각 정리: 같은 객체의 조각은 겹치거나 맞닿으면 하나로 합치고(객체 전체 조각이 있으면 그것 하나),
@@ -410,8 +461,8 @@ function editRuns(doc, i, req = {}) {
     if (!partsOf.has(it)) partsOf.set(it, []);
     partsOf.get(it).push(s);
   }));
-  const remove = new Set(), written = [];
-  let fallbackFont = false;
+  const remove = new Set(), written = [], substitutes = []; // substitutes: 원래 글꼴에 없는 글자를 그린 대체 글꼴 { orig, used, kind }
+  let fallbackFont = false, kept = 0; // kept: 커닝을 지킨 글자 수(rewriteKerned)
   for (const L of lines.slice(first, stopLine)) {
     for (const it of L.items) {
       const ps = partsOf.get(it) || [];
@@ -419,14 +470,22 @@ function editRuns(doc, i, req = {}) {
       for (const s of ps.slice(1)) {
         const r = doc.cloneText(i, it.idx, s.text);
         if (!r.ok) throw new Error(r.reason || '나눈 글을 만들지 못했습니다.');
-        s.obj = r.idx; fallbackFont ||= !!r.fallbackFont; written.push({ idx: r.idx, text: s.text });
+        s.obj = r.idx; fallbackFont ||= !!r.fallbackFont; written.push({ idx: r.idx, text: s.text }); if (r.substitute) substitutes.push(r.substitute);
       }
       ps[0].obj = it.idx;
-      if (ps[0].text !== it.text) {
+      // v6 Wave B: TJ 간격(커닝)이 있는 객체의 가운데만 고쳤으면 안 고친 앞뒤 글자는 원래 자리에 둔다(doc.rewriteKerned — 조각 여럿이 함께 움직인다)
+      const kr = ps[0].text !== it.text && ps.length === 1 && typeof doc.rewriteKerned === 'function' ? doc.rewriteKerned(i, it.idx, ps[0].text) : null;
+      if (kr?.ok) {
+        ps[0].obj = kr.idxs[0]; ps[0].follow = kr.idxs.slice(1); ps[0].multi = kr.idxs.map((x, q) => ({ idx: x, text: kr.texts[q] }));
+        kr.idxs.forEach((x, q) => written.push({ idx: x, text: kr.texts[q] }));
+        fallbackFont ||= !!kr.fallbackFont; if (kr.substitute) substitutes.push(kr.substitute);
+        kept += kr.kept;
+        it.followers.forEach((x) => remove.add(x));
+      } else if (ps[0].text !== it.text) {
         const r = doc.setText(i, it.idx, ps[0].text);
         if (!r?.ok) throw new Error(r?.reason || '텍스트를 수정하지 못했습니다.');
         if (r.idx != null && r.idx !== it.idx) throw new Error('이 글자는 조각별로 고칠 수 없습니다.');
-        fallbackFont ||= !!r.fallbackFont; written.push({ idx: it.idx, text: ps[0].text });
+        fallbackFont ||= !!r.fallbackFont; written.push({ idx: it.idx, text: ps[0].text }); if (r.substitute) substitutes.push(r.substitute);
         it.followers.forEach((x) => remove.add(x)); // 겹쳐 그린 사본은 옛 글을 그린다 — 글을 바꾸면 지운다
       } else ps[0].follow = it.followers;
     }
@@ -465,7 +524,9 @@ function editRuns(doc, i, req = {}) {
         }
         continue;
       }
-      const it = itemOf(s.el), e = ext(s.obj, s.text), target = started ? cursor + gap : x;
+      // 커닝을 지키며 나눈 조각(multi)은 첫 조각 시작 ~ 마지막 조각 끝을 한 덩어리로 잰다
+      const it = itemOf(s.el), target = started ? cursor + gap : x;
+      const e = !s.multi ? ext(s.obj, s.text) : (() => { const es = s.multi.map((q) => ext(q.idx, q.text)); return { start: es[0].start, end: es[es.length - 1].end, ink: Math.max(...es.map((q) => q.ink)) }; })();
       const dx = target - e.start, dy = y - lines[it.line].y;
       moves.push([[s.obj, ...(s.follow || [])], dx, dy]);
       if (started && (brk || /\s$/.test(lastText))) row.breaks++;
@@ -570,6 +631,8 @@ function editRuns(doc, i, req = {}) {
     lineIdxs: placed.flatMap((r) => r.idxs).map(finalIdx),
     written: written.filter((w) => !remove.has(w.idx)).map((w) => ({ idx: finalIdx(w.idx), text: w.text })),
     fallbackFont, scaled, overlap,
+    ...(substitutes.length ? { substitutes: [...new Map(substitutes.map((x) => [x.orig + '|' + x.used, x])).values()] } : {}),
+    ...(kept ? { kerningKept: kept } : {}),
     addedLines: Math.max(0, placed.length - (paragraph ? origLines : 1)),
     lines: placed.length,
     removed: [...gone].reverse(), // 지운 객체(이 호출 전 번호, 오름차순) — 같은 쪽을 여러 번 고칠 때 앞서 받은 번호를 고친다(찾아 바꾸기)
@@ -815,4 +878,4 @@ function replaceInDoc(doc, query, replacement, opts = {}, target = null) {
   return { count, pages: [...pages], written, skipped };
 }
 
-module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, normalizeParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc };
+module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, tiltCover, mergeTiltCovers, normalizeParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc };

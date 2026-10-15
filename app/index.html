@@ -362,6 +362,17 @@
   #ppType{color:var(--fg);word-break:break-all}
   .ppEmpty,.ppHint{color:var(--mut);line-height:1.6}
   .ppEmpty{padding:12px 0}.ppHint{font-size:11px;margin-top:8px}
+  /* v6 Wave B: 글꼴 안내(대체 글꼴·없는 글자) — 속성 창 글꼴 칸 아래 */
+  .ppNote{margin-top:7px;padding:6px 8px;border-radius:6px;background:var(--panel2);border-left:3px solid var(--warn);font-size:11px;line-height:1.55;color:var(--fg);word-break:break-all}
+  .ppNote.info{border-left-color:var(--info)}
+  .ppNote b{font-weight:600}
+  /* v6 Wave B: 상태줄 "전자서명 있음" 표시 · 저장 전 대체 글꼴 목록 */
+  .sigBadge{flex-shrink:0;padding:1px 7px;border-radius:9px;border:1px solid var(--warn);color:var(--warn);font-size:10.5px;line-height:16px}
+  .substList{max-height:260px;overflow:auto;margin:6px 0 4px;border:1px solid var(--line);border-radius:8px}
+  .substList table{border-collapse:collapse;width:100%;font-size:12px}
+  .substList th,.substList td{padding:5px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  .substList th{position:sticky;top:0;background:var(--panel2);color:var(--mut);font-weight:600}
+  .substList td.pg{white-space:nowrap;color:var(--mut)}.substList td.ft{white-space:nowrap}
   /* 쪽 위에서 바로 고치기: 상자 자리에 겹친 편집기(바탕은 그 자리 색으로 원래 글자를 가린다) · ↵ 줄바꿈 표시 · 손잡이 8개 */
   .pdfEditor.inplace{min-width:0;max-width:none;padding:0;border:0;border-radius:0;box-shadow:none;background:transparent}
   .ipText{position:relative;outline:1.5px solid var(--acc);outline-offset:2px;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere;color:var(--paperInk);caret-color:var(--accStrong);text-align:left;cursor:text;box-shadow:0 0 0 4px rgba(217,119,87,.12)}
@@ -611,6 +622,7 @@
       <div class="ppSec"><h6>글꼴</h6>
         <select id="ppFont" aria-label="글꼴"><option value="">원래 글꼴</option></select>
         <div class="ppRow"><label>크기 <input id="ppSize" type="number" min="1" max="300" step="0.5" aria-label="글자 크기(pt)"> pt</label><label>색 <input id="ppColor" type="color" value="#000000" aria-label="글자 색"></label></div>
+        <div class="ppNote" id="ppFontNote" role="status" hidden></div>
       </div>
       <div class="ppSec"><h6>스타일</h6><div class="ppBtns">
         <button type="button" id="pp-bold" aria-pressed="false" title="굵게 (Ctrl+B)"><b>B</b></button>
@@ -645,6 +657,7 @@
   <span class="sb-nav" id="sbPdfNav" hidden><input id="pageNumInput" type="number" min="1" value="1" title="쪽 번호 (Enter로 이동)" aria-label="쪽 번호"><span id="pageCountLabel">/ 0</span></span>
   <span id="fname"></span>
   <span id="saveState" hidden><span id="dirty" hidden>●</span><span id="saveText"></span></span>
+  <span class="sigBadge" id="sigBadge" hidden title="이 문서에는 전자서명이 있습니다. 고쳐서 저장하면 서명이 무효가 되므로 다른 이름으로 저장합니다.">전자서명 있음</span>
   <span id="sbMdInfo" hidden></span>
   <span id="status" role="status"></span>
   <!-- 확대 비율: 도구줄 이름이 1366px 창에서 다 보이도록 상태줄 오른쪽 끝에 둔다. PDF를 열면 "쪽 전체 보기"로 시작한다 -->
@@ -982,6 +995,33 @@
   </div>
 </dialog>
 <!-- v6 아래 내용을 밀면 쪽 아래로 넘칠 때 -->
+<!-- v6 Wave B: 쪽 위 편집기에 적용하지 않은 글이 있을 때 저장·인쇄·문서 바꾸기 전에 묻는다 -->
+<dialog id="pendingDialog" class="panel" aria-labelledby="pdTitle">
+  <div class="card" style="max-width:440px">
+    <h2 id="pdTitle">적용하지 않은 글이 있습니다</h2>
+    <p id="pdMsg">쪽 위 편집기에서 고친 글을 아직 문서에 적용하지 않았습니다.</p>
+    <div class="row"><button type="button" id="pdApply" class="pri">적용하고 저장</button><button type="button" id="pdDiscard">버리고 저장</button><span class="sp"></span><button type="button" id="pdCancel">취소</button></div>
+  </div>
+</dialog>
+<!-- v6 Wave B: 저장 전 대체 글꼴 경고 — 원래 글꼴에 없는 글자를 다른 글꼴로 그린 곳 -->
+<dialog id="substDialog" class="panel" aria-labelledby="sbTitle">
+  <div class="card" style="max-width:560px">
+    <h2 id="sbTitle">다른 글꼴로 그린 글자가 있습니다</h2>
+    <p class="hint2" id="sbMsg">원래 글꼴(문서에 넣은 글꼴은 쓴 글자만 담는 경우가 많습니다)에 없는 글자를 넣어, 아래 곳은 다른 글꼴로 그렸습니다. 모양이 조금 다를 수 있습니다.</p>
+    <div class="substList"><table><thead><tr><th>쪽</th><th>글</th><th>원래 글꼴 → 쓴 글꼴</th></tr></thead><tbody id="sbRows"></tbody></table></div>
+    <label class="hint2" style="display:flex;align-items:center;gap:6px;margin-top:6px"><input type="checkbox" id="sbNever"> 다시 보지 않기 (이 문서)</label>
+    <div class="row"><button type="button" id="sbSave" class="pri">그대로 저장</button><span class="sp"></span><button type="button" id="sbCancel">취소</button></div>
+  </div>
+</dialog>
+<!-- v6 Wave B: 전자서명이 있는 문서를 처음 고치기(또는 처음 저장하기) 전에 묻는다 -->
+<dialog id="signedDialog" class="panel" aria-labelledby="sgTitle">
+  <div class="card" style="max-width:470px">
+    <h2 id="sgTitle">전자서명이 있는 문서</h2>
+    <p>이 문서에는 전자서명이 있습니다. 고쳐서 저장하면 서명이 무효가 됩니다.</p>
+    <p class="hint2">원본 파일에는 덮어쓰지 않고 다른 이름으로 저장합니다. [다른 이름으로 저장하도록 하기]는 지금 사본을 만들어 그 사본을 고칩니다(원본은 그대로).</p>
+    <div class="row"><button type="button" id="sgContinue" class="pri">계속</button><button type="button" id="sgSaveAs">다른 이름으로 저장하도록 하기</button><span class="sp"></span><button type="button" id="sgCancel">취소</button></div>
+  </div>
+</dialog>
 <dialog id="overflowDialog" class="panel" aria-labelledby="ofTitle">
   <div class="card" style="max-width:440px">
     <h2 id="ofTitle">쪽 아래로 넘칩니다</h2>
@@ -1129,11 +1169,13 @@ function addFiles(paths) {
   saveFilesLS(); renderFiles(); open(paths[0]);
 }
 async function removeFile(p) {
+  if (cur === p && !(await settleInplace('닫기'))) return; // v6 Wave B: 쪽 위 편집기의 적용하지 않은 글
   if (cur === p && dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 목록에서 닫을까요?')) return;
   files = files.filter((f) => f !== p); saveFilesLS();
   if (cur === p) {
     pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); p9ResetDoc(); // P9: 개인정보 창·주석 그리기·목차 상태는 그 문서 것이다
     cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
+    curSigned = false; $('#sigBadge').hidden = true;
     curTemp = curReadOnly = false; updateTempBanner();
     $('#fname').textContent = ''; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = true;
@@ -1233,12 +1275,13 @@ $('#asideTabs').onclick = (e) => { const btn = e.target.closest('.tabBtn'); if (
 $('#emptyMerge').onclick = openMergeDialog;
 
 async function open(name) {
+  if (name !== cur && !(await settleInplace('열기'))) return; // v6 Wave B: 쪽 위 편집기의 적용하지 않은 글
   if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
   if (cur && cur.endsWith('.pdf') && pdfDirty) await apiPost('/api/pdf/close', { name: cur }).catch(() => {}); // 버리기로 했으니 서버 캐시도 닫는다
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
   closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); // 토스트의 [실행 취소]는 이전 문서 것이다
   p9ResetDoc(); // P9: 개인정보 결과·쓰는 중인 주석·주석/목차 목록은 이전 문서 것이다
-  pdfDocName = null; externalWarned = null; securityNoted = null; // 명시적으로 여는 것이므로 1쪽부터
+  pdfDocName = null; externalWarned = null; securityNoted = null; signedNoted = null; curSigned = false; $('#sigBadge').hidden = true; // 명시적으로 여는 것이므로 1쪽부터
   cur = name; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false;
   curTemp = curReadOnly = false; updateTempBanner();
   pushRecent(name); renderFiles();
@@ -1287,8 +1330,104 @@ async function putText(name, text) {
   let r; try { r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
 }
-async function save() {
+// ---- v6 Wave B: 저장 전 확인(쪽 위 편집기의 적용하지 않은 글 · 전자서명 · 대체 글꼴) ----
+// 쪽 위 편집기에 적용하지 않은 글이 있으면 저장·인쇄·문서 바꾸기 전에 [적용하고 …] / [버리고 …] / [취소]를 묻는다 — 고친 글을 조용히 빼고 저장하지 않는다.
+// verb: 버튼 글('저장'·'인쇄'·'열기'·'닫기'), mode: 'apply'면 묻지 않고 적용(창 닫기 대화상자에서 저장을 이미 골랐을 때). 계속해도 되면 true
+async function settleInplace(verb, mode) {
+  let st = inplace;
+  if (!st) return true;
+  for (let k = 0; st.committing && k < 200; k++) { await new Promise((r) => setTimeout(r, 50)); } // 적용 중이면 끝날 때까지
+  st = inplace;
+  if (!st) return true;
+  await st.whenComposed(); // 한글 조합 중인 글자까지 넣고 판단한다
+  if (!st.dirty()) return true;
+  const choice = mode || await askPending(verb);
+  if (choice === 'apply') return !!(await st.commit());
+  if (choice === 'discard') { st.cancel(); return true; }
+  return false;
+}
+function askPending(verb) {
+  return new Promise((resolve) => {
+    const d = $('#pendingDialog');
+    $('#pdMsg').textContent = `쪽 위 편집기에서 고친 글을 아직 문서에 적용하지 않았습니다. ${verb} 전에 어떻게 할까요?`;
+    $('#pdApply').textContent = `적용하고 ${verb}`; $('#pdDiscard').textContent = `버리고 ${verb}`;
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); };
+    $('#pdApply').onclick = () => finish('apply'); $('#pdDiscard').onclick = () => finish('discard'); $('#pdCancel').onclick = () => finish(null);
+    d.onclose = () => finish(null);
+    d.showModal(); $('#pdApply').focus();
+  });
+}
+// 전자서명이 있는 원본: 열 때 알리고(토스트·상태줄 표시), 처음 고치기 전(또는 처음 저장할 때) 한 번 묻는다. 저장은 서버가 409 needSaveAs로 다른 이름으로 저장을 강제한다
+let curSigned = false;
+const signedAck = new Set(); // [계속]을 고른 문서(다시 묻지 않는다)
+function showSigned(name, sec) {
+  curSigned = !!sec?.signed;
+  $('#sigBadge').hidden = !curSigned;
+  if (curSigned && signedNoted !== name) {
+    signedNoted = name;
+    toast(`이 문서에는 전자서명이 있습니다${sec.signatures > 1 ? `(${sec.signatures}개)` : ''}. 고쳐서 저장하면 서명이 무효가 되므로 다른 이름으로 저장합니다.`, { kind: 'warning', ms: 9000 });
+  }
+}
+let signedNoted = null;
+function askSigned() {
+  return new Promise((resolve) => {
+    const d = $('#signedDialog');
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); };
+    $('#sgContinue').onclick = () => finish('continue'); $('#sgSaveAs').onclick = () => finish('saveas'); $('#sgCancel').onclick = () => finish(null);
+    d.onclose = () => finish(null);
+    d.showModal(); $('#sgContinue').focus();
+  });
+}
+// 고치기 전 관문: 서명 문서가 아니거나 이미 [계속]을 골랐으면 통과. [다른 이름으로 저장하도록 하기]면 지금 사본을 만들고(원본은 그대로) 그 사본을 고친다
+async function signedGate() {
+  if (!curSigned || !cur || signedAck.has(cur)) return true;
+  const choice = await askSigned();
+  if (choice === 'continue') { signedAck.add(cur); return true; }
+  if (choice === 'saveas') { const before = cur; await saveAs({ checked: true }); return cur !== before && !curSigned; }
+  return false;
+}
+// 이번 실행에서 원래 글꼴 대신 다른 글꼴로 그린 곳이 있으면 저장 전에 목록을 보여 준다. [다시 보지 않기 (이 문서)]는 문서 경로별로 기억한다
+const substSkipped = () => { try { return JSON.parse(localStorage.getItem('retextpdf.substOk') || '[]'); } catch { return []; } };
+async function confirmSubstitutions(name) {
+  if (!name.endsWith('.pdf') || substSkipped().includes(name)) return true;
+  let list = [];
+  try { const r = await fetch('/api/pdf/substitutions?name=' + encodeURIComponent(name)); if (r.ok) list = (await r.json()).substitutions || []; } catch {}
+  if (!list.length) return true;
+  return new Promise((resolve) => {
+    const d = $('#substDialog');
+    $('#sbRows').replaceChildren(...list.map((x) => {
+      const tr = document.createElement('tr');
+      const kind = x.kind === 'family' ? '같은 글꼴 · 설치됨' : x.kind === 'mono' ? '고정폭 대체' : '기본 대체';
+      tr.innerHTML = `<td class="pg">${x.page}쪽</td><td>${escapeHtml(x.text)}</td><td class="ft">${escapeHtml(x.orig)} → <b>${escapeHtml(x.used)}</b> <span class="hint2">(${kind})</span></td>`;
+      return tr;
+    }));
+    $('#sbNever').checked = false;
+    let done = false;
+    const finish = (v) => {
+      if (done) return; done = true;
+      if (v && $('#sbNever').checked) { try { localStorage.setItem('retextpdf.substOk', JSON.stringify([...substSkipped(), name].slice(-200))); } catch {} }
+      if (d.open) d.close(); resolve(v);
+    };
+    $('#sbSave').onclick = () => finish(true); $('#sbCancel').onclick = () => finish(false);
+    d.onclose = () => finish(false);
+    d.showModal(); $('#sbSave').focus();
+  });
+}
+// opts.pending: 'apply'(창 닫기에서 저장을 고름 — 묻지 않고 적용), opts.checked: 확인을 이미 거쳤다(보호 원본 → 다른 이름으로 저장)
+async function save(opts = {}) {
   if (!cur) return;
+  if (cur.endsWith('.pdf') && !opts.checked) {
+    if (!(await settleInplace('저장', opts.pending))) return;
+    if (curSigned && !signedAck.has(cur)) { // 처음 저장할 때(고치기 전에 묻지 못했으면) 묻는다
+      const choice = await askSigned();
+      if (!choice) return;
+      if (choice === 'saveas') return saveAs({ checked: true });
+      signedAck.add(cur);
+    }
+    if (!(await confirmSubstitutions(cur))) return;
+  }
   const name = cur, seq = mutationSeq, text = $('#src').value; // 저장하는 동안 다른 파일로 가거나 편집이 생길 수 있다
   try {
     if (name.endsWith('.pdf')) { await apiPost('/api/pdf/save', { name }, { silent: true }); if (cur === name && seq === mutationSeq) pdfDirty = false; } // 저장 중 편집이 있었으면 미저장 표시 유지
@@ -1296,22 +1435,28 @@ async function save() {
     showDirty(); flash('저장됨');
   } catch (error) {
     // 암호·편집 제한이 걸린 원본(409 needSaveAs): 그 자리에 덮어쓰면 보호가 사라지므로 다른 이름으로 저장으로 넘긴다
-    if (error.data?.needSaveAs && cur === name) return saveProtected(name);
+    if (error.data?.needSaveAs && cur === name) return saveProtected(name, error.data);
     flash('⚠ ' + error.message, 5000);
   }
 }
 // 보호된 원본 저장: 앱이면 이유를 알리고 다른 이름으로 저장 창을 연다. 브라우저 화면(저장 창 없음)은 덮어쓸지 한 번 묻는다
-async function saveProtected(name) {
+// data.signed: 전자서명이 있는 원본(v6 Wave B) — 덮어쓰면 서명이 무효가 된다
+async function saveProtected(name, data = {}) {
   if (window.retextPdf) {
-    toast('암호나 편집 제한이 걸린 원본이라 그 자리에 덮어쓰지 않습니다 — 다른 이름으로 저장하세요. 저장한 사본에는 암호가 없습니다.', { kind: 'info', ms: 8000 });
-    return saveAs();
+    toast(data.signed ? '전자서명이 있는 원본이라 그 자리에 덮어쓰지 않습니다 — 다른 이름으로 저장하세요. 원본의 서명은 그대로 남습니다.'
+      : '암호나 편집 제한이 걸린 원본이라 그 자리에 덮어쓰지 않습니다 — 다른 이름으로 저장하세요. 저장한 사본에는 암호가 없습니다.', { kind: 'info', ms: 8000 });
+    return saveAs({ checked: true });
   }
-  if (!confirm('암호나 편집 제한이 걸린 원본입니다. 덮어쓰면 암호가 풀린 파일이 됩니다. 그래도 덮어쓸까요?')) return;
+  if (!confirm(data.signed ? '전자서명이 있는 원본입니다. 덮어쓰면 서명이 무효가 됩니다. 그래도 덮어쓸까요?' : '암호나 편집 제한이 걸린 원본입니다. 덮어쓰면 암호가 풀린 파일이 됩니다. 그래도 덮어쓸까요?')) return;
   const seq = mutationSeq;
-  try { await apiPost('/api/pdf/save', { name, force: true }); if (cur === name && seq === mutationSeq) pdfDirty = false; showDirty(); flash('저장됨 (암호 없음)'); } catch {}
+  try { await apiPost('/api/pdf/save', { name, force: true }); if (cur === name && seq === mutationSeq) pdfDirty = false; showDirty(); curSigned = false; $('#sigBadge').hidden = true; flash(data.signed ? '저장됨 (서명 무효)' : '저장됨 (암호 없음)'); } catch {}
 }
-async function saveAs() {
+async function saveAs(opts = {}) {
   if (!cur || !window.retextPdf) return;
+  if (cur.endsWith('.pdf') && !opts.checked) {
+    if (!(await settleInplace('저장', opts.pending))) return;
+    if (!(await confirmSubstitutions(cur))) return;
+  }
   const name = cur, seq = mutationSeq;
   const to = await window.retextPdf.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
   if (!to) return;
@@ -1327,6 +1472,7 @@ async function saveAs() {
   $('#fname').textContent = basename(to); $('#fname').title = to;
   if (pdfPages.length) renderPageThumbs(); // 축소본 주소가 새 경로를 가리키게
   curTemp = curReadOnly = false; updateTempBanner(); // 새 경로가 현재 문서가 됐으니 임시 배너는 사라진다
+  curSigned = false; $('#sigBadge').hidden = true; // 새 파일은 서명 원본이 아니다(서버도 보통 문서로 본다)
   showDirty(); flash('다른 이름으로 저장됨');
 }
 // 임시·읽기전용 파일에서는 [저장]/Ctrl+S도 다른 이름으로 저장으로 보낸다(그 자리에 덮어쓸 수 없거나, 덮어써도 편집이 남지 않으므로)
@@ -1335,8 +1481,10 @@ $('#save').onclick = saveOrSaveAs;
 $('#saveAs').onclick = saveAs;
 // 창 닫기 대화상자(main.js)에서 호출: 저장 성공이면 true. "이 문서에 덮어쓰기"는 사용자가 그 자리에 쓰겠다고 명시적으로 고른 선택이라
 // 임시 파일이어도 saveAs로 돌리지 않는다(다른 이름으로 저장은 별도 버튼으로 이미 있음).
-window.retextPdfSave = async () => { await save(); return !dirty(); };
-window.retextPdfSaveAs = async () => { await saveAs(); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
+window.retextPdfSave = async () => { await save({ pending: 'apply' }); return !dirty(); };
+window.retextPdfSaveAs = async () => { await saveAs({ pending: 'apply' }); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
+// 창 닫기 확인(main.js)은 쪽 위 편집기에 적용하지 않은 글도 미저장으로 본다(v6 Wave B)
+window.isDirty = () => !!dirty() || !!(inplace && inplace.dirty());
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey || e.key.toLowerCase() !== 's') return;
   e.preventDefault(); e.shiftKey ? saveAs() : saveOrSaveAs();
@@ -1348,6 +1496,11 @@ function setUndoRedoState(u, r) { $('#undoBtn').disabled = $('#qaUndo').disabled
 // PDF를 바꾸는 모든 호출을 여기로 통일: dirty 표시 + 실행취소/다시실행 버튼 상태 갱신. 실패하면 상태줄에 알리고 예외(apiPost)
 // opts는 apiPost로 넘긴다 — 실패 이유를 대화상자 안에 보이는 곳은 { silent: true }로 상태줄·토스트 알림을 겹쳐 띄우지 않는다(P9)
 async function pdfMutate(path, payload, opts) {
+  // v6 Wave B: 전자서명 문서는 처음 고치기 전에 묻는다. [다른 이름으로 저장하도록 하기]로 사본을 만들었으면 요청도 사본으로 보낸다
+  const before = cur;
+  if (!(await signedGate())) throw Object.assign(new Error('취소했습니다'), { cancelled: true, data: {} });
+  const renamed = cur !== before;
+  if (payload && payload.name === before && renamed) payload = { ...payload, name: cur };
   const name = cur; mutationSeq++;
   let r;
   try { r = await apiPost(path, payload, opts); } finally { mutationSeq++; } // 시작·끝 모두 올려야 저장과 겹친 편집을 놓치지 않는다. 409(다른 작업 진행 중)는 apiPost가 메시지를 띄운다
@@ -1355,6 +1508,7 @@ async function pdfMutate(path, payload, opts) {
   if (r && r.ok !== false) { pdfDirty = true; showDirty(); dismissHint(); } // ok:false = 서버가 아무것도 바꾸지 않았다(실행 취소 기록도 없음). 첫 편집이면 상태줄 첫 안내를 지운다(WP-B1)
   if ('undoLeft' in r) setUndoRedoState(r.undoLeft, r.redoLeft);
   maybeFlashUndoTrimmed(r); noteExternalChange(r);
+  if (renamed && r && r.ok !== false) await renderPdfDoc(cur);
   return r;
 }
 // 서버가 디스크 변경을 감지하고도 메모리의 미저장 편집본을 유지했다는 신호 — 문서당 한 번만 알린다
@@ -1561,6 +1715,7 @@ async function renderPdfDoc(name) {
   pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); maybeFlashUndoTrimmed(info); noteExternalChange(info); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
   curTemp = !!info.temp; curReadOnly = !!info.readOnly; updateTempBanner();
   noteSecurity(name, info.security);
+  showSigned(name, info.security); // v6 Wave B: 전자서명 — 토스트·상태줄 표시
   // 맞춤 방식(쪽 전체 보기·폭 맞춤)이면 그릴 때마다 배율을 다시 잰다 — 처음 열 때는 1쪽, 다시 그릴 때(회전 등)는 보던 쪽 기준
   const keepPage = keep ? Math.min(keep.page, pdfPages.length - 1) : 0;
   if (zoomMode !== 'manual' && pdfPages.length) pdfScale = fitScale(zoomMode, keepPage);
@@ -2509,8 +2664,11 @@ function runEditNote(r, para) {
   if (r.unchanged) return '바뀐 글자가 없습니다';
   const pushed = r.pushed?.moved ? ` · 아래 내용 ${r.pushed.moved}개를 ${Math.abs(r.pushed.dy).toFixed(1)}pt 내렸습니다` : r.pushed?.skipped === 'overflow' ? ' · 아래 내용과 겹칩니다(밀지 않음)' : '';
   const scaled = r.fontScale ? ` · 글자를 ${Math.round(r.fontScale * 100)}%로 줄여 맞췄습니다` : '';
-  return (para ? `문단을 다시 흘렸습니다 — ${r.lines || 0}줄${r.addedLines ? `(${r.addedLines}줄 늘어남)` : ''}` : r.addedLines ? `줄 ${r.addedLines}개를 아래에 더했습니다` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '고쳤습니다')
-    + pushed + scaled + ' · Ctrl+Z로 되돌리기';
+  // v6 Wave B: 원래 글꼴에 없는 글자를 그린 글꼴 이름(같은 집안 설치 폰트 → 고정폭 → 맑은 고딕)
+  const subs = (r.substitutes || []).map((x) => x.used).filter((v, k, a) => v && a.indexOf(v) === k);
+  const fb = subs.length ? ` · 원래 글꼴에 없는 글자는 ${subs.join(', ')}(으)로 그렸습니다` : r.fallbackFont ? ' · 원래 글꼴에 없는 글자는 대체 글꼴로 그렸습니다' : '';
+  return (para ? `문단을 다시 흘렸습니다 — ${r.lines || 0}줄${r.addedLines ? `(${r.addedLines}줄 늘어남)` : ''}` : r.addedLines ? `줄 ${r.addedLines}개를 아래에 더했습니다` : '고쳤습니다')
+    + fb + pushed + scaled + ' · Ctrl+Z로 되돌리기';
 }
 // 다시 그린 쪽에서 lineIdxs가 든 상자(문단이면 그 문단)를 다시 고르고 편집기를 연다(모양을 바꾼 뒤·글을 먼저 적용한 뒤)
 function reopenAt(boxed, i, lineIdxs, para, caret) {
@@ -2523,6 +2681,7 @@ function reopenAt(boxed, i, lineIdxs, para, caret) {
 async function mutateWithOverflow(path, payload) {
   try { return await pdfMutate(path, payload, { silent: true }); }
   catch (error) {
+    if (error.cancelled) return null; // 전자서명 문서에서 [취소]를 골랐다(v6 Wave B)
     if (error.data?.overflow && !payload.overflow) {
       const choice = await askOverflow(error.data);
       if (!choice) return null;
@@ -2677,6 +2836,7 @@ function syncPropPanel() {
     const y = lines.map((L) => L.objs.find((o) => (o.text || '').trim() && o.origin)?.origin.y).filter(Number.isFinite);
     $('#ppPitch').value = y.length > 1 ? (Math.round((y[0] - y[1]) * 10) / 10) : '';
   }
+  updateFontNote(); // v6 Wave B: 대체 글꼴·없는 글자 안내(잠시 뒤 서버에 묻는다)
   const dirty = st.dirty();
   $('#ppMaskSel').disabled = dirty; $('#ppMaskAll').textContent = st.single ? '줄 전체 가리기' : '문단 전체 가리기';
   $('#ppFontFit').disabled = !st.single;
@@ -2694,7 +2854,53 @@ for (const k of ['bold', 'italic', 'underline', 'strike', 'super', 'sub']) {
   $(`#pp-${k}`).onclick = () => toggleStyle(k);
 }
 $('#ppFont').onfocus = () => loadPropFonts();
-$('#ppFont').onchange = () => { const id = $('#ppFont').value; if (id) applyStyle({ fontId: id }); };
+// v6 Wave B: 고른 글꼴에 고른 글자(없으면 상자 전체)가 다 있는지 먼저 본다 — 없으면 바꾸지 않고 속성 창에 "선택한 글꼴에 없는 문자"를 보인다
+$('#ppFont').onchange = async () => {
+  const id = $('#ppFont').value, st = inplace;
+  if (!id || !st) return;
+  const { from, to } = st.selOffsets(), all = st.text(), text = (from < to ? all.slice(from, to) : all).slice(0, 2000);
+  try {
+    const r = await apiPost('/api/fonts/missing', { id, text }, { silent: true });
+    if (inplace !== st) return;
+    if (r.missing?.length) {
+      fontPickWarn = { st, html: `선택한 글꼴(${escapeHtml(r.label)})에 없는 문자: <b>${escapeHtml(r.missing.join(' '))}</b> — 이 글꼴로 바꿀 수 없습니다. 다른 글꼴을 고르세요.` };
+      syncPropPanel(); refreshFontNote();
+      return;
+    }
+  } catch {}
+  fontPickWarn = null;
+  applyStyle({ fontId: id });
+};
+// ---- v6 Wave B: 속성 창 글꼴 안내 ----
+// ① 이 상자에 이미 다른 글꼴로 그린 조각(RetextPdfSubst) ② 새로 넣은 글자가 원래 글꼴(또는 지정 폰트)에 없으면 적용할 때 무엇으로 그릴지
+// ③ 글꼴 목록에서 고른 폰트에 없는 글자(fontPickWarn — 편집기를 닫거나 다시 고를 때까지). ALPDF의 "선택한 글꼴에 없는 문자" 안내와 같은 자리
+let fontNoteTimer = 0, fontNoteSeq = 0, fontPickWarn = null;
+const SUBST_KIND = { family: '같은 글꼴', mono: '고정폭 대체', fallback: '기본 대체' };
+function updateFontNote() { clearTimeout(fontNoteTimer); fontNoteTimer = setTimeout(refreshFontNote, 250); }
+async function refreshFontNote() {
+  const st = inplace, el = $('#ppFontNote');
+  if (!st) { el.hidden = true; fontPickWarn = null; return; }
+  const seq = ++fontNoteSeq, lines = inplaceLines(st.sel), notes = [];
+  let warn = false;
+  if (fontPickWarn?.st === st) { notes.push(fontPickWarn.html); warn = true; }
+  const ins = IE.insertedAt(lines, st.shown, st.text());
+  if (ins) {
+    try {
+      const r = await apiPost('/api/pdf/glyph-check', { name: cur, i: st.i, idx: ins.idx, text: ins.chars.join('') }, { silent: true });
+      if (seq !== fontNoteSeq || inplace !== st) return;
+      if (r.ok && !r.original && r.chosen) { notes.push(`선택한 글꼴(${escapeHtml(r.chosen)})에 없는 문자: <b>${escapeHtml(r.missing.join(' '))}</b> — 적용할 수 없습니다. 다른 글꼴을 고르세요.`); warn = true; }
+      else if (r.ok && !r.original && !(r.already && !r.missing.length)) {
+        notes.push(`원래 글꼴(${escapeHtml(r.orig || '?')})에 없는 문자${r.missing.length ? ': <b>' + escapeHtml(r.missing.join(' ')) + '</b>' : ''} — 적용하면 <b>${escapeHtml(r.used)}</b>(${SUBST_KIND[r.kind] || '대체'})로 그립니다.`);
+        warn = true;
+      }
+    } catch {}
+  }
+  if (seq !== fontNoteSeq || inplace !== st) return;
+  const subs = new Map();
+  for (const L of lines) for (const o of L.objs || []) if (o.subst) subs.set(o.subst.orig + '|' + o.subst.used, o.subst);
+  for (const x of subs.values()) notes.push(`이 상자의 일부 글자는 <b>${escapeHtml(x.used)}</b>로 그렸습니다(원래 글꼴 ${escapeHtml(x.orig)}에 없던 글자 · ${SUBST_KIND[x.kind] || '대체'}).`);
+  el.innerHTML = notes.join('<br>'); el.hidden = !notes.length; el.classList.toggle('info', !warn);
+}
 $('#ppSize').onchange = () => { const v = +$('#ppSize').value; if (v >= 1 && v <= 300) applyStyle({ size: v }); else flash('글자 크기는 1~300pt로 넣으세요'); };
 $('#ppColor').onchange = () => applyStyle({ color: $('#ppColor').value });
 document.querySelectorAll('#ppAlign button').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.onclick = () => applyAlign(b.dataset.align); });
@@ -2703,7 +2909,8 @@ $('#ppTracking').onchange = () => { const v = +$('#ppTracking').value; if (Numbe
 $('#ppApply').onclick = () => inplace?.commit();
 $('#ppCancel').onclick = () => inplace?.cancel();
 $('#ppPara').onclick = () => { const st = inplace; if (st?.sel.line && !st.dirty()) { const { i, wrap } = st, line = st.sel.line; dropInplace(); selectedObj = null; selectParagraph(i, line, wrap); } };
-$('#ppFontFit').onclick = () => {
+$('#ppFontFit').onclick = async () => {
+  if (!(await signedGate())) return;
   const st = inplace; if (!st || !st.single) return;
   const sel = st.sel, name = cur, text = st.text().replace(/\n/g, ' ');
   const idx0 = sel.objs[0].idx;
@@ -4054,6 +4261,7 @@ async function showAddedPages(idxs, label, undoSteps = 1) {
 let printBusy = false;
 async function onPrint() {
   if (!pdfOpen() || printBusy) return;
+  if (!(await settleInplace('인쇄'))) return; // v6 Wave B: 적용하지 않은 글은 인쇄본에 없다 — 먼저 묻는다
   const name = cur, sel = sortedPageSel().filter((k) => k < pdfPages.length);
   let pages = null, busy = null;
   printBusy = true; // 범위 창을 띄운 동안 Ctrl+P를 또 눌러도 겹치지 않게

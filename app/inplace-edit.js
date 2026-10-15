@@ -187,6 +187,34 @@ function styleAt(lines, from, to) {
     size: f.size, color: f.color, font: f.font, fontId: f.fontId, mixed: { size: !hit.every((g) => Math.abs(g.st.size - f.size) < 0.05), color: !same('color'), font: !same('font') } };
 }
 
-const api = { cssFamily, objStyle, segmentsFor, softGlue, extractText, textOffset, keyAction, mapOffset, styleAt, isBoldObj, isItalicObj, hexColor };
+// v6 Wave B: 편집기에서 새로 넣은 글자와 그 글자를 그릴 조각(속성 창 "원래 글꼴에 없는 문자" 안내용).
+// 옛 글·새 글의 같은 앞뒤를 뺀 가운데가 넣은 글이고, 그 글은 편집 서버(planRuns)처럼 왼쪽 글자의 조각이 받는다(줄 첫머리면 오른쪽).
+// 반환 { idx(조각 객체 번호), chars(공백·■·줄바꿈을 뺀 넣은 글자, 중복 없이) } — 넣은 글자가 없으면 null
+function insertedAt(lines, oldText, newText) {
+  const a = String(oldText || ''), b = String(newText || '');
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p && a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const chars = [...new Set([...b.slice(p, b.length - s)].filter((ch) => !/\s/.test(ch) && ch !== MASK))];
+  if (!chars.length) return null;
+  const segs = [];
+  let off = 0;
+  lines.forEach((L, li) => {
+    if (li) off += 1;
+    (L.objs || []).forEach((o, j) => {
+      if (j) off += ((L.seps || [])[j - 1] || '').length;
+      const t = String(o.text || '').replace(SHY_RE, '');
+      if (t.trim()) segs.push({ s: off, e: off + t.length, idx: o.idx });
+      off += t.length;
+    });
+  });
+  if (!segs.length) return null;
+  const k = p > 0 ? p - 1 : 0;
+  const hit = segs.find((g) => k >= g.s && k < g.e) || segs.filter((g) => g.s <= k).pop() || segs[0];
+  return { idx: hit.idx, chars };
+}
+
+const api = { cssFamily, objStyle, segmentsFor, softGlue, extractText, textOffset, keyAction, mapOffset, styleAt, insertedAt, isBoldObj, isItalicObj, hexColor };
 if (typeof window !== 'undefined') window.inplaceEdit = api;
 if (typeof module !== 'undefined') module.exports = api;

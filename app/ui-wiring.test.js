@@ -369,7 +369,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(script, /return r\.ok \|\| r\.status === 401;/, '최근 파일 확인에서 암호 PDF(401)를 "없는 파일"로 지우지 않는다');
   assert.match(script, /'암호를 풀고 열었습니다\. 저장하면 암호 없는 사본이 됩니다\.'/, '암호를 풀고 연 문서 안내');
   assert.match(script, /'편집 제한을 풀고 열었습니다\./, '편집 제한을 풀고 연 문서 안내');
-  assert.match(script, /if \(error\.data\?\.needSaveAs && cur === name\) return saveProtected\(name\)/, '저장 409 needSaveAs → 다른 이름으로 저장으로');
+  assert.match(script, /if \(error\.data\?\.needSaveAs && cur === name\) return saveProtected\(name, error\.data\)/, '저장 409 needSaveAs → 다른 이름으로 저장으로');
   assert.match(script, /throw Object\.assign\(new Error\(message\), \{ status: r\.status, data \}\)/, 'apiPost 예외는 응답 표시(needSaveAs 등)를 싣는다');
 
   // 쪽 번호 창: 모양 4가지(보기 글), 위치 5가지, 크기·여백·시작 번호·첫 쪽 건너뛰기·색, [넣기]/[번호 지우기]/[취소]. 고른 값은 기억한다
@@ -862,5 +862,64 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(serverSource, /url\.pathname === '\/api\/pdf\/style-runs'/); assert.match(serverSource, /url\.pathname === '\/api\/pdf\/replace'/);
   assert.match(s, /document\.activeElement\?\.isContentEditable\) return;/, '쪽 위 편집기 안 Ctrl+Z는 글자 되돌리기(PDF 실행 취소 아님)');
   console.log('OK — v6 Wave A 쪽 위 편집기(한글 조합·↵·DOM↔글)·찾아 바꾸기 계산·속성 창·꾸밈 막대·상자 테두리·Ctrl+H 단언 통과');
+}
+// ── v6 Wave B: 저장 전 확인(쪽 위 편집기의 적용하지 않은 글·대체 글꼴·전자서명) · 속성 창 글꼴 안내 ─────────────
+{
+  const s = script.replace(/\r\n/g, '\n');
+  const IE = require('./inplace-edit');
+  // A. 적용하지 않은 글: settleInplace를 꺼내 가짜 편집기로 돌린다(묻기 → 적용/버리기/취소, 창 닫기는 묻지 않고 적용)
+  const src = fnBodyOf(s, 'async function settleInplace(') + '\n}';
+  const make = (ctx) => new Function('ctx', `with (ctx) { return (${src.replace('async function settleInplace', 'async function')}); }`)(ctx);
+  const run = async (choice, { dirty = true, commitOk = true, mode } = {}) => {
+    const log = [];
+    const st = { committing: false, dirty: () => dirty, whenComposed: async () => {}, commit: async () => { log.push('commit'); return commitOk ? { ok: true } : false; }, cancel: () => log.push('cancel') };
+    const ctx = { inplace: st, askPending: async (verb) => { log.push('ask:' + verb); return choice; }, setTimeout };
+    const r = await make(ctx)('저장', mode);
+    return { r, log };
+  };
+  (async () => {
+    assert.deepStrictEqual(await run('apply'), { r: true, log: ['ask:저장', 'commit'] }, '[적용하고 저장] → 적용한 뒤 저장');
+    assert.deepStrictEqual(await run('discard'), { r: true, log: ['ask:저장', 'cancel'] }, '[버리고 저장] → 편집기를 닫고 저장');
+    assert.deepStrictEqual(await run(null), { r: false, log: ['ask:저장'] }, '[취소] → 저장하지 않는다');
+    assert.deepStrictEqual(await run('apply', { commitOk: false }), { r: false, log: ['ask:저장', 'commit'] }, '적용에 실패하면 저장하지 않는다');
+    assert.deepStrictEqual(await run(null, { dirty: false }), { r: true, log: [] }, '고친 글이 없으면 묻지 않는다');
+    assert.deepStrictEqual(await run(null, { mode: 'apply' }), { r: true, log: ['commit'] }, '창 닫기(저장 고름)는 묻지 않고 적용');
+  })().catch((e) => { console.error(e); process.exit(1); });
+  const save = fnBodyOf(s, 'async function save(');
+  assert.ok(save.indexOf("settleInplace('저장', opts.pending)") > 0 && save.indexOf("settleInplace('저장', opts.pending)") < save.indexOf("apiPost('/api/pdf/save'"), '저장(Ctrl+S·[저장])은 적용하지 않은 글부터 정리한다');
+  assert.ok(save.indexOf('confirmSubstitutions(cur)') > 0 && save.indexOf('confirmSubstitutions(cur)') < save.indexOf("apiPost('/api/pdf/save'"), '저장 전 대체 글꼴 경고');
+  const saveAs = fnBodyOf(s, 'async function saveAs(');
+  assert.ok(saveAs.indexOf("settleInplace('저장', opts.pending)") > 0 && saveAs.indexOf('confirmSubstitutions(cur)') < saveAs.indexOf("apiPost('/api/pdf/saveas'"), '다른 이름으로 저장도 같은 확인');
+  assert.match(fnBodyOf(s, 'async function onPrint('), /if \(!\(await settleInplace\('인쇄'\)\)\) return;/, '인쇄 전에도');
+  assert.match(fnBodyOf(s, 'async function open('), /if \(name !== cur && !\(await settleInplace\('열기'\)\)\) return;/, '다른 문서로 바꾸기 전에도');
+  assert.match(fnBodyOf(s, 'async function removeFile('), /if \(cur === p && !\(await settleInplace\('닫기'\)\)\) return;/, '문서를 닫기 전에도');
+  assert.match(s, /window\.isDirty = \(\) => !!dirty\(\) \|\| !!\(inplace && inplace\.dirty\(\)\);/, '창 닫기 확인은 적용하지 않은 글도 미저장으로 본다');
+  assert.match(s, /window\.retextPdfSave = async \(\) => \{ await save\(\{ pending: 'apply' \}\); return !dirty\(\); \};/, '창 닫기 → 저장은 적용하고 저장');
+  for (const id of ['pendingDialog', 'pdApply', 'pdDiscard', 'pdCancel']) assert.match(html, new RegExp(`id="${id}"`), `적용 확인 창 #${id}`);
+  assert.match(s, /\$\('#pdApply'\)\.textContent = `적용하고 \$\{verb\}`; \$\('#pdDiscard'\)\.textContent = `버리고 \$\{verb\}`;/, '[적용하고 저장] / [버리고 저장] / [취소]');
+  // B. 대체 글꼴 경고 창: 쪽·글·원래 글꼴 → 쓴 글꼴, [그대로 저장]·[취소]·다시 보지 않기(이 문서)
+  for (const id of ['substDialog', 'sbRows', 'sbNever', 'sbSave', 'sbCancel']) assert.match(html, new RegExp(`id="${id}"`), `대체 글꼴 창 #${id}`);
+  assert.match(html, />그대로 저장</); assert.match(html, /다시 보지 않기 \(이 문서\)/);
+  const cs = fnBodyOf(s, 'async function confirmSubstitutions(');
+  assert.match(cs, /fetch\('\/api\/pdf\/substitutions\?name=' \+ encodeURIComponent\(name\)\)/, '서버의 이번 실행 대체 목록');
+  assert.match(cs, /localStorage\.setItem\('retextpdf\.substOk'/, '다시 보지 않기는 문서 경로별로 기억');
+  assert.match(serverSource, /url\.pathname === '\/api\/pdf\/substitutions'/); assert.match(serverSource, /url\.pathname === '\/api\/pdf\/glyph-check'/); assert.match(serverSource, /url\.pathname === '\/api\/fonts\/missing'/);
+  // C. 전자서명: 열 때 토스트·상태줄 표시, 처음 고치기 전(pdfMutate 관문)·처음 저장할 때 묻고, 저장은 409 needSaveAs로 다른 이름으로
+  for (const id of ['sigBadge', 'signedDialog', 'sgContinue', 'sgSaveAs', 'sgCancel']) assert.match(html, new RegExp(`id="${id}"`), `서명 #${id}`);
+  assert.match(html, />전자서명 있음</); assert.match(html, /이 문서에는 전자서명이 있습니다\. 고쳐서 저장하면 서명이 무효가 됩니다\./);
+  assert.match(html, />다른 이름으로 저장하도록 하기</);
+  assert.match(s, /showSigned\(name, info\.security\);/, '열 때 서명 표시');
+  assert.match(fnBodyOf(s, 'async function pdfMutate('), /if \(!\(await signedGate\(\)\)\) throw/, '처음 고치기 전에 묻는다');
+  assert.match(save, /if \(curSigned && !signedAck\.has\(cur\)\)/, '처음 저장할 때 묻는다');
+  assert.match(fnBodyOf(s, 'async function saveProtected('), /data\.signed \?/, '서명 원본의 409 needSaveAs 안내');
+  assert.match(serverSource, /if \(entry\.security\?\.signed && !force\)/, '서버가 서명 원본 덮어쓰기를 막는다');
+  // D. 속성 창 글꼴 안내(대체 글꼴·없는 글자) — 새로 넣은 글자와 그 글자를 받는 조각(insertedAt)
+  assert.match(html, /<div class="ppNote" id="ppFontNote" role="status" hidden><\/div>/);
+  assert.match(s, /선택한 글꼴\(\$\{escapeHtml\(r\.label\)\}\)에 없는 문자/, 'ALPDF처럼 "선택한 글꼴에 없는 문자"');
+  const lines = [{ objs: [{ idx: 4, text: 'Run ' }, { idx: 7, text: 'npm test' }], seps: [''] }];
+  assert.deepStrictEqual(IE.insertedAt(lines, 'Run npm test', 'Run npm testZ'), { idx: 7, chars: ['Z'] }, '넣은 글자는 왼쪽 조각이 받는다');
+  assert.deepStrictEqual(IE.insertedAt(lines, 'Run npm test', 'XRun npm test'), { idx: 4, chars: ['X'] }, '줄 첫머리는 첫 조각');
+  assert.strictEqual(IE.insertedAt(lines, 'Run npm test', 'Run npm tes'), null, '지우기만 했으면 없음');
+  console.log('OK — v6 Wave B 저장 전 확인(적용하지 않은 글·대체 글꼴·전자서명)·속성 창 글꼴 안내 단언 통과');
 }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }

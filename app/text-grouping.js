@@ -287,6 +287,14 @@ function rowStream(frags) {
   const T = c.length ? Math.min(SPACE_T_MAX, Math.max(SPACE_T_MIN, (Math.min(...c) + Math.max(...c)) / 2)) : SPACE_T_DEFAULT;
   const explicit = gaps.some((x) => x.ws > 0);
   const spaceT = Math.max(T, L + SPACE_OVER_LETTER_EM, explicit ? SPACE_MIN_EXPLICIT_EM : 0);
+  // 구간(seg): 어떤 경우에도 잇지 않는 공백 없는 틈(칸 경계 — decideJoin의 'field')에서 행을 나눈다. 공백 틈의 중앙값은 같은 구간 안에서만 잰다.
+  // 행 전체로 재면 다른 단의 글이 기준을 바꾼다(v6 실측 08a: 왼쪽 단을 아래로 밀자 오른쪽 양쪽 맞춤 줄과 같은 행에 보통 간격의 새 줄이 와
+  // 중앙값이 0.3em으로 떨어지고, 오른쪽 줄의 넓은 낱말 틈(3~4em)이 모두 끊겨 낱말마다 상자가 됐다)
+  let seg = 0;
+  for (const x of gaps) {
+    if (!x.ws && x.g > (explicit ? L + FIELD_GAP_EM : LINE_GAP_MAX_EM)) seg++;
+    x.seg = seg;
+  }
   return { gaps, L, spaceT, explicit, wsGaps: gaps.filter((x) => x.ws > 0 && x.ws < SPACE_RUN_BREAK) };
 }
 
@@ -316,7 +324,7 @@ function decideJoin(row, a, b, gap, nonText, box) {
   if (a.hidden && b.hidden) ok = g < HIDDEN_GAP_MERGE_RATIO;
   else if (ws >= SPACE_RUN_BREAK) { ok = false; reason = 'spaces'; }
   else if (ws > 0) {
-    const others = st.wsGaps.filter((x) => x !== gap).map((x) => x.g);
+    const others = st.wsGaps.filter((x) => x !== gap && x.seg === gap.seg).map((x) => x.g);
     ok = g <= Math.max(WS_GAP_MIN_LIMIT_EM, WS_GAP_FACTOR * median(others));
   } else {
     ok = st.explicit ? g <= st.L + FIELD_GAP_EM : g <= LINE_GAP_MAX_EM;

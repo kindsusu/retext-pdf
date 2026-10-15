@@ -127,7 +127,8 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
 
     const NEW1 = '에디터 검수 테스트';
     const e1 = d.setText(0, ts[0].idx, NEW1);
-    assert.deepStrictEqual(e1, { ok: true, fallbackFont: true }, '서브셋에 없는 한글 → 폴백');
+    assert.deepStrictEqual({ ok: e1.ok, fallbackFont: e1.fallbackFont }, { ok: true, fallbackFont: true }, '서브셋에 없는 한글 → 폴백');
+    assert.ok(e1.substitute && e1.substitute.used, `v6 Wave B: 쓴 대체 글꼴을 알린다 ${JSON.stringify(e1.substitute)}`);
     const s1 = d.save();
     const g1 = s1.length - koBuf.length;
     console.log(`[서브셋] 원본 ${koBuf.length} → 폴백 1회 ${s1.length} (+${g1})`);

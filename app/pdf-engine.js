@@ -5,6 +5,7 @@ const fs = require('fs');
 const fontkit = require('fontkit');
 const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽입 · 다운샘플링의 인코더 (동기, 순수 JS)
 const fontRegistry = require('./pdf-fonts');
+const crypto = require('crypto');
 
 const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
@@ -12,6 +13,12 @@ const MARK_HF = 'RetextPdfHeaderFooter'; // 머리말·꼬리말 글자(다시 �
 const MARK_WM = 'RetextPdfWatermark';    // 워터마크 글자·그림(다시 넣으면 모든 쪽에서 교체)
 const MARK_STYLE = 'RetextPdfStyle';     // v6: 고른 글자에 준 모양(밑줄·취소선·가짜 굵게·가짜 기울임·첨자) — 글을 고쳐 써도 따라간다
 const MARK_DECO = 'RetextPdfDeco';       // v6: 밑줄·취소선 선(얇은 채움 사각형). syncDeco가 RetextPdfStyle에서 다시 그린다
+// v6 Wave B: 원래 글꼴에 없는 글자 때문에 다른 글꼴로 다시 그린 글자 조각. orig(원래 글꼴 이름)·used(쓴 글꼴)·kind('family' 같은 집안 설치 폰트 |
+// 'mono' 고정폭 대체 | 'fallback' 맑은 고딕)·b/it/mono(원래 굵기·기울임·고정폭)·sid(이 앱 실행 — 저장 전 경고는 이번 실행에서 바꾼 것만 보인다)
+const MARK_SUBST = 'RetextPdfSubst';
+const SESSION_ID = crypto.randomBytes(6).toString('hex');
+// 고정폭 원래 글꼴(코드·표)의 대체 후보 — 같은 집안이 설치돼 있지 않을 때 맑은 고딕보다 먼저(글자가 다 있는 첫 집안)
+const MONO_FAMILIES = ['Consolas', 'D2Coding', 'Courier New'];
 const META_KEYS = ['Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer', 'CreationDate', 'ModDate'];
 const META_EDITABLE = ['Title', 'Author', 'Subject', 'Keywords'];
 
@@ -44,9 +51,10 @@ const FALLBACK_FONTS = [
 // PDFium은 FPDFText_SetText에서 cmap으로 유니코드→글리프를 찾으므로 cmap이 없으면 전부 두부(□)로 그려진다.
 // → format 4 cmap을 직접 만들어 붙인다. (BMP 밖 글자는 format 12가 필요 — 한글에는 안 쓰인다)
 const _fkCache = new Map();
-function subsetTTF(path, chars) {
-  let f = _fkCache.get(path);
-  if (!f) { f = fontkit.openSync(path); if (f.fonts) f = f.fonts[0]; _fkCache.set(path, f); }
+function subsetTTF(path, chars, index = 0) {
+  const key = `${path}#${index}`; // 글꼴 모음(TTC — 바탕·굴림)은 면 번호까지
+  let f = _fkCache.get(key);
+  if (!f) { f = fontkit.openSync(path); if (f.fonts) f = f.fonts[index] || f.fonts[0]; _fkCache.set(key, f); }
   const sub = f.createSubset();
   const map = [];
   for (const ch of chars) {
@@ -283,7 +291,7 @@ async function open(buffer, password) {
     const cur = customFonts.get(entry.id);
     if (cur && [...text].every((c) => cur.chars.has(c))) return cur.font;
     const chars = new Set([...(cur?.chars || []), ...text]);
-    const data = subsetTTF(entry.path, chars), ptr = mal(data.length);
+    const data = subsetTTF(entry.path, chars, entry.index || 0), ptr = mal(data.length);
     heap().set(data, ptr); fbPtrs.push(ptr);
     const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
     if (!font) throw new Error('선택한 폰트를 PDF에 넣지 못했습니다.');
@@ -306,7 +314,7 @@ async function open(buffer, password) {
     const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
     if (process.env.RETEXTPDF_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
     if (!font) return 0;
-    fb[key] = { font, chars };
+    fb[key] = { font, chars, label: fontRegistry.byPath(path)?.label || path.split(/[\\/]/).pop().replace(/\.tt[fc]$/i, '') };
     fbBold.set(font, !!bold);
     return font;
   }
@@ -361,6 +369,81 @@ async function open(buffer, password) {
     const nb = mal(256); const name = P.FPDFFont_GetBaseFontName(font, nb, 256) ? M.UTF8ToString(nb) : ''; free(nb);
     const w = P.FPDFFont_GetWeight ? P.FPDFFont_GetWeight(font) : 0;
     return /bold|black|heavy/i.test(name) || w >= 600;
+  };
+
+  // ── v6 Wave B: 대체 글꼴 고르기 ─────────────────────────────────────────────
+  // 원래 글꼴(대개 쓴 글자만 담은 서브셋)에 없는 글자를 넣을 때, 예전에는 늘 맑은 고딕이었다(코드 글꼴 Consolas 조각도 맑은 고딕이 됐다).
+  // 이제 ① 같은 이름의 설치 폰트(서브셋 접두어·PostScript 꼬리를 떼고 이름표의 모든 언어 집안 이름과 비교, 굵기·기울임 맞춤)
+  //      ② 원래 글꼴이 고정폭이면 설치된 고정폭(Consolas → D2Coding → Courier New, 글자가 다 있는 첫 집안) ③ 맑은 고딕(굵기 유지) 순서로 고른다.
+  // 다시 그린 조각에는 RetextPdfSubst(원래 이름·쓴 글꼴·원래 굵기/기울임/고정폭)를 남긴다 — 다음 편집도 같은 규칙(원래 이름 기준)으로 고르고, 저장 전 경고가 읽는다
+  // PDF 글꼴 이름 바이트: UTF-8이 아니면 CP949(한글 윈도 문서의 "#B9#D9#C5#C1" = 바탕)로 푼다
+  const fontNameOf = (font) => {
+    const nb = mal(256);
+    try {
+      const n = P.FPDFFont_GetBaseFontName(font, nb, 256);
+      if (!n) return '';
+      const bytes = Buffer.from(heap().subarray(nb, nb + Math.min(255, n))), end = bytes.indexOf(0);
+      const raw = end >= 0 ? bytes.subarray(0, end) : bytes;
+      try { return new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { try { return new TextDecoder('euc-kr').decode(raw); } catch { return raw.toString('latin1'); } }
+    } finally { free(nb); }
+  };
+  const isItalicFont = (o, name) => {
+    if (/italic|oblique/i.test(name)) return true;
+    const ia = mal(4);
+    try { return !!(P.FPDFFont_GetItalicAngle(P.FPDFTextObj_GetFont(o), ia) && i32(ia) !== 0); } finally { free(ia); }
+  };
+  // 고정폭: 글꼴 서술자 Flags의 FixedPitch(1) 또는 이름(Courier·Consolas·Mono·Coding·…Che — 바탕체·굴림체)
+  const isMonoFont = (o, name) => !!((P.FPDFFont_GetFlags ? P.FPDFFont_GetFlags(P.FPDFTextObj_GetFont(o)) : 0) & 1)
+    || /courier|consol|mono|coding|typewriter|fixed|che$/i.test(String(name || '').replace(/^[A-Z]{6}\+/, '').replace(/[-,](bold|italic|regular|oblique)+$/i, ''));
+  const SUBST_KEYS = ['orig', 'used', 'kind', 'b', 'it', 'mono', 'sid'];
+  const substOf = (o) => {
+    const mk = findMark(o, MARK_SUBST);
+    if (!mk) return null;
+    const r = {};
+    for (const k of SUBST_KEYS) { const v = markParam(mk, k); if (v != null) r[k] = v; }
+    return r;
+  };
+  const setSubst = (o, s) => {
+    let mk; while ((mk = findMark(o, MARK_SUBST))) P.FPDFPageObj_RemoveMark(o, mk);
+    if (!s) return;
+    mk = P.FPDFPageObj_AddMark(o, MARK_SUBST);
+    if (!mk) return;
+    const flag = (x) => (x === true || x === '1' ? '1' : '0');
+    const v = { orig: String(s.orig || ''), used: String(s.used || ''), kind: String(s.kind || 'fallback'), b: flag(s.b), it: flag(s.it), mono: flag(s.mono), sid: String(s.sid || SESSION_ID) };
+    for (const k of SUBST_KEYS) P.FPDFPageObjMark_SetStringParam(doc, o, mk, k, v[k]);
+  };
+  // 대체 글꼴을 고르기만 한다(PDF에 올리지 않는다) — o: 원래(또는 이미 대체된) 글자 객체. 반환 { entry(설치 폰트 면, 맑은 고딕이면 null), kind, orig, b, it, mono }
+  const pickSubstitute = (o, text, bold) => {
+    const prev = substOf(o);
+    const orig = prev?.orig || fontNameOf(P.FPDFTextObj_GetFont(o)).replace(/^[A-Z]{6}\+/, '');
+    const b = prev ? prev.b === '1' : (bold ?? isBold(o));
+    const it = prev ? prev.it === '1' : isItalicFont(o, orig);
+    const mono = prev ? prev.mono === '1' : isMonoFont(o, orig);
+    const usable = (e) => e && !fontRegistry.missing(e, text).length;
+    const styleOk = (e) => e && fontRegistry.isBoldFace(e) === b;
+    let entry = null, kind = 'fallback';
+    if (orig && orig !== 'Untitled') {
+      const fam = fontRegistry.familyFor(orig);
+      const exact = fontRegistry.faceByName(orig);
+      if (fam) entry = [styleOk(exact) && fontRegistry.isItalicFace(exact) === it ? exact : null, fontRegistry.faceFor(fam, b, it), fontRegistry.faceFor(fam, b, false)].find(usable) || null;
+      if (entry) kind = 'family';
+    }
+    if (!entry && mono) {
+      for (const name of MONO_FAMILIES) {
+        const fam = fontRegistry.familyFor(name);
+        if (!fam) continue;
+        entry = [fontRegistry.faceFor(fam, b, it), fontRegistry.faceFor(fam, b, false), fontRegistry.faceFor(fam, false, false)].find(usable) || null;
+        if (entry) { kind = 'mono'; break; }
+      }
+    }
+    return { entry, kind, orig, b, it, mono };
+  };
+  // 대체 글꼴을 PDF에 올린다: { font, used(쓴 글꼴 이름), ...pickSubstitute } — font가 0이면 그릴 글꼴이 없다
+  const substituteFont = (o, text, bold) => {
+    const pick = pickSubstitute(o, text, bold);
+    if (pick.entry) return { ...pick, font: customFont(pick.entry, text), used: pick.entry.label };
+    const font = fallbackFont(pick.b, text);
+    return { ...pick, font, used: fb[pick.b ? 'bold' : 'regular']?.label || '맑은 고딕' };
   };
 
   // 원본 글자의 그리기 방식을 새 객체에 옮긴다: 렌더 모드(2 = 채움+외곽선 — Word가 '굵게'를 흉내낼 때 씀)·선 색·선 굵기.
@@ -554,7 +637,8 @@ async function open(buffer, password) {
     mk = P.FPDFPageObj_AddMark(o, MARK_STYLE);
     if (mk) for (const k of keys) P.FPDFPageObjMark_SetStringParam(doc, o, mk, k, String(st[k]));
   };
-  const copyStyleMark = (src, dst) => { const st = styleOf(src); if (st) setStyleMark(dst, st); };
+  // 글자 모양 표시와 대체 글꼴 표시(RetextPdfSubst)를 함께 옮긴다 — 조각을 나누거나 다시 만들어도 "원래 글꼴"을 잊지 않는다
+  const copyStyleMark = (src, dst) => { const st = styleOf(src); if (st) setStyleMark(dst, st); const sb = substOf(src); if (sb) setSubst(dst, sb); };
 
   // 페이지 인덱스가 바뀌는 작업(삭제·끼우기·복제·순서 변경) 전에: 미룬 콘텐츠를 쓰고 캐시된 페이지 핸들을 모두 닫는다
   const resetPages = () => { flush(); for (const h of pages.values()) P.FPDF_ClosePage(h); pages.clear(); };
@@ -1115,6 +1199,8 @@ async function open(buffer, password) {
           if (findMark(o, MARK_DECO)) item.deco = true;       // v6 밑줄·취소선 선(syncDeco가 다시 그린다)
           const st = t === OBJ_TEXT ? styleOf(o) : null;
           if (st) item.style = st;                            // v6 글자 모양 표시(밑줄·취소선·가짜 굵게/기울임·첨자)
+          const sb = t === OBJ_TEXT ? substOf(o) : null;      // v6 Wave B 대체 글꼴: { orig, used, kind, session(이번 실행에서 바꿨다) }
+          if (sb) item.subst = { orig: sb.orig || '', used: sb.used || '', kind: sb.kind || 'fallback', session: sb.sid === SESSION_ID };
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) {
             const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7;
@@ -1193,14 +1279,14 @@ async function open(buffer, password) {
         for (let k = 1; k < lines.length; k++) {
           const text = lines[k] || ' ';
           const entry = chosenFont(o);
-          let font = entry ? customFont(entry, text) : P.FPDFTextObj_GetFont(o), fb = false;
-          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) return { ok: false, reason: noGlyphReason(font, text, size) }; }
+          let font = entry ? customFont(entry, text) : P.FPDFTextObj_GetFont(o), fb = false, sub = null;
+          if (!canRender(font, text, size)) { sub = substituteFont(o, text, bold); font = sub.font; fb = true; if (!font || !canRender(font, text, size)) return { ok: false, reason: noGlyphReason(font, text, size) }; }
           const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
           const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 줄을 만들지 못했습니다.' }; }
           M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
-          copyTextStyle(o, neo); copyStyleMark(o, neo);
+          copyTextStyle(o, neo); copyStyleMark(o, neo); if (sub) setSubst(neo, sub);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
           tagGroup(neo, gid);
           if (entry) tagFont(neo, entry);
@@ -1341,7 +1427,8 @@ async function open(buffer, password) {
         const bold = isBold(o);
         // forceNew이고 원본 폰트로 그릴 수 있으면 원본 폰트로 새 객체(폰트 보존), 아니면 대체 폰트
         const usingOrig = origOk && forceNew;
-        const font = entry ? customFont(entry, newText) : usingOrig ? P.FPDFTextObj_GetFont(o) : fallbackFont(bold, newText);
+        const sub = entry || usingOrig ? null : substituteFont(o, newText, bold); // v6 Wave B: 같은 집안 설치 폰트 → 고정폭 → 맑은 고딕
+        const font = entry ? customFont(entry, newText) : usingOrig ? P.FPDFTextObj_GetFont(o) : sub.font;
         // 시스템 한글 폰트가 없거나, 서브셋에도 없는 글자(폰트 자체에 글리프 없음)면 두부(□)로 그려질 테니 거절
         if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false, reason: noGlyphReason(font, newText, size) };
 
@@ -1355,6 +1442,7 @@ async function open(buffer, password) {
           P.FPDFPageObj_SetFillColor(neo, i32(scratch), i32(scratch + 4), i32(scratch + 8), i32(scratch + 12));
         }
         copyTextStyle(o, neo); copyStyleMark(o, neo);
+        if (sub) setSubst(neo, sub);
         if (entry) tagFont(neo, entry);
         const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         // 같은 자리에 넣어 idx가 밀리지 않게 한다
@@ -1364,7 +1452,7 @@ async function open(buffer, password) {
         // 투명 글자 교체는 _setOne에서 색/알파를 확정한 뒤 콘텐츠를 만든다.
         // ca=0인 중간 객체를 먼저 기록하면 PDFium의 ExtGState 리소스가 재사용돼 저장 후 다시 투명해질 수 있다.
         if (!forceNew) regen(p);
-        return { ok: true, fallbackFont: !usingOrig && !entry };
+        return { ok: true, fallbackFont: !usingOrig && !entry, ...(sub ? { substitute: { orig: sub.orig, used: sub.used, kind: sub.kind } } : {}) };
       } finally { free(u16); free(scratch); }
     },
 
@@ -1376,7 +1464,8 @@ async function open(buffer, password) {
       if (entry) return { font: customFont(entry, text), entry, fallback: false };
       const nb = mal(256); const fname = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) ? M.UTF8ToString(nb) : ''; free(nb);
       if (fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), text, size)) return { font: P.FPDFTextObj_GetFont(o), entry: null, fallback: false };
-      return { font: fallbackFont(isBold(o), text), entry: null, fallback: true };
+      const sub = substituteFont(o, text);
+      return { font: sub.font, entry: null, fallback: true, sub };
     },
     // 글자별 진행 폭 추정(쪽 단위, UTF-16 위치마다 — 서로게이트 쌍의 둘째 칸은 0). 줄 나누기 판단용이다:
     // 실제 위치는 고쳐 쓴 뒤 objects()의 글자 위치로 다시 잰다. 폭 = 글리프 폭(FPDFFont_GetGlyphWidth, 유니코드 기준) × 행렬 배율.
@@ -1408,20 +1497,166 @@ async function open(buffer, password) {
       const s = mal(24), u16 = utf16(text);
       try {
         P.FPDFTextObj_GetFontSize(o, s); const size = f32(s);
-        const { font, entry, fallback } = api._fontFor(o, text, size);
+        const { font, entry, fallback, sub } = api._fontFor(o, text, size);
         if (!font || !canRender(font, text, size)) return { ok: false, reason: noGlyphReason(font, text, size) };
         const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
         if (!neo || !P.FPDFText_SetText(neo, u16)) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 텍스트 객체를 만들지 못했습니다.' }; }
         if (P.FPDFPageObj_GetMatrix(o, s)) P.FPDFPageObj_SetMatrix(neo, s);
         if (P.FPDFPageObj_GetFillColor(o, s, s + 4, s + 8, s + 12)) P.FPDFPageObj_SetFillColor(neo, i32(s), i32(s + 4), i32(s + 8), i32(s + 12));
-        copyTextStyle(o, neo); copyStyleMark(o, neo);
+        copyTextStyle(o, neo); copyStyleMark(o, neo); if (sub) setSubst(neo, sub);
         if (entry) tagFont(neo, entry);
         const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         P.FPDFPage_InsertObject(p, neo);
         regen(p);
-        return { ok: true, idx: P.FPDFPage_CountObjects(p) - 1, fallbackFont: fallback };
+        return { ok: true, idx: P.FPDFPage_CountObjects(p) - 1, fallbackFont: fallback, ...(sub ? { substitute: { orig: sub.orig, used: sub.used, kind: sub.kind } } : {}) };
       } finally { free(u16); free(s); }
     },
+    // ── v6 Wave B: 글자 간격(TJ 커닝) 지키며 고쳐 쓰기 ─────────────────────────────
+    // PDFium의 SetText는 객체의 TJ 간격(커닝·낱말 사이 숫자)을 모두 지운다 — 고치지 않은 글자까지 기본 진행 폭으로 다시 놓여 "T o tal"이 "To tal"처럼 벌어진다.
+    // 앞뒤가 같은 글(가운데만 고침)이면: 안 고친 앞·뒤 글자는 간격이 바뀌는 자리마다 작은 객체로 나눠 원래 글자 자리에 그대로 놓고
+    // (조각 안에는 간격 조정이 없으므로 SetText해도 자리가 같다), 고친 가운데만 새로 쓴다. 뒤 글자들은 가운데 폭이 바뀐 만큼 함께 민다.
+    // PDFium이 끼운 공백(TJ의 큰 음수 = 낱말 사이)은 글자가 아니므로 쓰지 않고 그 자리 간격으로 남긴다.
+    // 간격 조정이 없는 객체·앞뒤가 모두 바뀐 글은 { ok:false, reason } — 호출한 쪽이 보통 SetText로 고친다.
+    // 잃는 것: 바뀐 가운데 글자 안의 커닝, 가운데와 뒤 글자 사이의 원래 커닝(뒤 글자끼리의 간격은 지킨다). 자간(Tc)을 쓴 객체는 글자마다 나뉜다
+    // 반환 { ok, idxs(보이는 순서의 객체들 — 원래 객체 idx도 그 안), texts, kept(지킨 글자 수), fallbackFont, substitute? }
+    rewriteKerned(i, idx, newText) {
+      return api.batch(() => {
+        const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: 'not-text' };
+        const item = api.objects(i)[idx], text = item.text || '', n = text.length, g = item.glyphs, m = item.matrix;
+        newText = String(newText ?? '');
+        if (!m || !g || g.length !== n || item.hidden || n < 2) return { ok: false, reason: 'geometry' };
+        // 같은 앞·뒤(서로게이트 쌍을 가르지 않는다)
+        let pre = 0;
+        while (pre < n && pre < newText.length && text[pre] === newText[pre]) pre++;
+        if (pre > 0 && pre < n && /[\uDC00-\uDFFF]/.test(text[pre])) pre--;
+        let suf = 0;
+        while (suf < n - pre && suf < newText.length - pre && text[n - 1 - suf] === newText[newText.length - 1 - suf]) suf++;
+        if (suf > 0 && /[\uDC00-\uDFFF]/.test(text[n - suf])) suf--;
+        if (text === newText) return { ok: false, reason: 'same' };
+        if (!pre && !suf) return { ok: false, reason: 'nothing-kept' };
+        // 글자마다 PDFium이 끼운 글자인가(objects()의 글과 같은 함수로 대응)
+        const gen = new Array(n).fill(false);
+        {
+          const tp = P.FPDFText_LoadPage(p), sc = mal(32);
+          try {
+            const list = [];
+            for (let c = 0, cn = P.FPDFText_CountChars(tp); c < cn; c++) {
+              if (P.FPDFText_GetTextObject(tp, c) !== o) continue;
+              const u = P.FPDFText_GetUnicode(tp, c);
+              if (u) list.push({ c, u, gen: !!P.FPDFText_IsGenerated(tp, c) });
+            }
+            const { at } = objText(tp, o, list, sc, false);
+            if (at.length !== n) return { ok: false, reason: 'charmap' };
+            const genC = new Set(list.filter((x) => x.gen).map((x) => x.c));
+            at.forEach((c, k) => { gen[k] = genC.has(c); });
+          } finally { free(sc); P.FPDFText_ClosePage(tp); }
+        }
+        const len = Math.hypot(m[0], m[1]) || 1, cos = m[0] / len, sin = m[1] / len, em = (item.size || 1) * len;
+        const U = (k) => g[k][0] * cos + g[k][1] * sin, endOf = (k) => U(k) + g[k][2];
+        const low = (k) => /[\uDC00-\uDFFF]/.test(text[k]);
+        // 간격이 바뀌는 자리(k 앞에서 끊는다): 끼운 글자 앞뒤 · 앞 글자의 진행 끝과 이 글자 자리가 0.005em 넘게 다른 곳
+        const brk = new Array(n + 1).fill(false);
+        let kerned = false;
+        for (let k = 1; k < n; k++) {
+          if (low(k)) continue;
+          if (gen[k] || gen[k - 1] || Math.abs(U(k) - endOf(k - 1)) > 0.005 * em) { brk[k] = true; kerned = true; }
+        }
+        if (!kerned) return { ok: false, reason: 'plain' };
+        const runsIn = (a, b) => {
+          const out = [];
+          let s0 = -1;
+          for (let k = a; k < b; k++) {
+            if (gen[k]) { if (s0 >= 0) out.push([s0, k]); s0 = -1; continue; }
+            if (s0 < 0) s0 = k; else if (brk[k]) { out.push([s0, k]); s0 = k; }
+          }
+          if (s0 >= 0) out.push([s0, b]);
+          return out;
+        };
+        const preRuns = runsIn(0, pre), sufRuns = runsIn(n - suf, n), mid = newText.slice(pre, newText.length - suf);
+        if (!preRuns.length && !sufRuns.length) return { ok: false, reason: 'nothing-kept' };
+        const font = P.FPDFTextObj_GetFont(o), size = item.size;
+        if ([...preRuns, ...sufRuns].some(([a, b]) => !canRender(font, text.slice(a, b), size))) return { ok: false, reason: 'font' };
+        const ff = mid ? api._fontFor(o, mid, size) : null;
+        if (mid && (!ff.font || !canRender(ff.font, mid, size))) return { ok: false, reason: noGlyphReason(ff?.font, mid, size) };
+        // 가운데 시작: 옛 가운데 첫 글자 자리(바꾼 글 — 앞 간격 유지), 순수 삽입이면 앞 글자(끼운 공백이면 그 간격)의 진행 끝
+        const midStart = pre < n - suf && !gen[pre] ? U(pre) : pre > 0 ? endOf(pre - 1) : U(0);
+        const oldMidEnd = n - suf - 1 >= pre ? endOf(n - suf - 1) : midStart;
+        let midW = 0;
+        if (mid) {
+          const s = mal(4);
+          try { for (const ch of mid) midW += (P.FPDFFont_GetGlyphWidth(ff.font, ch.codePointAt(0), size, s) ? f32(s) : 0.5 * size) * len; } finally { free(s); }
+        }
+        const delta = midStart + midW - oldMidEnd;
+        const U0 = U(0), at = (u) => [g[0][0] + (u - U0) * cos, g[0][1] + (u - U0) * sin];
+        // 보이는 순서의 조각: { text, u(시작 — 글자 방향 좌표), orig(원래 글꼴) }. 원래 객체는 원래 글꼴의 첫 조각을 맡는다(자리·마크 그대로)
+        const segs = [
+          ...preRuns.map(([a, b]) => ({ text: text.slice(a, b), u: U(a), orig: true })),
+          ...(mid ? [{ text: mid, u: midStart, orig: ff.font === font, ff }] : []),
+          ...sufRuns.map(([a, b]) => ({ text: text.slice(a, b), u: U(a) + delta, orig: true })),
+        ];
+        const host = segs.find((sg) => sg.orig);
+        for (const sg of segs) {
+          const [x, y] = at(sg.u), mm = [m[0], m[1], m[2], m[3], x, y];
+          if (sg === host) {
+            const u16 = utf16(sg.text); const ok = P.FPDFText_SetText(o, u16); free(u16);
+            if (!ok) return { ok: false, reason: '앞 조각을 고치지 못했습니다.' };
+            setMatrix(o, mm); sg.idx = idx; continue;
+          }
+          const f = sg.orig ? font : sg.ff.font;
+          const neo = P.FPDFPageObj_CreateTextObj(doc, f, size), u16 = utf16(sg.text);
+          const ok = neo && P.FPDFText_SetText(neo, u16); free(u16);
+          if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '나눈 조각을 만들지 못했습니다.' }; }
+          setMatrix(neo, mm);
+          P.FPDFPageObj_SetFillColor(neo, item.color[0], item.color[1], item.color[2], item.color[3]);
+          copyTextStyle(o, neo); copyStyleMark(o, neo);
+          if (!sg.orig && sg.ff.sub) setSubst(neo, sg.ff.sub);
+          if (!sg.orig && sg.ff.entry) tagFont(neo, sg.ff.entry);
+          else { const fm = findMark(o, 'RetextPdfFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' }); }
+          const gid = groupOf(o); if (gid) tagGroup(neo, gid);
+          P.FPDFPage_InsertObject(p, neo);
+          sg.idx = P.FPDFPage_CountObjects(p) - 1;
+        }
+        regen(p);
+        const sub = mid && ff.sub && ff.font !== font ? ff.sub : null;
+        return { ok: true, idxs: segs.map((sg) => sg.idx), texts: segs.map((sg) => sg.text), kept: pre + suf, fallbackFont: !!sub,
+          ...(sub ? { substitute: { orig: sub.orig, used: sub.used, kind: sub.kind } } : {}) };
+      });
+    },
+    // v6 Wave B: 이 글을 이 객체 자리에 쓰면 어떤 글꼴로 그려지나(문서는 바꾸지 않는다 — 속성 창 안내용).
+    // { original(원래 글꼴로 다 그린다), missing(원래 글꼴에 없는 글자), used(대체 글꼴 이름), kind, orig(원래 글꼴 이름), chosen(지정 폰트) }
+    glyphCheck(i, idx, text) {
+      const o = P.FPDFPage_GetObject(page(i), idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: '텍스트 상자를 다시 선택하세요.' };
+      const size = (() => { const s = mal(4); try { return P.FPDFTextObj_GetFontSize(o, s) ? f32(s) : 12; } finally { free(s); } })();
+      text = String(text || '');
+      const entry = chosenFont(o);
+      if (entry) { const miss = fontRegistry.missing(entry, text); return { ok: true, original: !miss.length, chosen: entry.label, missing: miss.slice(0, 12) }; }
+      const font = P.FPDFTextObj_GetFont(o), own = fontNameOf(font) !== 'Untitled';
+      const missing = own ? [...new Set([...text].filter((ch) => !/\s/.test(ch) && !canRender(font, ch, size)))] : [];
+      if (own && !missing.length) return { ok: true, original: true, missing: [], orig: fontNameOf(font).replace(/^[A-Z]{6}\+/, '') };
+      const pick = pickSubstitute(o, text);
+      const fbPath = FALLBACK_FONTS.find((f) => fs.existsSync(f) && (!pick.b || /bd\.ttf$/i.test(f))) || FALLBACK_FONTS.find((f) => fs.existsSync(f));
+      const used = pick.entry ? pick.entry.label : (fbPath && fontRegistry.byPath(fbPath)?.label) || '맑은 고딕';
+      return { ok: true, original: false, missing: missing.slice(0, 12), used, kind: pick.kind, orig: pick.orig, ...(substOf(o) ? { already: true } : {}) };
+    },
+    // v6 Wave B: 회전·기울어진 줄의 가림 덮개 — 글자 방향으로 돌린 사각형(꼭짓점 pts [[x,y]×4], 쪽 좌표). addRect와 같은 가림 표시(RetextPdfMask)
+    addPolygon(i, pts, color = [0, 0, 0, 255]) {
+      const p = page(i);
+      if (!Array.isArray(pts) || pts.length < 3) return { idx: -1 };
+      const o = P.FPDFPageObj_CreateNewPath(pts[0][0], pts[0][1]);
+      if (!o) return { idx: -1 };
+      for (const [x, y] of pts.slice(1)) P.FPDFPath_LineTo(o, x, y);
+      P.FPDFPath_Close(o);
+      P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3] == null ? 255 : color[3]);
+      P.FPDFPath_SetDrawMode(o, 1, false);
+      P.FPDFPageObj_AddMark(o, MARK_MASK);
+      P.FPDFPage_InsertObject(p, o);
+      regen(p);
+      return { idx: P.FPDFPage_CountObjects(p) - 1 };
+    },
+    // v6 Wave B: 전자서명 수(PDFium FPDF_GetSignatureCount — 서명 값 /V가 있는 /Sig 칸). 못 읽으면 0
+    get signatureCount() { try { return Math.max(0, P.FPDF_GetSignatureCount ? P.FPDF_GetSignatureCount(doc) : 0); } catch { return 0; } },
     // 한 객체를 글자 위치 cuts(오름차순, 0 < k < 글자 수)에서 여러 객체로 가른다(15d: TJ 안의 큰 점프로 두 칸이 된 객체).
     // 앞 조각은 제자리(같은 인덱스), 뒤 조각들은 원래 글꼴로 새 객체를 만들어 그 글자의 기준선 시작점에 놓고 맨 뒤에 넣는다.
     // 원래 글꼴로 다시 그릴 수 없는 글자(글자 대응이 없는 서브셋)면 가르지 않는다 — 모양이 바뀌면 안 되는 "고치지 않은" 글자다
@@ -2787,4 +3022,4 @@ async function open(buffer, password) {
   return api;
 }
 
-module.exports = { open, merge };
+module.exports = { open, merge, _subsetTTF: subsetTTF }; // _subsetTTF: 시험 픽스처(고정폭 서브셋 글꼴 PDF)용

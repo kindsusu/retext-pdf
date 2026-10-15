@@ -7,7 +7,7 @@ const { open } = require('./pdf-engine');
 const { verifyEdits, editRuns } = require('./pdf-edit-service');
 const { diffChars, planRuns, breakAtoms } = require('./run-edit');
 const { groupLines, groupParagraphs } = require('./text-grouping');
-const { buildGroupingRawPdfs } = require('./pdf-test-fixtures');
+const { buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf } = require('./pdf-test-fixtures');
 
 // ── 2단계(조각별 모양 보존 편집 · 15d 부분 · 문단 다시 흘리기) ─────────────────────────────
 const GDIR = path.join(__dirname, 'test-data', 'grouping');
@@ -402,8 +402,147 @@ async function v6(dir, post, get, hiddenBytes) {
     assert.ok(d < -10 && Math.abs(r8.pushed.dy - d) < 0.01, `왼쪽 단 아래가 내려간다: ${d}`);
     for (const t of ['08b', 'Left column first', 'Left column second']) assert.ok(Math.abs(dyOf(t) - d) < 0.01, `${t}도 같은 만큼`);
     for (const t of ['오른쪽 단의 첫째', '오른쪽 단의 둘째', 'Right column first', 'Right column second']) assert.ok(Math.abs(dyOf(t)) < 0.01, `${t}: 다른 단은 그대로`);
+    // v6 Wave B: 밀린 왼쪽 단의 보통 간격 줄이 오른쪽 양쪽 맞춤 줄과 같은 행에 와도 오른쪽 줄은 낱말마다 쪼개지지 않는다(공백 틈 중앙값은 단 안에서만)
+    const g8 = merged(objs8).map((b) => b.text);
+    for (const t of ['오른쪽 단의 첫째 줄이다', '오른쪽 단의 둘째 줄이다', 'Right column first line', 'Right column second line']) assert.ok(g8.includes(t), `${t}: 한 상자 그대로 — ${JSON.stringify(g8)}`);
+    assert.ok(!g8.includes('오른쪽') && !g8.includes('Right'), `낱말 상자로 쪼개지지 않는다: ${JSON.stringify(g8)}`);
   }
   console.log('v6 Wave A: OK — 고른 글자 굵게·색·기울임·밑줄·위첨자·취소선·크기(저장·다시 열기·실행 취소 원상) · 찾아 바꾸기(모양 유지·한 번 되돌리기·가린 자리·투명 글자) · 아래 내용 밀기(단·넘침 409·keep·shrink)');
+}
+
+// ── v6 Wave B: 글꼴 대체(같은 집안·고정폭)·대체 목록·회전 줄 가리기·커닝 보존·전자서명 ─────────────────────
+// 글꼴 시험은 Windows 설치 폰트에 기댄다(CI windows-latest). 없는 폰트가 필요한 시험은 이유를 찍고 건너뛴다
+async function waveB(dir, post, get) {
+  const port = process.env.RETEXTPDF_PORT;
+  const info = async (name) => (await fetch(`http://127.0.0.1:${port}/api/pdf/info?${new URLSearchParams({ name })}`)).json().catch(() => ({}));
+  const subs = async (name) => (await fetch(`http://127.0.0.1:${port}/api/pdf/substitutions?${new URLSearchParams({ name })}`)).json();
+  const FONTS = path.join(process.env.WINDIR || 'C:/Windows', 'Fonts');
+  const has = (f) => fs.existsSync(path.join(FONTS, f));
+  const skip = (what, why) => console.log(`  (건너뜀) ${what}: ${why}`);
+  // ① 같은 집안 대체: 06 코드 조각(CAAAAA+Consolas 서브셋)에 서브셋에 없는 'Z'를 넣으면 설치된 Consolas로(예전: 맑은 고딕)
+  if (has('consola.ttf')) {
+    const name = path.join(dir, 'wb-06.pdf'); fs.writeFileSync(name, fs.readFileSync(path.join(GDIR, '06-inline-code.pdf')));
+    const L = merged(await get('/api/pdf/objects', name)).find((b) => b.text.startsWith('Run'));
+    const newText = L.text.replace('npm test', 'npm testZ');
+    const r = await post('/api/pdf/edit-runs', { name, i: 0, lines: [runLine(L)], oldText: L.text, newText, mode: 'none' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r));
+    assert.ok(r.substitutes?.some((x) => /consolas/i.test(x.used) && x.kind === 'family'), `Consolas 조각은 Consolas로: ${JSON.stringify(r.substitutes)}`);
+    const objs = await get('/api/pdf/objects', name), sub = objs.filter((o) => o.subst);
+    assert.ok(sub.length && sub.every((o) => /consolas/i.test(o.subst.used) && /consolas/i.test(o.subst.orig) && o.subst.session), JSON.stringify(sub.map((o) => o.subst)));
+    assert.ok(merged(objs).some((b) => b.text === newText), '고친 줄 글');
+    // 저장 전 목록: 쪽·글·원래 글꼴 → 쓴 글꼴. 실행 취소하면 목록도 빈다
+    const list = (await subs(name)).substitutions;
+    assert.ok(list.length === 1 && list[0].page === 1 && list[0].text.startsWith('Run') && /consolas/i.test(list[0].orig) && /consolas/i.test(list[0].used), JSON.stringify(list));
+    await post('/api/pdf/undo', { name });
+    assert.deepStrictEqual((await subs(name)).substitutions, [], '실행 취소하면 대체 목록도 빈다');
+  } else skip('Consolas 같은 집안 대체', 'consola.ttf 없음');
+  // 굵은 맑은 고딕 서브셋(05 CAAAAA+MalgunGothicBold)에 없는 글자 → 설치된 맑은 고딕 Bold(굵기 유지, 같은 집안). 다른 글꼴 선택 시 경고용 glyph-check도 같은 답
+  if (has('malgunbd.ttf')) {
+    const name = path.join(dir, 'wb-05.pdf'); fs.writeFileSync(name, fs.readFileSync(path.join(GDIR, '05-mixed-styles.pdf')));
+    const before = await get('/api/pdf/objects', name), L = merged(before).find((b) => b.text.startsWith('이 문장에는'));
+    const bold = L.objs.find((o) => /MalgunGothicBold/.test(o.font));
+    const gc = await post('/api/pdf/glyph-check', { name, i: 0, idx: bold.idx, text: '뷁' });
+    assert.ok(gc.ok && !gc.original && gc.missing.includes('뷁') && gc.kind === 'family' && /malgun gothic bold/i.test(gc.used), JSON.stringify(gc));
+    const ok = await post('/api/pdf/glyph-check', { name, i: 0, idx: bold.idx, text: '굵은' });
+    assert.ok(ok.ok && ok.original, '원래 글꼴에 있는 글자는 그대로');
+    const r = await post('/api/pdf/edit-runs', { name, i: 0, lines: [runLine(L)], oldText: L.text, newText: L.text.replace('굵은 글씨', '굵은 뷁씨'), mode: 'none' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r));
+    assert.ok(r.substitutes?.some((x) => /malgun gothic bold/i.test(x.used) && /MalgunGothicBold/.test(x.orig)), JSON.stringify(r.substitutes));
+    const A = merged(await get('/api/pdf/objects', name)).find((b) => b.text.startsWith('이 문장에는'));
+    const swapped = A.objs.find((o) => o.text.includes('뷁'));
+    assert.ok(swapped?.subst && swapped.weight >= 600, `굵기 유지: ${JSON.stringify(swapped && { w: swapped.weight, s: swapped.subst })}`);
+  } else skip('맑은 고딕 Bold 같은 집안 대체', 'malgunbd.ttf 없음');
+  // ② 고정폭 대체: 설치돼 있지 않은 고정폭 서브셋(RetextMonoTest, Courier New 글리프)에 없는 글자 → 맑은 고딕이 아니라 Consolas(굵게는 Consolas Bold)
+  if (has('cour.ttf') && has('consola.ttf') && has('consolab.ttf')) {
+    const name = path.join(dir, 'wb-mono.pdf'); fs.writeFileSync(name, buildMonoSubsetPdf(path.join(FONTS, 'cour.ttf')));
+    const B = merged(await get('/api/pdf/objects', name));
+    for (const [start, want] of [['code_x', /^consolas$/i], ['bold_y', /consolas bold/i]]) {
+      const L = B.find((b) => b.text.startsWith(start));
+      const r = await post('/api/pdf/edit-runs', { name, i: 0, lines: [runLine(L)], oldText: L.text, newText: L.text.replace('_', '_Q'), mode: 'none' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r));
+      assert.ok(r.substitutes?.length && r.substitutes.every((x) => x.kind === 'mono' && want.test(x.used)), `${start}: ${JSON.stringify(r.substitutes)}`);
+    }
+    const list = (await subs(name)).substitutions;
+    assert.ok(list.length === 2 && list.every((x) => x.kind === 'mono' && /RetextMonoTest/.test(x.orig)), JSON.stringify(list));
+  } else skip('고정폭 대체', 'cour.ttf·consola.ttf·consolab.ttf 중 없는 것이 있음');
+
+  // ③ 회전 줄 가리기(12): 세로 제목·기울어진 줄을 가리면 줄마다 덮개 하나(글자 방향으로 돌린 사각형), 글자는 텍스트에서 지워진다
+  {
+    const name = path.join(dir, 'wb-12.pdf'); fs.writeFileSync(name, fs.readFileSync(path.join(GDIR, '12-rotated.pdf')));
+    const before = await get('/api/pdf/objects', name);
+    const lines = groupLines(before).filter((l) => /^(세로로|기울어진)/.test(l.text));
+    assert.strictEqual(lines.length, 2);
+    const parts = lines.flatMap((L) => L.objs.filter((o) => o.text.length).map((o) => ({ idx: o.idx, from: 0, to: o.text.length })));
+    const r = await post('/api/pdf/mask', { name, i: 0, parts });
+    assert.strictEqual(r.status, 200, JSON.stringify(r));
+    assert.deepStrictEqual([r.ok, r.rects.length, r.skipped.length, r.undoLeft], [true, 2, 0, 1], JSON.stringify({ rects: r.rects.length, skipped: r.skipped }));
+    const after = await get('/api/pdf/objects', name), masks = after.filter((o) => o.mask);
+    assert.strictEqual(masks.length, 2, `줄마다 덮개 하나(예전: 글자마다 21개): ${masks.length}`);
+    for (const w of ['세로로', '회전된', 'Rotated', '기울어진', 'Approved', '2026']) assert.ok(!r.textLeft.includes(w), `가린 글자가 텍스트에 남지 않는다: ${w}`);
+    assert.ok(r.textLeft.includes('정상 가로 줄'), '다른 줄은 그대로');
+    // 덮개가 지운 글자 자리를 모두 덮는다(글자 상자 가운데가 검다) — 돌린 사각형이라 쪽 축 상자의 빈 모서리는 흰색으로 남는다
+    const { decodePng } = require('./image-util');
+    const png = decodePng(Buffer.from(await (await fetch(`http://127.0.0.1:${port}/api/pdf/page?${new URLSearchParams({ name, i: 0, scale: 1 })}`)).arrayBuffer()));
+    const H = (await info(name)).pages[0].h, sc = png.width / (await info(name)).pages[0].w;
+    const dark = (x, y) => { const p = (Math.round((H - y) * sc) * png.width + Math.round(x * sc)) * 4; return png.data[p] + png.data[p + 1] + png.data[p + 2] < 60; };
+    for (const o of lines.flatMap((L) => L.objs).filter((o) => (o.text || '').trim())) assert.ok(dark((o.bounds.x0 + o.bounds.x1) / 2, (o.bounds.y0 + o.bounds.y1) / 2), `덮였다: ${o.text}`);
+    const tilted = lines.find((L) => L.text.startsWith('기울어진')), tb = tilted.bounds;
+    assert.ok(!dark(tb.x0 + 1, tb.y1 - 1) && !dark(tb.x1 - 1, tb.y0 + 1), '기울어진 줄: 쪽 축 상자 모서리는 덮지 않는다(돌린 사각형)');
+    await post('/api/pdf/undo', { name });
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before, '실행 취소 한 번에 원상');
+  }
+
+  // ④ 커닝 보존(15 TJ): 가운데만 고치면 안 고친 앞·뒤 글자의 자리(커닝 포함)가 그대로 — 뒤 글자들은 같은 만큼만 밀린다
+  {
+    const raw = buildGroupingRawPdfs()['15-tj-kerning'];
+    const chars = (L) => L.objs.flatMap((o) => (o.glyphs || []).map((g, k) => ({ ch: o.text[k], x: g[0] }))).filter((c) => c.ch && c.ch.trim()).sort((a, b) => a.x - b.x);
+    for (const [from, to, keepA, keepB] of [['Total amount due today', 'Total sum due today', 'Total', 'duetoday'], ['AVATAR', 'AVXTAR', 'AV', 'TAR']]) {
+      const name = path.join(dir, `wb-15-${keepA}.pdf`); fs.writeFileSync(name, raw);
+      const L = merged(await get('/api/pdf/objects', name)).find((b) => b.text === from);
+      const before = chars(L);
+      const r = await post('/api/pdf/edit-runs', { name, i: 0, lines: [runLine(L)], oldText: L.text, newText: to, mode: 'none' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r));
+      assert.ok(r.kerningKept > 0, `커닝을 지킨 글자 수: ${r.kerningKept}`);
+      const A = merged(await get('/api/pdf/objects', name)).find((b) => b.text.replace(/\s/g, '') === to.replace(/\s/g, ''));
+      assert.ok(A, `고친 줄이 한 상자: ${JSON.stringify(merged(await get('/api/pdf/objects', name)).map((b) => b.text))}`);
+      const after = chars(A);
+      const pre = keepA.length, suf = keepB.length;
+      for (let k = 0; k < pre; k++) assert.ok(Math.abs(after[k].x - before[k].x) < 0.02 && after[k].ch === before[k].ch, `앞 글자 자리 그대로 ${before[k].ch}: ${before[k].x} → ${after[k].x}`);
+      const shift = after[after.length - suf].x - before[before.length - suf].x;
+      for (let k = 1; k <= suf; k++) {
+        const b = before[before.length - k], a = after[after.length - k];
+        assert.ok(a.ch === b.ch && Math.abs(a.x - b.x - shift) < 0.02, `뒤 글자 간격 그대로 ${b.ch}: ${b.x}+${shift.toFixed(2)} vs ${a.x}`);
+      }
+    }
+    // 커닝 없는 글(16a)은 예전처럼 SetText 한 번(조각을 나누지 않는다)
+    const name = path.join(dir, 'wb-16.pdf'); fs.writeFileSync(name, buildGroupingRawPdfs()['16-space-vs-gap']);
+    const objs16 = await get('/api/pdf/objects', name), L = merged(objs16).find((b) => b.text === 'Hello World');
+    const r = await post('/api/pdf/edit-runs', { name, i: 0, lines: [runLine(L)], oldText: L.text, newText: 'Hello Brave World', mode: 'none' });
+    assert.ok(r.status === 200 && !r.kerningKept && (await get('/api/pdf/objects', name)).length === objs16.length, JSON.stringify({ s: r.status, k: r.kerningKept }));
+  }
+
+  // ⑤ 전자서명: 열면 security.signed, 덮어쓰기 저장은 409 needSaveAs(signed), force·다른 이름으로 저장은 된다
+  {
+    const name = path.join(dir, 'wb-signed.pdf'), bytes = buildSignedPdf(); fs.writeFileSync(name, bytes);
+    const inf = await info(name);
+    assert.ok(inf.security?.signed === true && inf.security.signatures === 1, JSON.stringify(inf.security));
+    const sv = await post('/api/pdf/save', { name });
+    assert.ok(sv.status === 409 && sv.needSaveAs === true && sv.signed === true && /전자서명/.test(sv.error), JSON.stringify(sv));
+    assert.ok(fs.readFileSync(name).equals(bytes), '원본 파일은 그대로');
+    const to = path.join(dir, 'wb-signed-copy.pdf');
+    const sa = await post('/api/pdf/saveas', { name, to });
+    assert.strictEqual(sa.status, 200, JSON.stringify(sa));
+    assert.ok(!(await info(to)).security?.signed, '다른 이름으로 저장한 사본은 서명 원본으로 보지 않는다');
+    // 바이트 검사만으로도 잡는다(PDFium이 서명 칸을 못 읽는 깨진 양식): /AcroForm 없이 서명 사전만 남긴 파일
+    const loose = Buffer.from(bytes.toString('latin1').replace('/AcroForm << /Fields [5 0 R] /SigFlags 3 >>', ''), 'latin1');
+    const n2 = path.join(dir, 'wb-signed-loose.pdf'); fs.writeFileSync(n2, loose);
+    assert.ok((await info(n2)).security?.signed === true, '바이트 검사(/ByteRange + /Type /Sig)');
+    const plain = path.join(dir, 'wb-plain.pdf'); fs.writeFileSync(plain, buildGroupingRawPdfs()['16-space-vs-gap']);
+    assert.ok(!(await info(plain)).security?.signed, '서명 없는 문서는 signed 아님');
+    const forced = await post('/api/pdf/save', { name: n2, force: true });
+    assert.strictEqual(forced.status, 200, 'force면 덮어쓴다(브라우저 화면에서 확인한 뒤)');
+  }
+  console.log('v6 Wave B: OK — 같은 집안·고정폭 대체 글꼴과 저장 전 목록 · 회전 줄 가리기(줄마다 덮개 하나) · TJ 커닝 보존 · 전자서명 감지·409 needSaveAs');
 }
 
 process.env.RETEXTPDF_PORT = '4861';
@@ -582,6 +721,7 @@ const app = require('./server');
     }
     await stage2(dir, post, get);
     await v6(dir, post, get, bytes);
+    await waveB(dir, post, get);
     console.log('pdf edit transaction: OK');
   } finally {
     const absolute = path.resolve(dir), root = path.resolve(os.tmpdir()) + path.sep;

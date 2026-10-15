@@ -329,4 +329,54 @@ function buildGroupingRawPdfs() {
   return out;
 }
 
-module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs };
+// v6 Wave B: 서명된 것처럼 보이는 PDF — /AcroForm /SigFlags 3, 서명 칸(/FT /Sig)의 값 /V가 /Type /Sig 사전(/ByteRange·/Contents).
+// 진짜 서명(PKCS#7)은 아니다 — 감지(FPDF_GetSignatureCount·바이트 검사)와 "다른 이름으로 저장" 유도만 시험한다
+function buildSignedPdf() {
+  const content = Buffer.from('BT /F1 18 Tf 40 300 Td (Signed contract body) Tj ET', 'latin1');
+  return buildRawPdf([
+    '<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] /SigFlags 3 >> >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 420] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R /Annots [5 0 R] >>',
+    { dict: `<< /Length ${content.length} >>`, data: content },
+    '<< /Type /Annot /Subtype /Widget /FT /Sig /T (Signature1) /Rect [0 0 0 0] /F 132 /P 3 0 R /V 6 0 R >>',
+    `<< /Type /Sig /Filter /Adobe.PPKLite /SubFilter /adbe.pkcs7.detached /ByteRange [0 100 200 50] /Contents <${'0'.repeat(64)}> /M (D:20261015120000+09'00') /Name (Retext Test) >>`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  ]);
+}
+
+// v6 Wave B: 고정폭 서브셋 글꼴 PDF — 설치돼 있지 않은 이름(ABCDEF+RetextMonoTest, -Bold)으로 ttfPath(Courier New 등)의 몇 글자만 넣는다.
+// Chromium·워드 내보내기와 같은 CID 글꼴(Type0 Identity-H + ToUnicode, FontDescriptor Flags 33 = FixedPitch) — 없는 글자는 .notdef로 잡힌다.
+// 없는 글자를 넣으면 같은 집안 설치 폰트가 없으므로 고정폭 대체(Consolas → D2Coding → Courier New)로 가야 한다. 글자: 'code_x = 1' / 'bold_y = 2'
+function buildMonoSubsetPdf(ttfPath) {
+  const { _subsetTTF } = require('./pdf-engine');
+  const fontkit = require('fontkit');
+  const ttf = _subsetTTF(ttfPath, new Set('code_x =1bold_y2'));
+  const face = fontkit.create(ttf);
+  const gid = (ch) => face.glyphForCodePoint(ch.codePointAt(0)).id;
+  const hex = (s) => '<' + [...s].map((ch) => gid(ch).toString(16).padStart(4, '0')).join('') + '>';
+  const chars = [...new Set('code_x =1bold_y2')];
+  const cmap = Buffer.from(['/CIDInit /ProcSet findresource begin', '12 dict begin', 'begincmap', '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+    '/CMapName /Adobe-Identity-UCS def', '/CMapType 2 def', '1 begincodespacerange', '<0000> <FFFF>', 'endcodespacerange', `${chars.length} beginbfchar`,
+    ...chars.map((ch) => `<${gid(ch).toString(16).padStart(4, '0')}> <${ch.codePointAt(0).toString(16).padStart(4, '0')}>`),
+    'endbfchar', 'endcmap', 'CMapName currentdict /CMapResource defineresource pop', 'end', 'end'].join('\n'), 'latin1');
+  const content = Buffer.from(`BT /F1 14 Tf 40 300 Td ${hex('code_x = 1')} Tj ET\nBT /F2 14 Tf 40 270 Td ${hex('bold_y = 2')} Tj ET`, 'latin1');
+  const type0 = (name, cid) => `<< /Type /Font /Subtype /Type0 /BaseFont /${name} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] /ToUnicode 12 0 R >>`;
+  const cidFont = (name, desc) => `<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${desc} 0 R /DW 600 /CIDToGIDMap /Identity >>`;
+  const descriptor = (name, weight) => `<< /Type /FontDescriptor /FontName /${name} /Flags 33 /FontBBox [-50 -250 650 850] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 600 /StemV ${weight > 500 ? 140 : 80} /FontWeight ${weight} /FontFile2 11 0 R >>`;
+  return buildRawPdf([
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 420] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>',
+    { dict: `<< /Length ${content.length} >>`, data: content },
+    type0('ABCDEF+RetextMonoTest', 7),
+    type0('ABCDEF+RetextMonoTest-Bold', 8),
+    cidFont('ABCDEF+RetextMonoTest', 9),
+    cidFont('ABCDEF+RetextMonoTest-Bold', 10),
+    descriptor('ABCDEF+RetextMonoTest', 400),
+    descriptor('ABCDEF+RetextMonoTest-Bold', 700),
+    { dict: `<< /Length ${ttf.length} /Length1 ${ttf.length} >>`, data: ttf },
+    { dict: `<< /Length ${cmap.length} >>`, data: cmap },
+  ]);
+}
+
+module.exports = { buildPdf, makePng, buildObjStmPdf, appendUpdate, buildTrickyPdf, buildRawPdf, buildHiddenDataPdf, buildGroupingRawPdfs, buildSignedPdf, buildMonoSubsetPdf };
