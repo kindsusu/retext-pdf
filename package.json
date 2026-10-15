@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js",
+    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js && node app/pdf-ocr.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
@@ -15,7 +15,8 @@
     "dist:store": "node tools/dist-store.js",
     "appx-assets": "electron tools/make-appx-assets.js",
     "hero": "electron tools/make-hero.js",
-    "store-art": "electron tools/make-store-art.js"
+    "store-art": "electron tools/make-store-art.js",
+    "test:ocr": "node tools/ocr-corpus.js"
   },
   "build": {
     "appId": "com.kindsusu.retextpdf",
@@ -31,9 +32,26 @@
       "package.json",
       "workspace/독서모임_안내.md",
       "workspace/독서모임_안내.pdf",
-      "LICENSE"
+      "LICENSE",
+      "THIRD-PARTY-NOTICES.md",
+      "!node_modules/tesseract.js/{dist,docs,examples,scripts,tests}/**",
+      "!node_modules/tesseract.js/karma.conf.js",
+      "!node_modules/tesseract.js-core/*.wasm.js",
+      "!node_modules/tesseract.js-core/*-lstm.{js,wasm}",
+      "!node_modules/zlibjs/**",
+      "!node_modules/idb-keyval/**"
     ],
     "asar": true,
+    "asarUnpack": [
+      "app/ocr-worker.js",
+      "app/vendor/ocr/**",
+      "node_modules/tesseract.js/**",
+      "node_modules/tesseract.js-core/**",
+      "node_modules/regenerator-runtime/**",
+      "node_modules/is-url/**",
+      "node_modules/bmp-js/**",
+      "node_modules/wasm-feature-detect/**"
+    ],
     "fileAssociations": [
       {
         "ext": "pdf",
@@ -114,6 +132,8 @@
     "dompurify": "^3.4.13",
     "fontkit": "^2.0.4",
     "jpeg-js": "^0.4.4",
-    "marked": "^15.0.7"
+    "marked": "^15.0.7",
+    "tesseract.js": "7.0.0",
+    "tesseract.js-core": "7.0.0"
   }
 }

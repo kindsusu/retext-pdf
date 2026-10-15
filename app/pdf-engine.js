@@ -14,6 +14,7 @@ const MARK_WM = 'RetextPdfWatermark';    // 워터마크 글자·그림(다시 �
 const MARK_BATES = 'RetextPdfBates';      // v6 Wave D: 베이츠 번호(접두어 + 0을 채운 번호 + 접미어). 다시 넣으면 모든 쪽에서 교체
 const MARK_STYLE = 'RetextPdfStyle';     // v6: 고른 글자에 준 모양(밑줄·취소선·가짜 굵게·가짜 기울임·첨자) — 글을 고쳐 써도 따라간다
 const MARK_DECO = 'RetextPdfDeco';       // v6: 밑줄·취소선 선(얇은 채움 사각형). syncDeco가 RetextPdfStyle에서 다시 그린다
+const MARK_OCR = 'RetextPdfOcr';         // v6 Wave E2: 글자 인식(OCR)으로 넣은 글자·배경 사각형(m = search·edit·cover). 다시 인식하면 교체
 // v6 Wave B: 원래 글꼴에 없는 글자 때문에 다른 글꼴로 다시 그린 글자 조각. orig(원래 글꼴 이름)·used(쓴 글꼴)·kind('family' 같은 집안 설치 폰트 |
 // 'mono' 고정폭 대체 | 'fallback' 맑은 고딕)·b/it/mono(원래 굵기·기울임·고정폭)·sid(이 앱 실행 — 저장 전 경고는 이번 실행에서 바꾼 것만 보인다)
 const MARK_SUBST = 'RetextPdfSubst';
@@ -775,6 +776,58 @@ async function open(buffer, password) {
     }
     return removed;
   };
+  // v6 Wave E2: OCR로 넣은 객체 표시(RetextPdfOcr, m = search 보이지 않는 낱말 · edit 보이는 줄 · cover 배경 사각형). 다시 인식하면 이 표시로 옛것을 뺀다
+  const tagOcr = (o, m) => { const mk = P.FPDFPageObj_AddMark(o, MARK_OCR); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'm', m); };
+  const removeOcrIn = (i, area) => {
+    const p = page(i);
+    let removed = 0;
+    for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+      const o = P.FPDFPage_GetObject(p, idx);
+      if (!o || !findMark(o, MARK_OCR)) continue;
+      if (area) { const b = boundsOf(o), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2; if (!(cx >= area.x0 && cx <= area.x1 && cy >= area.y0 && cy <= area.y1)) continue; }
+      if (P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed++; }
+    }
+    if (removed) regen(p);
+    return removed;
+  };
+  // 그림 객체의 픽셀에 사각형 여러 개를 저마다의 색으로 칠한다(그림마다 한 번만 다시 넣는다 — JPEG 품질 92). rects: [{ x0,y0,x1,y1, color:[r,g,b,a] }] 쪽 좌표.
+  // 반환 { painted(다시 넣은 그림 수), covered:[k번째 사각형의 가운데가 어떤 그림 안에 있었나] } — 그림이 없는 자리는 호출자가 사각형으로 덮는다(OCR 편집 가능한 글자)
+  const paintImageRects = (i, rects) => {
+    const p = page(i), covered = rects.map(() => false);
+    let painted = 0;
+    const m = mal(24);
+    try {
+      for (let idx = P.FPDFPage_CountObjects(p) - 1; idx >= 0; idx--) {
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+        const b = boundsOf(o);
+        const hits = rects.map((r, k) => [r, k]).filter(([r]) => r.x0 < b.x1 && b.x0 < r.x1 && r.y0 < b.y1 && b.y0 < r.y1);
+        if (!hits.length) continue;
+        const px = P.FPDFPageObj_GetMatrix(o, m) ? imagePixels(o) : null;
+        if (!px) continue;
+        const [a, bb, c, d, e, f] = [0, 1, 2, 3, 4, 5].map((k) => f32(m + k * 4));
+        const det = a * d - bb * c;
+        if (!det) continue;
+        const toPx = (x, y) => { const u = (d * (x - e) - c * (y - f)) / det, v = (-bb * (x - e) + a * (y - f)) / det; return [u * px.width, (1 - v) * px.height]; };
+        let any = false;
+        for (const [r, k] of hits) {
+          const q = [toPx(r.x0, r.y0), toPx(r.x1, r.y0), toPx(r.x0, r.y1), toPx(r.x1, r.y1)];
+          const X0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[0])))), X1 = Math.min(px.width, Math.ceil(Math.max(...q.map((z) => z[0]))));
+          const Y0 = Math.max(0, Math.floor(Math.min(...q.map((z) => z[1])))), Y1 = Math.min(px.height, Math.ceil(Math.max(...q.map((z) => z[1]))));
+          if (X1 <= X0 || Y1 <= Y0) continue;
+          const col = r.color || [255, 255, 255, 255];
+          for (let y = Y0; y < Y1; y++) for (let x = X0; x < X1; x++) { const k4 = (y * px.width + x) * 4; px.data[k4] = col[0]; px.data[k4 + 1] = col[1]; px.data[k4 + 2] = col[2]; px.data[k4 + 3] = 255; }
+          any = true;
+          const cx = (r.x0 + r.x1) / 2, cy = (r.y0 + r.y1) / 2;
+          if (cx >= b.x0 && cx <= b.x1 && cy >= b.y0 && cy <= b.y1) covered[k] = true;
+        }
+        if (!any) continue;
+        try { putJpeg(o, encodeJpeg(px.data, px.width, px.height, 92), [p]); painted++; } catch { for (const [, k] of hits) covered[k] = false; }
+      }
+    } finally { free(m); }
+    if (painted) regen(p);
+    return { painted, covered };
+  };
   // 쪽 목록 검사(0 기준). 서버가 page-range.js로 푼 배열을 그대로 받는다. 없으면 모든 쪽
   const pageList = (pages) => {
     const count = P.FPDF_GetPageCount(doc);
@@ -1376,6 +1429,7 @@ async function open(buffer, password) {
           if (findMark(o, MARK_WM)) item.watermark = true;    // 워터마크 글자·그림
           if (findMark(o, MARK_BATES)) item.bates = true;     // v6 Wave D: 베이츠 번호 글자
           if (findMark(o, MARK_DECO)) item.deco = true;       // v6 밑줄·취소선 선(syncDeco가 다시 그린다)
+          { const mk = findMark(o, MARK_OCR); if (mk) item.ocr = markParam(mk, 'm') || 'search'; } // v6 Wave E2: 글자 인식으로 넣은 글자·배경
           const st = t === OBJ_TEXT ? styleOf(o) : null;
           if (st) item.style = st;                            // v6 글자 모양 표시(밑줄·취소선·가짜 굵게/기울임·첨자)
           const sb = t === OBJ_TEXT ? substOf(o) : null;      // v6 Wave B 대체 글꼴: { orig, used, kind, session(이번 실행에서 바꿨다) }
@@ -3579,6 +3633,117 @@ async function open(buffer, password) {
       });
     },
     removeBates() { const removed = api.batch(() => removeMarked(MARK_BATES)); return { ok: removed > 0, removed }; },
+
+    // ── v6 Wave E2: 글자 인식(OCR) 결과 넣기 ─────────────────────────────────
+    // 쪽 그림 px → 회전 전 쪽 좌표. _renderRaw(i, scale) 비트맵의 점들 [[x,y], …]을 렌더와 같은 행렬(FPDF_DeviceToPage)로 옮긴다 — /Rotate·CropBox 원점까지 맞다
+    pixelToPage(i, scale, pts) {
+      const { w, h } = api.pageSize(i), W = Math.max(1, Math.round(w * scale)), H = Math.max(1, Math.round(h * scale));
+      const out = mal(16), p = page(i);
+      try {
+        return [].concat(pts || []).map(([x, y]) => { P.FPDF_DeviceToPage(p, 0, 0, W, H, 0, Math.round(x), Math.round(y), out, out + 8); return [f64(out), f64(out + 8)]; });
+      } finally { free(out); }
+    },
+    // 반대 방향: 회전 전 쪽 좌표 점들 → _renderRaw(i, scale) 비트맵 px(영역 인식이 끌어 감싼 사각형을 그림에서 잘라 낼 때)
+    pageToPixel(i, scale, pts) { return [].concat(pts || []).map(([x, y]) => toDevice(i, x, y, scale)); },
+    // OCR 줄들을 쪽에 넣는다. pages: [{ i, lines:[{ text, o, u, v, w, h, words:[{ text, t0, t1 }], fg, bg }] }] (pdf-ocr.js toPageLines — o는 줄 아래 왼쪽,
+    //   u는 글 방향, v는 위 방향 단위 벡터, w·h는 줄 폭·높이 pt, t0·t1은 낱말이 줄 방향으로 놓인 자리)
+    //   mode 'search'(기본): 낱말마다 보이지 않는 글자(렌더 모드 3)를 그림 위 그 자리에 — 그림은 그대로. 글자 크기는 줄 높이로 정하고(줄 안 낱말은 같은 크기·기준선)
+    //                         낱말 폭에 맞춰 가로로만 늘이거나 줄인다. 찾기·복사·개인정보 찾기·내보내기가 이 글자를 읽는다
+    //   mode 'edit': 줄마다 보이는 글자 객체 하나(기존 줄 편집기로 고친다). 줄 자리의 그림을 배경색(bg)으로 칠하고(그림이 없으면 배경색 사각형) 같은 높이·색(fg)으로 쓴다.
+    //                         글꼴이 맑은 고딕이라 모양·폭이 원본과 다를 수 있다(가로 배율은 0.75~1.33로만 맞춘다)
+    //   replace(기본 true): 그 쪽에 전에 넣은 OCR 글자(RetextPdfOcr)를 먼저 뺀다 — area {x0,y0,x1,y1}가 있으면 그 안에 든 것만(영역 인식)
+    // 글꼴은 맑은 고딕 서브셋 하나: 모든 쪽의 글자를 한 번에 모아 서브셋한다(쪽마다 새 서브셋을 넣지 않는다). 글꼴에 없는 글자는 뺀다
+    // 반환 { ok, words, lines, dropped(빼낸 글자 수), painted(칠한 그림), covers(배경 사각형), removed(뺀 옛 OCR 객체), pages:[i] }
+    addOcrLayers(pages, opts = {}) {
+      const mode = opts.mode === 'edit' ? 'edit' : 'search';
+      const count = P.FPDF_GetPageCount(doc);
+      const list = [].concat(pages || []).filter((pg) => pg && Array.isArray(pg.lines));
+      for (const pg of list) if (!Number.isInteger(pg.i) || pg.i < 0 || pg.i >= count) throw bad(`쪽 번호가 범위를 벗어났습니다: ${pg.i + 1}쪽`);
+      const finite = (...v) => v.every(Number.isFinite);
+      const okLine = (l) => l && Array.isArray(l.o) && Array.isArray(l.u) && Array.isArray(l.v) && finite(l.o[0], l.o[1], l.u[0], l.u[1], l.v[0], l.v[1], l.w, l.h) && l.w > 0 && l.h > 0.5 && l.h < 2000 && Array.isArray(l.words);
+      const allText = list.flatMap((pg) => pg.lines.filter(okLine).flatMap((l) => l.words.map((wd) => String(wd?.text ?? '')))).join('').replace(/\s+/g, '');
+      const charSet = [...new Set(allText)].join('');
+      if (!charSet) return { ok: false, words: 0, lines: 0, dropped: 0, painted: 0, covers: 0, removed: 0, pages: [] };
+      const font = fallbackFont(false, charSet + ' '); // 띄어쓰기 글리프도 넣는다(없으면 □로 그려지고 글자 추출에서 빠진다)
+      if (!font) throw new Error('글자를 그릴 대체 글꼴(맑은 고딕)을 찾지 못했습니다.');
+      const can = new Map();
+      let dropped = 0;
+      const keep = (s) => [...String(s ?? '')].filter((ch) => {
+        if (/\s/.test(ch)) return false;
+        if (!can.has(ch)) can.set(ch, canRender(font, ch, 10));
+        if (!can.get(ch)) dropped++;
+        return can.get(ch);
+      }).join('');
+      const S0 = 10;
+      const probe = (text, size) => { const o = makeText(font, size, text, null, [0, 0, 0, 255]); try { return boundsOf(o); } finally { P.FPDFPageObj_Destroy(o); } };
+      const rgba = (c, def) => (Array.isArray(c) && c.length >= 3 && c.slice(0, 3).every((x) => Number.isFinite(x) && x >= 0 && x <= 255) ? [Math.round(c[0]), Math.round(c[1]), Math.round(c[2]), 255] : def);
+      const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+      let words = 0, lines = 0, painted = 0, covers = 0, removed = 0;
+      const done = [];
+      return api.batch(() => {
+        for (const pg of list) {
+          const p = page(pg.i);
+          if (opts.replace !== false) removed += removeOcrIn(pg.i, opts.area || null);
+          const good = pg.lines.filter(okLine).map((l) => ({ ...l, words: l.words.map((wd) => ({ text: keep(wd?.text), t0: Number(wd?.t0), t1: Number(wd?.t1) })).filter((wd) => wd.text && finite(wd.t0, wd.t1) && wd.t1 > wd.t0) })).filter((l) => l.words.length);
+          if (!good.length) continue;
+          // 편집 가능한 글자: 줄 자리의 그림을 배경색으로 먼저 칠한다(줄 사각형 + 0.8pt). 그림이 없는 자리는 배경색 사각형으로 덮는다
+          if (mode === 'edit') {
+            const rects = good.map((l) => {
+              const pts = [[0, 0], [l.w, 0], [0, l.h], [l.w, l.h]].map(([a, b]) => [l.o[0] + l.u[0] * a + l.v[0] * b, l.o[1] + l.u[1] * a + l.v[1] * b]);
+              const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+              const pad = 0.8 + 0.15 * l.h; // 줄 높이는 낱말 위·아래끝의 중앙값이라 튀어나온 획(받침·괄호)까지 덮게 넉넉히
+              return { x0: Math.min(...xs) - pad, y0: Math.min(...ys) - pad, x1: Math.max(...xs) + pad, y1: Math.max(...ys) + pad, color: rgba(l.bg, [255, 255, 255, 255]) };
+            });
+            const r = paintImageRects(pg.i, rects);
+            painted += r.painted;
+            rects.forEach((rc, k) => {
+              if (r.covered[k]) return;
+              const o = P.FPDFPageObj_CreateNewRect(rc.x0, rc.y0, rc.x1 - rc.x0, rc.y1 - rc.y0);
+              if (!o) return;
+              P.FPDFPageObj_SetFillColor(o, ...rc.color); P.FPDFPath_SetDrawMode(o, 1, false);
+              tagOcr(o, 'cover'); P.FPDFPage_InsertObject(p, o); covers++;
+            });
+          }
+          for (const l of good) {
+            const lineText = l.words.map((wd) => wd.text).join(' ');
+            const bL = probe(lineText, S0), hb = bL.y1 - bL.y0;
+            if (!(hb > 0)) continue;
+            const S = clamp(S0 * (l.h / hb), 1, 400), base = -bL.y0 * (S / S0); // 기준선은 줄 아래에서 (잉크 아래끝 깊이)만큼 위
+            const [ox, oy] = l.o, [ux, uy] = l.u, [vx, vy] = l.v;
+            // tail: 낱말 뒤에 붙이는 띄어쓰기(글자 추출이 낱말 사이 공백을 틈 크기로 짐작하지 않게). 폭 맞춤은 띄어쓰기를 뺀 잉크 상자로 잰다
+            const put = (text, t0, t1, lo, hi, color, rm, tail = '') => {
+              const o = makeText(font, S, text + tail, null, color);
+              const b = tail ? probe(text, S) : boundsOf(o), bw = b.x1 - b.x0;
+              const hs = clamp(bw > 0 ? (t1 - t0) / bw : 1, lo, hi);
+              const along = t0 - b.x0 * hs;
+              setMatrix(o, [ux * hs, uy * hs, vx, vy, ox + ux * along + vx * base, oy + uy * along + vy * base]);
+              if (rm) P.FPDFTextObj_SetTextRenderMode(o, rm);
+              tagOcr(o, mode);
+              P.FPDFPage_InsertObject(p, o);
+            };
+            if (mode === 'search') {
+              l.words.forEach((wd, k) => { put(wd.text, wd.t0, wd.t1, 0.2, 5, [0, 0, 0, 255], 3, k < l.words.length - 1 ? ' ' : ''); words++; });
+            } else {
+              const bg = rgba(l.bg, [255, 255, 255, 255]);
+              let fg = rgba(l.fg, [0, 0, 0, 255]);
+              if (Math.abs(fg[0] - bg[0]) + Math.abs(fg[1] - bg[1]) + Math.abs(fg[2] - bg[2]) < 90) fg = bg[0] + bg[1] + bg[2] > 384 ? [0, 0, 0, 255] : [255, 255, 255, 255]; // 배경과 구별되지 않으면 검정(밝은 배경)·흰색
+              put(lineText, l.words[0].t0, l.words[l.words.length - 1].t1, 0.75, 1.33, fg, 0);
+              words += l.words.length;
+            }
+            lines++;
+          }
+          regen(p);
+          done.push(pg.i);
+        }
+        return { ok: words > 0, words, lines, dropped, painted, covers, removed, pages: done };
+      });
+    },
+    // 넣어 둔 OCR 글자(RetextPdfOcr)를 뺀다 — pages(0 기준, 생략 = 전체) · area가 있으면 가운데가 그 안에 든 것만. → { ok, removed }
+    removeOcr(pages, area = null) {
+      const list = pageList(pages);
+      const removed = api.batch(() => list.reduce((n, i) => n + removeOcrIn(i, area), 0));
+      return { ok: removed > 0, removed };
+    },
 
     save() { flush(); return saveDoc(P, doc); },
 

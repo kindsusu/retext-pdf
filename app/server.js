@@ -24,6 +24,8 @@ const pdfMarkdown = require('./pdf-markdown'); // v6 Wave D: PDF → Markdown·�
 const pdfCompare = require('./pdf-compare');   // v6 Wave D: 두 문서 비교
 const pdfForms = require('./pdf-forms');       // v6 Wave E: 양식 외형(한글)·고정 정리·양식 데이터
 const pdfOffice = require('./pdf-office');     // v6 Wave E: Word(.docx)·한글(.hwpx) 내보내기
+const pdfOcr = require('./pdf-ocr');           // v6 Wave E2: 글자 인식(OCR, 앱 안 tesseract — 문서를 PC 밖으로 보내지 않는다)
+const uiModel = require('./ui-model');         // 화면과 같이 쓰는 순수 계산(스캔한 쪽 알아보기)
 const stamps = require('./stamp-store');
 const { buildPrintHtml } = require('./print-html');
 const APP_VERSION = require('../package.json').version;
@@ -552,7 +554,73 @@ function piiRedactDoc(doc, kinds) {
   for (let i = 0; i < doc.pageCount; i++) left += pii.findPii(doc.pageChars(i).text, { kinds, limit: PII_LIMIT }).length;
   return { found, redacted: Math.max(0, found - left), left };
 }
-const BATCH_ACTIONS = ['watermark', 'headerFooter', 'pageNumbers', 'sanitize', 'pii', 'protect', 'rasterize', 'downsample', 'markdown', 'bates', 'docx', 'hwpx'];
+// ── v6 Wave E2: 글자 인식(OCR) ──────────────────────────────────────────────
+// 쪽을 300dpi로 그려(RGBA) 앱 안 tesseract 작업 스레드에서 읽고(pdf-ocr), 결과 좌표(그림 px)를 쪽 좌표로 바꾼다.
+// 그림이 너무 크면(4천만 화소 ≈ RGBA 160MB 넘게) 해상도를 낮춘다(A3 300dpi = 1,750만 화소)
+const OCR_DPI = 300, OCR_MAX_PX = 40e6;
+function ocrScale(doc, i, dpi = OCR_DPI) {
+  const { w, h } = doc.pageSize(i);
+  const s = Math.max(36, Math.min(600, Number(dpi) || OCR_DPI)) / 72;
+  return w * h * s * s > OCR_MAX_PX ? Math.sqrt(OCR_MAX_PX / (w * h)) : s;
+}
+// 쪽 하나(rect [l,b,r,t]가 있으면 그 안만) 인식 → { i, lines(엔진 addOcrLayers 모양), text, confidence, angle, orientation, words, ms } · 취소면 null
+async function ocrPage(doc, i, o, isCancelled, rect = null) {
+  const s = ocrScale(doc, i, o.dpi);
+  const bmp = doc._renderRaw(i, s);
+  let pxRect = null;
+  if (rect) {
+    const pts = doc.pageToPixel(i, s, [[rect[0], rect[1]], [rect[2], rect[3]], [rect[0], rect[3]], [rect[2], rect[1]]]);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    pxRect = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  }
+  const r = await pdfOcr.recognize(bmp, { langs: o.langs, isCancelled, rect: pxRect });
+  if (!r) return null;
+  const lines = pdfOcr.toPageLines(r.lines, (pts) => doc.pixelToPage(i, s, pts));
+  return { i, lines, text: r.text, confidence: r.confidence, angle: r.angle, orientation: r.orientation, words: lines.reduce((n, l) => n + l.words.length, 0), ms: r.ms };
+}
+// 여러 쪽 인식. skipText면 이미 글자가 있는 쪽(공백 빼고 20자 이상 — 전에 OCR한 쪽 포함)은 건너뛴다. step(k, 알림) → false면 취소(null)
+async function ocrDoc(doc, list, o, step, isCancelled) {
+  const pages = [], skipped = [];
+  for (let k = 0; k < list.length; k++) {
+    const i = list[k];
+    if (!(await step(k, `${i + 1}쪽 글자 인식 중 (${k + 1}/${list.length})`))) return null;
+    if (o.skipText) {
+      const info = uiModel.scanPageInfo(doc.objects(i), doc.pageSize(i));
+      if (info.chars >= 20) { skipped.push({ i, reason: '이미 글자가 있는 쪽' }); continue; }
+    }
+    const r = await ocrPage(doc, i, o, isCancelled);
+    if (!r) return null;
+    pages.push(r);
+  }
+  return { pages, skipped };
+}
+// 인식한 쪽들에 글자를 넣고, 옆으로·거꾸로 스캔한 쪽(인식이 방향을 바꿔 읽은 쪽)은 /Rotate로 바로 세운다 — 글자 객체는 그림과 같은 쪽 좌표라 함께 돈다.
+// (돌리지 않으면 글자 추출 순서가 거꾸로 나온다 — 실측: 180° 쪽 비슷함 0.20 → 돌린 뒤 0.92). 반환 addOcrLayers 결과 + rotated:[{ i, by }]
+function ocrApplyPages(doc, pages, mode) {
+  const a = doc.addOcrLayers(pages.map((p) => ({ i: p.i, lines: p.lines })), { mode });
+  const rotated = pages.filter((p) => p.orientation && p.lines.length).map((p) => ({ i: p.i, by: p.orientation }));
+  for (const t of rotated) doc.rotatePages([t.i], t.by);
+  return { ...a, rotated };
+}
+const ocrSummary = (p) => ({ i: p.i, words: p.words, lines: p.lines.length, confidence: p.confidence, angle: p.angle, orientation: p.orientation, ms: p.ms });
+function ocrReady() {
+  const st = pdfOcr.status();
+  if (!st.available) throw httpError(503, `글자 인식을 쓸 수 없습니다 — ${st.langs.find((l) => l.error)?.error || '인식 엔진 파일이 없습니다. 앱을 다시 설치하세요'}`);
+  return st;
+}
+// 화면이 보낸 OCR 줄(영역 인식 결과)을 검사한다 — 숫자·배열 모양과 개수만(엔진이 한 번 더 거른다)
+function ocrLinesFrom(lines) {
+  if (!Array.isArray(lines) || !lines.length || lines.length > 3000) throw httpError(400, '넣을 인식 결과(lines)가 없습니다');
+  const num = (v) => Number.isFinite(Number(v)) ? Number(v) : NaN;
+  const pt = (a) => (Array.isArray(a) && a.length === 2 ? [num(a[0]), num(a[1])] : [NaN, NaN]);
+  return lines.map((l) => ({
+    o: pt(l?.o), u: pt(l?.u), v: pt(l?.v), w: num(l?.w), h: num(l?.h),
+    words: (Array.isArray(l?.words) ? l.words.slice(0, 1000) : []).map((wd) => ({ text: String(wd?.text ?? '').slice(0, 200), t0: num(wd?.t0), t1: num(wd?.t1) })),
+    ...(Array.isArray(l?.fg) ? { fg: l.fg.slice(0, 3).map(num) } : {}), ...(Array.isArray(l?.bg) ? { bg: l.bg.slice(0, 3).map(num) } : {}),
+  }));
+}
+
+const BATCH_ACTIONS = ['watermark', 'headerFooter', 'pageNumbers', 'sanitize', 'pii', 'protect', 'rasterize', 'downsample', 'markdown', 'bates', 'docx', 'hwpx', 'ocr'];
 // 파일 하나에 동작 하나: 반환 { bytes?(쓸 PDF 바이트), info?, images?, next?(베이츠 다음 번호), doc?(바꿔 연 문서), cancelled? }
 async function batchOne(action, doc, bytes, o, ctx) {
   const file = path.basename(ctx.src).replace(/\.pdf$/i, '');
@@ -616,6 +684,14 @@ async function batchOne(action, doc, bytes, o, ctx) {
     case 'bates': {
       const r = doc.addBates({ ...batesOpts(o), start: ctx.batesNext });
       return { bytes: doc.save(), next: r.next, info: { first: r.first, last: r.last } };
+    }
+    case 'ocr': { // v6 Wave E2: 글자 인식 — 보이지 않는 글자 층(검색 가능). 이미 글자가 있는 쪽은 건너뛴다(skipText:false면 다시 인식)
+      const list = Array.from({ length: doc.pageCount }, (_, k) => k);
+      const r = await ocrDoc(doc, list, { langs: pdfOcr.normLangs(o.langs), skipText: o.skipText !== false },
+        async (k, msg) => { await tick(); return ctx.report(`${k + 1}/${list.length}쪽 — ${msg}`) !== false; }, ctx.isCancelled);
+      if (!r) return { cancelled: true };
+      const a = r.pages.some((p) => p.lines.length) ? ocrApplyPages(doc, r.pages, 'search') : { words: 0, rotated: [] };
+      return { bytes: doc.save(), info: { words: a.words, pages: r.pages.length, skipped: r.skipped.length, rotated: a.rotated.length } };
     }
   }
   throw new Error(`알 수 없는 동작입니다: ${action}`);
@@ -1584,6 +1660,61 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { job.error = e.message; throw e; }
       finally { entry.busy = false; endJob(job); }
     }
+    // ── v6 Wave E2: 글자 인식(OCR) ──
+    // 상태: { available, engine, langs:[{ code, label, bytes, ok }], defaultLangs, source } — 화면이 대화상자를 열 때 묻는다
+    if (url.pathname === '/api/ocr/status' && req.method === 'GET') return json(res, 200, pdfOcr.status());
+    // 문서 OCR: { name, pages('1-3' 등, 생략 = 전체), langs:['kor','eng'], mode:'search'|'edit', skipText(기본 true), jobId } — 긴 작업(쪽 1장 = 진행 1, 글자 넣기 1).
+    // 인식하는 동안 문서는 그대로다(취소하면 아무것도 바뀌지 않는다). 다 읽은 뒤 한 번에 넣는다 — 실행 취소 한 번
+    if (url.pathname === '/api/pdf/ocr' && req.method === 'POST') {
+      const q = await readJson(req);
+      ocrReady();
+      const langs = pdfOcr.normLangs(q.langs), mode = q.mode === 'edit' ? 'edit' : 'search';
+      const entry = await getEditableDoc(q.name), { doc } = entry;
+      const list = pageRange(q.pages, doc.pageCount);
+      const job = startJob(q.jobId, 'ocr', list.length + 1);
+      entry.busy = true;
+      try {
+        const r = await ocrDoc(doc, list, { langs, skipText: q.skipText !== false, dpi: q.dpi },
+          async (k, message) => { await tick(); return progress(job, { done: k, message }); }, () => job.cancelled);
+        if (!r) return json(res, 200, { ok: false, cancelled: true, ...stacks(entry) }); // 문서는 아직 그대로다
+        await tick();
+        if (!progress(job, { done: list.length, message: '찾은 글자를 쪽에 넣는 중' })) return json(res, 200, { ok: false, cancelled: true, ...stacks(entry) });
+        const pages = r.pages.map(ocrSummary);
+        if (!r.pages.some((p) => p.lines.length)) return json(res, 200, { ok: false, mode, pages, skipped: r.skipped, words: 0, ...stacks(entry) });
+        if (entry.doc !== doc) throw httpError(409, '파일이 변경됐습니다. 다시 하세요.');
+        const a = await mutate(entry, null, () => ocrApplyPages(entry.doc, r.pages, mode));
+        progress(job, { done: list.length + 1 });
+        return json(res, 200, { ok: a.ok !== false, mode, words: a.words, lines: a.lines, dropped: a.dropped, painted: a.painted, covers: a.covers, replaced: a.removed, rotated: a.rotated,
+          pages, skipped: r.skipped, text: r.pages.map((p) => p.text).join('\n\n').slice(0, 2000), reloadAll: true, ...stacks(entry) });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { entry.busy = false; endJob(job); }
+    }
+    // 영역 OCR(문서를 바꾸지 않는다): { name, i, rect:[l,b,r,t], langs } → { text, lines(쪽 좌표 — /api/pdf/ocr-apply로 그대로 돌려보낸다), confidence, ms }
+    if (url.pathname === '/api/pdf/ocr-region' && req.method === 'POST') {
+      const q = await readJson(req);
+      ocrReady();
+      const langs = pdfOcr.normLangs(q.langs);
+      if (!Array.isArray(q.rect) || q.rect.length !== 4 || !q.rect.every((v) => Number.isFinite(Number(v)))) return json(res, 400, { error: 'rect는 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다' });
+      const [l, b, r2, t] = q.rect.map(Number), rect = [Math.min(l, r2), Math.min(b, t), Math.max(l, r2), Math.max(b, t)];
+      if (rect[2] - rect[0] < 4 || rect[3] - rect[1] < 4) return json(res, 400, { error: '인식할 영역이 너무 작습니다' });
+      const entry = await getEditableDoc(q.name), { doc } = entry;
+      const i = pageIndex(doc, q.i);
+      entry.busy = true; // 읽는 동안 문서가 바뀌면 좌표가 어긋난다(몇 초)
+      try {
+        const r = await ocrPage(doc, i, { langs }, null, rect);
+        return json(res, 200, { ok: !!r.lines.length, i, rect, text: r.text, lines: r.lines, words: r.words, confidence: r.confidence, angle: r.angle, ms: r.ms });
+      } finally { entry.busy = false; }
+    }
+    // 영역 OCR 결과를 그 자리에 넣기: { name, i, lines(ocr-region이 준 것), mode:'search'|'edit', rect?(이 안의 옛 OCR 글자는 뺀다) } — 실행 취소 한 번
+    if (url.pathname === '/api/pdf/ocr-apply' && req.method === 'POST') {
+      const q = await readJson(req);
+      const lines = ocrLinesFrom(q.lines), mode = q.mode === 'edit' ? 'edit' : 'search';
+      const entry = await getEditableDoc(q.name);
+      const i = pageIndex(entry.doc, q.i);
+      const area = Array.isArray(q.rect) && q.rect.length === 4 && q.rect.every((v) => Number.isFinite(Number(v))) ? (([l, b, r2, t]) => ({ x0: Math.min(l, r2), y0: Math.min(b, t), x1: Math.max(l, r2), y1: Math.max(b, t) }))(q.rect.map(Number)) : null;
+      const a = await mutate(entry, i, () => { const x = entry.doc.addOcrLayers([{ i, lines }], { mode, area, replace: !!area }); return x.ok ? x : { ...x, ok: false }; });
+      return json(res, 200, { ok: a.ok !== false, mode, words: a.words, lines: a.lines, dropped: a.dropped, painted: a.painted, covers: a.covers, replaced: a.removed, i, ...stacks(entry) });
+    }
     // 양식 칸 목록: { type('none'·'acroform'·'xfa-full'·'xfa-foreground'), fields:[…] }. XFA 전용은 칸이 없다(화면이 "지원하지 않는 XFA 양식"을 알린다)
     if (url.pathname === '/api/pdf/form' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
@@ -1815,6 +1946,7 @@ const server = http.createServer(async (req, res) => {
       const o = q.options || {};
       if (q.action === 'protect') { const bad = pdfEncrypt.passwordProblem(o.userPassword, '여는 암호'); if (bad) return json(res, 400, { error: bad }); }
       if (q.action === 'pii') { const want = [].concat(o.kinds || pii.KINDS); const unknown = want.find((k) => !pii.KINDS.includes(k)); if (unknown || !want.length) return json(res, 400, { error: `개인정보 종류를 고르세요 (${pii.KINDS.join('·')})` }); }
+      if (q.action === 'ocr') { ocrReady(); pdfOcr.normLangs(o.langs); } // 400·503을 파일을 열기 전에
       const job = startJob(q.jobId, 'batch', paths.length);
       const results = [], files = [];
       let batesNext = o.start == null ? 1 : Number(o.start);
@@ -1832,7 +1964,7 @@ const server = http.createServer(async (req, res) => {
             const bytes = fs.readFileSync(src);
             try { doc = await pdfEngine.open(bytes); }
             catch (e) { throw new Error(e.code === 'PASSWORD_REQUIRED' || e.code === 'PASSWORD_WRONG' ? '암호가 걸린 PDF입니다 — 열어서 암호를 푼 뒤 다시 하세요' : e.message); }
-            const r = await batchOne(q.action, doc, bytes, o, { src, out, batesNext, report: (m) => progress(job, { message: `${path.basename(p)} — ${m}` }) });
+            const r = await batchOne(q.action, doc, bytes, o, { src, out, batesNext, report: (m) => progress(job, { message: `${path.basename(p)} — ${m}` }), isCancelled: () => job.cancelled });
             if (r.doc && r.doc !== doc) doc = r.doc; // 용량 줄이기가 바꿔 연 문서(옛 문서는 swapDoc이 이미 닫았다)
             if (r.cancelled) return json(res, 200, { cancelled: true, results, files });
             if (r.bytes) writeAtomic(out, r.bytes);

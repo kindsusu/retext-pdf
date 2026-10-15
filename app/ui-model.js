@@ -178,7 +178,25 @@
   const THEMES = ['light', 'dark', 'system'];
   const resolveTheme = (pref, systemDark) => (pref === 'dark' || (pref === 'system' && systemDark) ? 'dark' : 'light');
 
+  // ---- v6 Wave E2: 스캔한 쪽 알아보기(글자 인식 권하기 · 일괄 OCR이 글자 있는 쪽을 건너뛰기) ----
+  // objs = 엔진 objects(i), page = { w, h }(쪽 크기 pt). 글자(보이는 것·투명한 것 모두)가 거의 없고(공백 빼고 20자 미만)
+  // 가장 큰 그림이 쪽의 절반 이상을 덮으면 스캔한 쪽 → { scanned, chars, imageCover(0~1) }. OCR을 한 쪽은 글자가 생겨 더는 스캔한 쪽이 아니다
+  const SCAN_MAX_CHARS = 20, SCAN_MIN_COVER = 0.5;
+  function scanPageInfo(objs, page) {
+    const list = Array.isArray(objs) ? objs : [];
+    const chars = list.filter((o) => o && o.type === 'text').reduce((n, o) => n + String(o.text || '').replace(/\s/g, '').length, 0);
+    const area = Math.max(1, (Number(page?.w) || 0) * (Number(page?.h) || 0));
+    let cover = 0;
+    for (const o of list) {
+      if (!o || o.type !== 'image' || !o.bounds) continue;
+      const b = o.bounds, a = Math.max(0, b.x1 - b.x0) * Math.max(0, b.y1 - b.y0);
+      cover = Math.max(cover, Math.min(1, a / area));
+    }
+    return { scanned: chars < SCAN_MAX_CHARS && cover >= SCAN_MIN_COVER, chars, imageCover: Math.round(cover * 1000) / 1000 };
+  }
+
   const api = {
+    scanPageInfo,
     MAX_TABS, tabOpen, tabClose, tabMove, dropIndex, tabsToClose, tabCycle, dirtyOf,
     choseong, norm, commandScore, searchCommands,
     spreadRows, rowOf, stepPage, visiblePages, fitScale,

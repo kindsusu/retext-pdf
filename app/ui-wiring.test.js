@@ -1222,7 +1222,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
     assert.ok(serverSource.includes(`case '${a}':`), `서버 batchOne이 ${a}를 처리한다`);
     assert.match(fnBodyOf(s, 'function batchOptions('), new RegExp(`case '${a}': return \\{ images: `), `batchOptions ${a}`);
   }
-  assert.match(serverSource, /const BATCH_ACTIONS = \[[^\]]*'docx', 'hwpx'\]/);
+  assert.match(serverSource, /const BATCH_ACTIONS = \[[^\]]*'docx', 'hwpx'(, '\w+')*\]/); // 뒤에 새 동작(Wave E2 'ocr')이 붙을 수 있다
   // D. 대화상자·서버 길
   for (const id of ['officeDialog', 'formReqDialog']) assert.match(html, new RegExp(`<dialog id="${id}" class="panel`), `#${id}`);
   assert.match(html, /class="rangePick" id="officeRange"/, 'Word·한글: 쪽 범위 고르기');
@@ -1254,6 +1254,73 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   t.fmFocusNext(fields[0], 1); t.fmFocusNext(fields[3], 1); t.fmFocusNext(fields[5], 1); t.fmFocusNext(fields[0], -1);
   assert.deepStrictEqual(calls, ['r', 'b', 'a', 'b'], 'Tab은 다음 칸, 끝에서는 처음으로, Shift+Tab은 앞으로');
   console.log('OK — v6 Wave E 양식(리본·칸 덮개·Tab 순서·필수 칸)·Word·한글 내보내기(리본·대화상자·일괄 처리·서버 길) 단언 통과');
+}
+// ── v6 Wave E2: 글자 인식(OCR) — 리본·명령 검색·스캔한 쪽 알림·대화상자·영역 인식·일괄 처리 ─────────────
+{
+  const UM = require('./ui-model');
+  const s = script.replace(/\r\n/g, '\n');
+  const btn = (id) => html.match(new RegExp(`<button type="button" class="tb" id="${id}" data-icon="(\\w+)"[^>]*data-tip="([^"]+)"[^>]*><span class="tl">([^<]+)</span></button>`));
+  const panelOf = (id) => { const k = html.indexOf(`id="${id}"`), p = html.lastIndexOf('<div class="rpanel" id="', k); return html.slice(p + 24, html.indexOf('"', p + 24)); };
+  // A. 리본: 문서 탭 「글자 인식」 묶음 — [글자 인식…](대화상자) · [영역 인식](끌기 도구)
+  for (const id of ['ocrBtn', 'ocrRegionTool']) {
+    const m = btn(id);
+    assert.ok(m, `#${id}: 아이콘 + 설명 + 짧은 이름`);
+    assert.ok(new RegExp(`\\n  ${m[1]}: '<`).test(s), `#${id} 아이콘 ${m[1]}이 ICONS에 있다`);
+    assert.strictEqual(panelOf(id), 'rpanel-doc', `#${id}는 문서 탭에`);
+  }
+  assert.match(html, /<div class="tgroup" id="groupOcr" data-modes="pdf" role="group" aria-label="글자 인식">/);
+  assert.match(html, /id="ocrRegionTool" data-icon="ocrRegion" data-tool="ocrRegion" aria-pressed="false"/, '영역 인식은 도구(setTool)');
+  assert.match(s, /const TOOL_NAMES = \{[^}]*ocrRegion: '영역 글자 인식'/);
+  assert.match(s, /\n {2}ocrRegion: '[^']+Esc로 끝'/, 'HINTS.ocrRegion');
+  assert.match(s, /const WD_DRAG_TOOLS = \[[^\]]*'ocrRegion'\]/, '끌어 사각형을 받는 도구');
+  assert.match(s, /else if \(tool === 'ocrRegion'\) ocrRegionRun\(d\.i, rect, d\.box\);/);
+  assert.match(s, /\$\('#ocrBtn'\)\.onclick = \(\) => openOcrDialog\(\);/);
+  // B. 명령 검색: OCR · 초성 ㄱㅈㅇㅅ · 문자 인식 · 스캔
+  const aliases = new Function(`return ${s.slice(s.indexOf('const CMD_ALIASES = ') + 'const CMD_ALIASES = '.length, s.indexOf('};', s.indexOf('const CMD_ALIASES = ')) + 1)}`)();
+  const cmds = ['ocrBtn', 'ocrRegionTool', 'mdExportBtn', 'batchBtn', 'snapTool', 'searchToggle', 'rasterizeBtn'].map((id) => { const m = btn(id) || html.match(new RegExp(`id="${id}" data-icon="(\\w+)"[^>]*?(?:data-tip="([^"]+)")?[^>]*><span class="tl">([^<]+)</span>`)); return { id, label: (m[2] || m[3]).split(':')[0].trim(), aliases: [m[3], ...(aliases[id] || [])], tip: m[2] || '', group: '' }; });
+  for (const [q, id] of [['OCR', 'ocrBtn'], ['ocr', 'ocrBtn'], ['ㄱㅈㅇㅅ', 'ocrBtn'], ['글자 인식', 'ocrBtn'], ['문자 인식', 'ocrBtn'], ['스캔', 'ocrBtn'], ['영역 인식', 'ocrRegionTool'], ['영역 ocr', 'ocrRegionTool']]) {
+    assert.strictEqual(UM.searchCommands(q, cmds, 3)[0]?.id, id, `명령 검색 "${q}" → ${id}`);
+  }
+  // C. 스캔한 쪽 알림: 문구 · 다시 그린 뒤·쪽 새로 고침 뒤 다시 계산 · [글자 인식…]은 스캔한 쪽만 고른 대화상자 · [×]는 문서마다
+  assert.match(html, /<div id="ocrBanner" role="status" hidden><span id="ocrBannerText">스캔한 쪽입니다 — 글자 인식\(OCR\)을 하면 검색·복사·편집할 수 있습니다<\/span>/);
+  assert.match(fnBodyOf(s, 'function p9AfterRender('), /ocrAfterRender\(name\);/);
+  assert.match(fnBodyOf(s, 'function p9AfterRefresh('), /ocrUpdateBanner\(\);/);
+  assert.match(fnBodyOf(s, 'function p9AfterZoom('), /ocrHidePop\(\);/);
+  assert.match(fnBodyOf(s, 'function ocrScannedPages('), /UM\.scanPageInfo\(pdfObjects\[i\], pg\)\.scanned/, '스캔한 쪽 계산은 서버와 같은 ui-model');
+  assert.match(s, /\$\('#ocrBannerRun'\)\.onclick = \(\) => openOcrDialog\(\{ scanned: true \}\);/);
+  assert.match(fnBodyOf(s, 'function updateEmptyState('), /if \(mode !== 'pdf'\) \$\('#ocrBanner'\)\.hidden = true;/, 'PDF가 아니면 알림을 숨긴다');
+  const pagesText = new Function(`${fnBodyOf(s, 'function ocrPagesText(')}\n}\nreturn ocrPagesText;`)();
+  assert.strictEqual(pagesText([0, 1, 2, 4, 6, 7]), '1-3,5,7-8', '스캔한 쪽 목록 → 쪽 범위 글');
+  // scanPageInfo: 글자 없는 큰 그림 쪽만 스캔한 쪽
+  assert.deepStrictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }], { w: 595, h: 842 }), { scanned: true, chars: 0, imageCover: 1 });
+  assert.strictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }, { type: 'text', text: '보이지 않는 OCR 글자가 스무 자 넘게 들어 있는 쪽', hidden: true }], { w: 595, h: 842 }).scanned, false, 'OCR한 쪽(투명 글자)은 스캔한 쪽이 아니다');
+  assert.strictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 200, y1: 200 } }], { w: 595, h: 842 }).scanned, false, '작은 그림은 스캔이 아니다');
+  assert.strictEqual(UM.scanPageInfo([], { w: 595, h: 842 }).scanned, false, '빈 쪽은 스캔이 아니다');
+  // D. 대화상자: 언어(한국어+영어 기본)·쪽·방식 둘·편집 가능 경고·건너뛰기 → 진행 창(runJob) + pdfMutate(실행 취소 한 번)
+  assert.match(html, /<dialog id="ocrDialog" class="panel"/);
+  assert.match(html, /<input type="checkbox" class="ocrLang" value="kor" checked>한국어<\/label><label><input type="checkbox" class="ocrLang" value="eng" checked>영어/);
+  assert.match(html, /class="rangePick" id="ocrRange"/);
+  assert.match(html, /name="ocrMode" value="search" checked><b>검색 가능한 텍스트<\/b>/); assert.match(html, /name="ocrMode" value="edit"><b>편집 가능한 텍스트<\/b>/);
+  assert.match(html, /id="ocrEditNote" hidden>⚠ 편집 가능한 텍스트는[^<]*바뀔 수 있습니다/, '편집 가능한 텍스트는 모양이 바뀔 수 있다고 알린다');
+  assert.match(fnBodyOf(s, "$('#ocrRun').onclick = async () =>"), /runJob\('글자 인식\(OCR\)', \(jobId\) => pdfMutate\('\/api\/pdf\/ocr', \{ name, pages: range\.idxs\.map\(\(k\) => k \+ 1\)\.join\(','\), langs, mode, skipText, jobId \}/);
+  assert.match(fnBodyOf(s, "$('#ocrRun').onclick = async () =>"), /afterDocChange\(name, /, '끝나면 다시 그리고 실행 취소 토스트');
+  // E. 영역 인식 창: [복사] · [이 자리에 글자 넣기] 검색용·보이게 · Esc
+  for (const id of ['ocrPopCopy', 'ocrPopSearch', 'ocrPopEdit', 'ocrPopClose']) assert.match(html, new RegExp(`<button id="${id}"`), `#${id}`);
+  assert.match(html, /<span class="hint2">이 자리에 글자 넣기:<\/span>/);
+  assert.match(fnBodyOf(s, 'async function ocrRegionRun('), /apiPost\('\/api\/pdf\/ocr-region', \{ name, i, rect, langs \}/);
+  assert.match(fnBodyOf(s, 'async function ocrPopApply('), /pdfMutate\('\/api\/pdf\/ocr-apply', \{ name: p\.name, i: p\.i, lines: p\.r\.lines, mode, rect: p\.rect \}/);
+  assert.match(s, /\$\('#ocrPopSearch'\)\.onclick = \(\) => ocrPopApply\('search'\);/); assert.match(s, /\$\('#ocrPopEdit'\)\.onclick = \(\) => ocrPopApply\('edit'\);/);
+  // F. 일괄 처리: OCR(검색 가능)
+  assert.ok(html.includes('<option value="ocr">OCR(검색 가능)</option>') && html.includes('<div data-act="ocr">'), '일괄 처리 동작 ocr');
+  assert.ok(serverSource.includes("case 'ocr':"), '서버 batchOne이 ocr를 처리한다');
+  assert.match(fnBodyOf(s, 'function batchOptions('), /case 'ocr': return \{ langs: \[\.\.\.document\.querySelectorAll\('\.boLang:checked'\)\]/);
+  assert.match(serverSource, /const BATCH_ACTIONS = \[[^\]]*'ocr'\]/);
+  // G. 서버 길
+  for (const route of ['/api/ocr/status', '/api/pdf/ocr', '/api/pdf/ocr-region', '/api/pdf/ocr-apply']) {
+    assert.ok(s.includes(route), `화면이 ${route}를 부른다`);
+    assert.ok(serverSource.includes(`'${route}'`), `서버에 ${route}`);
+  }
+  console.log('OK — v6 Wave E2 글자 인식(리본·명령 검색·스캔한 쪽 알림·대화상자·영역 인식 창·일괄 처리·서버 길) 단언 통과');
 }
 function SH(src) { const a = src.indexOf('const SHORTCUTS = ['); return new Function(`return ${src.slice(a + 'const SHORTCUTS = '.length, src.indexOf('];', a) + 1)};`)(); }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }

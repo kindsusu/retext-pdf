@@ -546,6 +546,18 @@
   .linkPop input[type=text]{flex:1;min-width:0;background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font:inherit}
   .linkPop input[type=number]{background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font:inherit}
   .linkPop .bad{color:var(--badText);font-size:12px}
+  /* v6 Wave E2 글자 인식: 스캔한 쪽 알림 줄 · 영역 인식 결과 창 */
+  #ocrBanner{display:flex;align-items:center;gap:8px;padding:5px 12px;background:var(--bannerBg);color:var(--bannerFg);border-bottom:1px solid var(--bannerLine);font-size:12px}
+  #ocrBanner[hidden]{display:none}
+  #ocrBanner .sp{flex:1}#ocrBanner button{font:inherit;font-size:12px;padding:2px 10px}
+  #ocrBanner #ocrBannerClose{background:none;border:0;color:inherit;font-size:15px;padding:0 4px;cursor:pointer}
+  #ocrBannerPages{opacity:.8}
+  #ocrDialog .checks b{white-space:nowrap}
+  .ocrPop{position:fixed;z-index:40;width:420px;max-width:calc(100vw - 24px);background:var(--panel);color:var(--fg);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:10px 12px}
+  .ocrPop h5{margin:0 0 6px;font-size:13px;display:flex;gap:8px;align-items:baseline}.ocrPop h5 .hint2{font-weight:400}
+  .ocrPop textarea{width:100%;box-sizing:border-box;min-height:84px;max-height:40vh;resize:vertical;background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:6px 8px;font:inherit;font-size:13px;line-height:1.5}
+  .ocrPop .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:6px 0 0}.ocrPop .row .sp{flex:1}
+  .ocrPop .bad{color:var(--badText);font-size:12px}
   .attachList{display:flex;flex-direction:column;gap:2px;padding:4px 6px;overflow:auto}
   .attachRow{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px}
   .attachRow:hover{background:var(--hover)}
@@ -722,6 +734,11 @@
     <button type="button" class="tb" id="rasterizeBtn" data-icon="rasterize" data-tip="이미지 PDF로 저장: 쪽을 그림으로 바꾼 새 PDF를 저장합니다(숨은 글자·주석·메타데이터가 모두 빠집니다)"><span class="tl">이미지 PDF</span></button>
     <button type="button" class="tb" id="attachBtn" data-icon="attach" data-tip="첨부 파일: 문서에 든 파일을 보고 꺼내거나 넣고 지웁니다(왼쪽 패널)"><span class="tl">첨부 파일</span></button>
   </div>
+  <!-- v6 Wave E2 글자 인식(OCR): 앱 안의 인식 엔진(tesseract)만 쓴다 — 문서 그림을 PC 밖으로 보내지 않는다 -->
+  <div class="tgroup" id="groupOcr" data-modes="pdf" role="group" aria-label="글자 인식">
+    <button type="button" class="tb" id="ocrBtn" data-icon="ocr" data-tip="글자 인식(OCR): 스캔한 쪽의 글자를 읽어 찾기·복사·편집할 수 있게 합니다 — 이 PC 안에서만 읽습니다"><span class="tl">글자 인식…</span></button>
+    <button type="button" class="tb" id="ocrRegionTool" data-icon="ocrRegion" data-tool="ocrRegion" aria-pressed="false" data-tip="영역 글자 인식: 끌어 감싼 곳의 글자만 읽어 복사하거나 그 자리에 넣습니다"><span class="tl">영역 인식</span></button>
+  </div>
   <!-- v6 Wave E 양식: 칸은 늘 쪽 위에서 바로 채운다(Tab·Shift+Tab으로 다음·앞 칸). 이 묶음은 강조·초기화·데이터 내보내기/가져오기·고정 -->
   <div class="tgroup" id="groupForm" data-modes="pdf" role="group" aria-label="양식">
     <button type="button" class="tb" id="formHighlightBtn" data-icon="formHighlight" aria-pressed="true" data-tip="양식 필드 강조: 채울 수 있는 칸을 옅은 파란색으로, 꼭 채울 칸은 빨간 테두리로 보입니다"><span class="tl">필드 강조</span></button>
@@ -832,6 +849,9 @@
 </aside>
 <main>
   <div id="tempBanner" hidden>⚠ 임시 파일입니다. 편집을 남기려면 다른 이름으로 저장하세요 (Ctrl+S)</div>
+  <!-- v6 Wave E2: 스캔한 쪽(글자 없이 큰 그림만 있는 쪽)이 있으면 글자 인식을 권한다. [×]는 이 문서에서 다시 띄우지 않는다 -->
+  <div id="ocrBanner" role="status" hidden><span id="ocrBannerText">스캔한 쪽입니다 — 글자 인식(OCR)을 하면 검색·복사·편집할 수 있습니다</span><span id="ocrBannerPages"></span><span class="sp"></span>
+    <button type="button" id="ocrBannerRun" class="pri">글자 인식…</button><button type="button" id="ocrBannerClose" title="이 문서에서 다시 알리지 않기" aria-label="알림 닫기">×</button></div>
   <div class="bar searchBar" id="searchBar" hidden>
     <input id="searchInput" type="text" placeholder="문서에서 찾기…" autocomplete="off" aria-label="찾을 말">
     <button id="searchPrev" title="이전 결과 (Shift+Enter)" aria-label="이전 결과">◀</button>
@@ -1056,6 +1076,22 @@
   <div class="row" style="min-height:20px;margin:0"><span id="officeError" class="bad" role="alert" hidden></span></div>
   <div class="row"><span class="sp"></span><button id="officeRun" class="pri" type="button">내보내기…</button><button id="officeCancel" type="button">취소</button></div>
 </div></dialog>
+<!-- v6 Wave E2 글자 인식(OCR): 언어 · 쪽 · 방식(검색 가능 = 보이지 않는 글자 층 / 편집 가능 = 그림을 지우고 글자를 다시 씀) — 긴 작업(쪽마다 진행·취소) -->
+<dialog id="ocrDialog" class="panel" aria-labelledby="ocrTitle"><div class="card" style="width:580px">
+  <h2 id="ocrTitle">글자 인식(OCR)</h2>
+  <p class="hint2">쪽 그림에서 글자를 읽습니다. 앱에 들어 있는 인식 엔진만 쓰고, 문서를 PC 밖으로 보내지 않습니다.</p>
+  <div class="row"><span class="pnLbl">언어</span><label><input type="checkbox" class="ocrLang" value="kor" checked>한국어</label><label><input type="checkbox" class="ocrLang" value="eng" checked>영어</label></div>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="ocrRange" data-default="all"></span></div>
+  <div class="checks col" role="radiogroup" aria-label="인식 결과를 넣는 방식">
+    <label><input type="radio" name="ocrMode" value="search" checked><b>검색 가능한 텍스트</b> <span class="hint2">— 그림은 그대로 두고 그 위에 보이지 않는 글자를 낱말마다 겹칩니다(찾기·복사·개인정보 찾기·내보내기)</span></label>
+    <label><input type="radio" name="ocrMode" value="edit"><b>편집 가능한 텍스트</b> <span class="hint2">— 글자 자리를 배경색으로 지우고 같은 크기·색의 글자로 다시 씁니다(줄마다 고칠 수 있음)</span></label>
+  </div>
+  <p class="rasterNote" id="ocrEditNote" hidden>⚠ 편집 가능한 텍스트는 원래 글꼴 대신 맑은 고딕으로 다시 쓰므로 글자 모양·줄 길이가 바뀔 수 있습니다. 잘못 읽은 글자도 그대로 쓰이니 결과를 확인하세요 — 실행 취소 한 번으로 되돌립니다.</p>
+  <div class="checks col"><label><input type="checkbox" id="ocrSkipText" checked>이미 글자가 있는 쪽은 건너뛰기 <span class="hint2">— 끄면 전에 인식한 글자를 지우고 다시 읽습니다</span></label></div>
+  <p class="hint2" id="ocrInfo"></p>
+  <div class="row" style="min-height:20px;margin:0"><span id="ocrError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><span class="sp"></span><button id="ocrRun" class="pri" type="button">인식 시작</button><button id="ocrCancel" type="button">취소</button></div>
+</div></dialog>
 <!-- v6 Wave E: 저장 전 — 꼭 채울 칸(필수)이 비어 있으면 알린다(그래도 저장할 수 있다) -->
 <dialog id="formReqDialog" class="panel" aria-labelledby="frTitle"><div class="card" style="max-width:480px">
   <h2 id="frTitle">꼭 채울 칸이 비어 있습니다</h2>
@@ -1158,7 +1194,7 @@
     <option value="watermark">워터마크</option><option value="headerFooter">머리말·꼬리말</option><option value="pageNumbers">쪽 번호</option><option value="bates">베이츠 번호(이어서)</option>
     <option value="sanitize">숨은 데이터 제거</option><option value="pii">개인정보 찾아 가리기</option><option value="protect">암호 걸기</option>
     <option value="rasterize">이미지 PDF로</option><option value="downsample">용량 줄이기</option><option value="markdown">Markdown 내보내기</option>
-    <option value="docx">Word(.docx)로 내보내기</option><option value="hwpx">한글(.hwpx)로 내보내기</option></select></div>
+    <option value="docx">Word(.docx)로 내보내기</option><option value="hwpx">한글(.hwpx)로 내보내기</option><option value="ocr">OCR(검색 가능)</option></select></div>
   <div class="batchOpts" id="batchOpts">
     <div data-act="watermark"><span class="pnLbl">글자</span><input id="bwText" type="text" value="대외비" style="width:140px"> 크기 <input id="bwSize" type="number" min="6" max="400" value="60" style="width:60px"> pt 불투명도 <input id="bwOpacity" type="number" min="5" max="100" value="25" style="width:56px">% 색 <input id="bwColor" type="color" value="#c0392b"></div>
     <div data-act="headerFooter"><span class="pnLbl">위 가운데</span><input id="bhTop" type="text" value="{file}" style="width:150px"> 아래 가운데 <input id="bhBottom" type="text" value="{page} / {pages}" style="width:150px"> <span class="hint2">{page} {pages} {date} {file} {title}</span></div>
@@ -1171,6 +1207,7 @@
     <div data-act="downsample"><span class="pnLbl">최대 dpi</span><input id="bdDpi" type="number" min="30" max="600" value="150" style="width:70px"> 품질 <input id="bdQuality" type="number" min="1" max="100" value="75" style="width:60px"></div>
     <div data-act="docx"><label><input type="checkbox" id="bxDocxImages" checked> 그림 넣기</label> <label><input type="checkbox" id="bxDocxHf" checked> 머리말·꼬리말·쪽 번호 빼기</label></div>
     <div data-act="hwpx"><label><input type="checkbox" id="bxHwpxImages" checked> 그림 넣기</label> <label><input type="checkbox" id="bxHwpxHf" checked> 머리말·꼬리말·쪽 번호 빼기</label></div>
+    <div data-act="ocr"><span class="pnLbl">언어</span><label><input type="checkbox" class="boLang" value="kor" checked>한국어</label><label><input type="checkbox" class="boLang" value="eng" checked>영어</label> <label><input type="checkbox" id="boSkipText" checked> 글자가 있는 쪽은 건너뛰기</label> <span class="hint2">그림 위에 보이지 않는 글자를 겹칩니다(이 PC 안에서만 읽습니다)</span></div>
     <div data-act="markdown"><span class="pnLbl">형식</span><select id="bmFormat"><option value="md">Markdown (.md)</option><option value="txt">텍스트 (.txt)</option></select> <label><input type="checkbox" id="bmImages"> 그림을 PNG로</label></div>
   </div>
   <div class="row"><span class="pnLbl">저장 폴더</span><button id="batchDir" type="button" data-electron>폴더…</button><span id="batchDirName" class="hint2">원본과 같은 폴더</span>
@@ -1195,6 +1232,17 @@
   <div class="row"><label><input type="radio" name="linkKind" value="page"> 이 문서의</label><input id="linkPage" type="number" min="1" value="1" style="width:64px"> 쪽</div>
   <div class="row" style="min-height:18px"><span id="linkError" class="bad" role="alert" hidden></span></div>
   <div class="row"><button id="linkDel" type="button" hidden>지우기</button><button id="linkGo" type="button" hidden>따라가기</button><span class="sp"></span><button id="linkOk" class="pri" type="button">넣기</button><button id="linkCancel" type="button">취소</button></div>
+</div>
+
+<!-- v6 Wave E2 영역 글자 인식 결과: 읽은 글(고를 수 있게) · [복사] · [이 자리에 글자 넣기] 검색용(보이지 않게)·보이게 -->
+<div id="ocrPop" class="ocrPop" role="dialog" aria-label="영역 글자 인식" hidden>
+  <h5>영역 글자 인식 <span id="ocrPopInfo" class="hint2"></span></h5>
+  <textarea id="ocrPopText" readonly spellcheck="false" aria-label="읽은 글"></textarea>
+  <div class="row" style="min-height:18px;margin:2px 0 0"><span id="ocrPopError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><button id="ocrPopCopy" type="button">복사</button><span class="sp"></span><span class="hint2">이 자리에 글자 넣기:</span>
+    <button id="ocrPopSearch" class="pri" type="button" title="그림은 그대로 두고 보이지 않는 글자를 겹칩니다(찾기·복사용)">검색용</button>
+    <button id="ocrPopEdit" type="button" title="글자 자리를 배경색으로 지우고 보이는 글자로 다시 씁니다(모양이 바뀔 수 있음)">보이게</button>
+    <button id="ocrPopClose" type="button">닫기</button></div>
 </div>
 
 <!-- 알림(토스트) 쌓임: toast(text, opts)가 채운다. 실행 취소 버튼(opts.action/onAction)·종류(opts.kind)·시간(opts.ms) -->
@@ -1788,6 +1836,7 @@ function updateEmptyState() {
   const mode = docMode(), has = mode !== 'empty';
   $('#emptyState').hidden = has;
   document.querySelectorAll('[data-modes]').forEach((el) => { el.hidden = !el.dataset.modes.split(' ').includes(mode); });
+  if (mode !== 'pdf') $('#ocrBanner').hidden = true; // v6 Wave E2: 스캔한 쪽 알림은 PDF를 그린 뒤 ocrUpdateBanner가 정한다
   if (!window.retextPdf) document.querySelectorAll('[data-electron]').forEach((el) => { el.hidden = true; });
   // 보이는 버튼이 하나도 없는 묶음은 구분선째 숨긴다(브라우저 화면의 빈 [파일] 묶음 등)
   document.querySelectorAll('#toolbar .tgroup').forEach((g) => { if (!g.dataset.modes) g.hidden = false; if (!g.hidden && ![...g.children].some((c) => !c.hidden)) g.hidden = true; });
@@ -4628,7 +4677,7 @@ $('#downsampleRun').onclick = async () => {
 $('#downsampleClose').onclick = () => $('#downsampleDialog').close();
 
 // ---- 도구(서로 배타): 글자 고치기(기본) · 글 상자 · 도장 · 가리기 · (P9) 여러 쪽 가리기 · 주석 여덟 가지 ----
-const TOOL_NAMES = { edit: '글자 고치기', text: '글 상자', stamp: '도장', redact: '가리기', redactArea: '여러 쪽 가리기', crop: '쪽 자르기', link: '링크', snapshot: '영역 스냅샷',
+const TOOL_NAMES = { edit: '글자 고치기', text: '글 상자', stamp: '도장', redact: '가리기', redactArea: '여러 쪽 가리기', crop: '쪽 자르기', link: '링크', snapshot: '영역 스냅샷', ocrRegion: '영역 글자 인식',
   highlight: '형광펜', underline: '밑줄', strikeout: '취소선', note: '메모', square: '사각형', circle: '원', line: '선', ink: '펜' };
 // 주석 도구(P9): 글자를 끌어 고르기(markup) · 눌러 메모(note) · 끌어 그리기(shape) · 손으로 그리기(ink)
 const MARKUP_TOOLS = ['highlight', 'underline', 'strikeout'], SHAPE_TOOLS = ['square', 'circle', 'line'];
@@ -4648,6 +4697,7 @@ const HINTS = {
   crop: '남길 곳을 끌어 감싸세요 · 놓으면 자를 쪽을 묻습니다 · Esc로 끝',
   link: '링크를 걸 곳을 끌어 감싸세요 · 점선 상자(링크)를 누르면 고치거나 지웁니다 · Ctrl+클릭으로 링크를 따라갑니다 · Esc로 끝',
   snapshot: '복사할 곳을 끌어 감싸세요 · 놓으면 그림으로 클립보드에 복사합니다 · Esc로 끝',
+  ocrRegion: '읽을 곳을 끌어 감싸세요 · 놓으면 그 안의 글자를 읽어 보여 줍니다(이 PC 안에서만 읽습니다) · Esc로 끝',
   // 글 상자·도장은 한 번 넣으면 글자 고치기로 돌아간다(넣은 것을 바로 옮기거나 고칠 수 있게)
   text: '글을 넣을 곳을 클릭하세요 · 하나 넣으면 글자 고치기로 돌아갑니다 · Esc로 끝',
   textTyping: 'Enter로 줄 바꿈 · Ctrl+Enter 또는 바깥을 누르면 넣습니다 · Esc로 취소',
@@ -4852,6 +4902,8 @@ const ICONS = {
   reading: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
   // v6 Wave D
   snapshot: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8"/><path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"/><path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><circle cx="12" cy="12" r="3"/>',
+  ocr: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8"/><path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"/><path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><path d="M8.5 8.5h7"/><path d="M12 8.5v7"/>',
+  ocrRegion: '<path d="M4 6.5h2M9 6.5h2M14 6.5h2M19 6.5h1v1.5M20 11v2M20 16v1.5h-1M16 17.5h-2M11 17.5H9M6 17.5H4V16M4 13v-2M4 8V6.5"/><path d="M9 10h6"/><path d="M12 10v5"/>',
   link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/>',
   linkList: '<path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>',
   crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
@@ -6709,6 +6761,7 @@ function p9AfterRender(name) {
   if (!$('#outlineTab').hidden) loadOutline();
   wdAfterRender(name); // v6 Wave D: 링크 자리·첨부 목록
   fmAfterRender(name); // v6 Wave E: 양식 칸
+  ocrAfterRender(name); // v6 Wave E2: 스캔한 쪽 알림
 }
 // 한 쪽을 다시 그린 뒤(refreshPage): 그 쪽 캐시를 비우고 주석 자리·개인정보 표시를 다시, 주석·목차 목록도 다시 읽는다(실행 취소로 바뀌었을 수 있다)
 function p9AfterRefresh(i, wrap) {
@@ -6720,11 +6773,13 @@ function p9AfterRefresh(i, wrap) {
   if (!$('#outlineTab').hidden) loadOutline();
   wdAfterRefresh(i); // v6 Wave D: 그 쪽 링크 자리
   fmAfterRefresh(i); // v6 Wave E: 양식 칸 값
+  ocrUpdateBanner(); // v6 Wave E2: 영역 인식·실행 취소로 글자가 생기거나 없어졌을 수 있다
 }
 // 확대·축소 뒤: 화면 px로 그린 것들을 새 배율로
 function p9AfterZoom() {
   wdAfterZoom(); // v6 Wave D
   fmDrawAll(); // v6 Wave E: 양식 칸을 새 배율로
+  ocrHidePop(); // v6 Wave E2: 영역 인식 상자는 화면 px라 배율이 바뀌면 닫는다
   $('#pdf').querySelectorAll('.annHit, .annSel').forEach((el) => el.remove());
   if (annotPress) cancelAnnotPress();
   if (isAnnotTool(tool)) scheduleAnnotHits();
@@ -6897,6 +6952,7 @@ const CMD_ALIASES = {
   cropTool: ['크롭', '잘라내기', 'crop', '쪽 잘라내기'], cropBtn: ['여백 자동', '자르기 풀기', '크롭 설정', '여백 없애기'], pageSizeBtn: ['용지 크기', '페이지 크기', 'a4', 'letter', '크기 바꾸기'],
   batesBtn: ['bates', '일련번호', '증거 번호', '문서 번호'], mdExportBtn: ['마크다운', 'md', '텍스트로', 'txt', '변환', '내보내기'], compareBtn: ['diff', '차이', '문서 비교', '대조', '버전 비교'],
   batchBtn: ['배치', '일괄', '여러 파일', 'batch', '한꺼번에'],
+  ocrBtn: ['ocr', '문자 인식', '텍스트 인식', '스캔', '스캔 문서', '글자 읽기', '검색 가능한 pdf', '광학 문자 인식'], ocrRegionTool: ['영역 ocr', '부분 인식', '그림 글자 복사', '이미지 텍스트 추출', '글자 읽기'],
   docxExportBtn: ['워드', 'word', 'docx', 'ms word', '워드로 변환'], hwpxExportBtn: ['한글', '한컴', 'hwp', 'hwpx', '아래아한글', '한글로 변환'],
   formHighlightBtn: ['양식', '폼', 'form', '필드', '입력란', '양식 채우기', '서식'], formResetBtn: ['양식 지우기', '폼 초기화', 'reset form', '입력 지우기'],
   formExportBtn: ['fdf', 'xfdf', 'json', '양식 저장', '폼 데이터', '양식 데이터'], formImportBtn: ['양식 불러오기', '폼 데이터 불러오기', 'fdf 가져오기', 'import form'],
@@ -7017,7 +7073,7 @@ updateLayoutButton(); syncHandUi();
 
 // ==== v6 Wave D: Markdown·텍스트 내보내기 · 쪽 자르기·크기 · 두 문서 비교 · 일괄 처리 · 링크 · 첨부 파일 · 영역 스냅샷 · 베이츠 번호 ====
 // 서버 길: /api/pdf/export-markdown · crop · boxes · page-size · compare(+/pixels) · batch · links · link/* · attachments · attachment/* · snapshot(+/save) · bates(+/remove)
-const WD_DRAG_TOOLS = ['crop', 'link', 'snapshot']; // 끌어 사각형을 받는 도구(가리기 끌기와 따로 다룬다)
+const WD_DRAG_TOOLS = ['crop', 'link', 'snapshot', 'ocrRegion']; // 끌어 사각형을 받는 도구(가리기 끌기와 따로 다룬다) — v6 Wave E2 영역 글자 인식도
 const wdState = { links: [], linksDoc: null, linkSeq: 0, drag: null, cropRect: null, cropBox: null, linkEdit: null };
 const wdStem = (p) => basename(p || '').replace(/\.[^.]+$/, '');
 const wdDir = (p) => { const k = Math.max(String(p || '').lastIndexOf('\\'), String(p || '').lastIndexOf('/')); return k < 0 ? '' : p.slice(0, k); };
@@ -7116,6 +7172,7 @@ document.addEventListener('mouseup', (e) => {
   if (w < 6 || h < 6) { d.box.remove(); return; }
   const rect = screenRectToPdfArr(pdfPages[d.i], l, t, l + w, t + h).map((v) => Math.round(v * 100) / 100);
   if (tool === 'snapshot') { d.box.remove(); wdSnapshot(d.i, rect); }
+  else if (tool === 'ocrRegion') ocrRegionRun(d.i, rect, d.box); // v6 Wave E2: 상자는 결과 창을 닫을 때까지 남긴다
   else if (tool === 'crop') { d.box.classList.add('crop'); openCropDialog({ i: d.i, rect, box: d.box }); }
   else if (tool === 'link') openLinkPop({ create: { i: d.i, rect } }, d.box);
 });
@@ -7428,7 +7485,7 @@ $('#batesMulti').onclick = () => {
 
 // ---- 일괄 처리 ----
 let batchPaths = [], batchOutDir = null, batchSuffixTouched = false;
-const BATCH_SUFFIX = { watermark: '-워터마크', headerFooter: '-머리말', pageNumbers: '-쪽번호', bates: '-베이츠', sanitize: '-정리', pii: '-가림', protect: '-암호', rasterize: '-이미지', downsample: '-축소', markdown: '', docx: '', hwpx: '' };
+const BATCH_SUFFIX = { watermark: '-워터마크', headerFooter: '-머리말', pageNumbers: '-쪽번호', bates: '-베이츠', sanitize: '-정리', pii: '-가림', protect: '-암호', rasterize: '-이미지', downsample: '-축소', markdown: '', docx: '', hwpx: '', ocr: '-OCR' };
 function renderBatchFiles() {
   const ol = $('#batchFiles'); ol.innerHTML = '';
   batchPaths.forEach((p, k) => {
@@ -7485,6 +7542,7 @@ function batchOptions(action) {
     case 'markdown': return { format: $('#bmFormat').value, images: $('#bmImages').checked ? 'files' : 'omit' };
     case 'docx': return { images: $('#bxDocxImages').checked ? 'embed' : 'omit', stripHeaderFooter: $('#bxDocxHf').checked };
     case 'hwpx': return { images: $('#bxHwpxImages').checked ? 'embed' : 'omit', stripHeaderFooter: $('#bxHwpxHf').checked };
+    case 'ocr': return { langs: [...document.querySelectorAll('.boLang:checked')].map((c) => c.value), skipText: $('#boSkipText').checked };
     default: return {};
   }
 }
@@ -7493,6 +7551,7 @@ $('#batchRun').onclick = async () => {
   if (!batchPaths.length) return showError('#batchError', '처리할 PDF를 추가하세요');
   if (action === 'protect' && (!options.userPassword || options.userPassword !== $('#bpwUser2').value)) return showError('#batchError', '여는 암호를 두 번 똑같이 입력하세요');
   if (action === 'pii' && !options.kinds.length) return showError('#batchError', '찾을 개인정보 종류를 하나 이상 고르세요');
+  if (action === 'ocr' && !options.langs.length) return showError('#batchError', '인식할 언어를 하나 이상 고르세요');
   if (action === 'watermark' && !options.text.trim()) return showError('#batchError', '워터마크 글자를 입력하세요');
   if (action === 'headerFooter' && !options.slots.tc.trim() && !options.slots.bc.trim()) return showError('#batchError', '머리말이나 꼬리말을 입력하세요');
   if (!nameSuffix && !batchOutDir && action !== 'markdown') return showError('#batchError', '원본과 같은 폴더에 저장하려면 이름 뒤에 붙일 글을 넣으세요(원본을 덮어쓰지 않습니다)');
@@ -7507,7 +7566,8 @@ $('#batchRun').onclick = async () => {
   $('#batchBody').innerHTML = '';
   for (const x of results) {
     const tr = document.createElement('tr');
-    const extra = x.first ? ` (${x.first} ~ ${x.last})` : x.redacted != null ? ` (가림 ${x.redacted})` : x.after ? ` (${wdSize(x.before)} → ${wdSize(x.after)})` : '';
+    const extra = x.first ? ` (${x.first} ~ ${x.last})` : x.redacted != null ? ` (가림 ${x.redacted})` : x.after ? ` (${wdSize(x.before)} → ${wdSize(x.after)})`
+      : x.words != null ? ` (${x.pages}쪽 인식 · 낱말 ${x.words}개${x.skipped ? ` · ${x.skipped}쪽 건너뜀` : ''})` : '';
     tr.innerHTML = `<td title="${escapeHtml(x.path)}">${escapeHtml(basename(x.path))}</td>` + (x.error ? `<td class="bad">${escapeHtml(x.error)}</td>` : `<td class="ok" title="${escapeHtml(x.out)}">→ ${escapeHtml(basename(x.out))}${escapeHtml(extra)}</td>`);
     $('#batchBody').appendChild(tr);
   }
@@ -7947,6 +8007,145 @@ $('#officeRun').onclick = async () => {
   const st = r.stats || {}, bits = [st.headings && `제목 ${st.headings}`, st.lists && `목록 ${st.lists}`, st.tables && `표 ${st.tables}`, r.images && `그림 ${r.images}`].filter(Boolean);
   toast(`${basename(r.path)}로 내보냈습니다${bits.length ? ' — ' + bits.join(' · ') : ''}${ext === 'hwpx' ? ' · 한컴오피스 한글에서 엽니다' : ''}`, { ms: 7000 });
 };
+
+// ==== v6 Wave E2: 글자 인식(OCR) — 스캔한 쪽 알림 · 문서 OCR 대화상자 · 영역 인식 ====
+// 서버 길: /api/ocr/status · /api/pdf/ocr(긴 작업: 쪽마다 진행·취소, 실행 취소 한 번) · /api/pdf/ocr-region(읽기만) · /api/pdf/ocr-apply(그 자리에 넣기).
+// 인식은 서버의 앱 안 tesseract 작업 스레드에서만 한다 — 문서 그림을 PC 밖으로 보내지 않는다
+function ocrSt() { return ocrSt.s || (ocrSt.s = { status: null, dismissed: new Set(), pop: null, seq: 0 }); } // 함수 선언(끌어올림) — 앞쪽 초기화 코드가 불러도 된다
+async function ocrLoadStatus() {
+  const st = ocrSt();
+  if (st.status?.available) return st.status;
+  try { st.status = await apiGet('/api/ocr/status'); } catch { st.status = { available: false, langs: [] }; }
+  return st.status;
+}
+// 스캔한 쪽(0 기준) — 글자가 거의 없고 큰 그림이 쪽 절반 이상을 덮은 쪽. 서버 일괄 OCR의 건너뛰기와 같은 계산(ui-model scanPageInfo)
+function ocrScannedPages() { return pdfPages.map((pg, i) => (pdfObjects[i] && UM.scanPageInfo(pdfObjects[i], pg).scanned ? i : -1)).filter((i) => i >= 0); }
+// 0 기준 쪽 목록 → '1-3,5' (쪽 범위 칸에 그대로 넣는 글)
+function ocrPagesText(list) {
+  const out = [];
+  for (let k = 0; k < list.length; k++) {
+    let j = k; while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+    out.push(j > k ? `${list[k] + 1}-${list[j] + 1}` : `${list[k] + 1}`); k = j;
+  }
+  return out.join(',');
+}
+function ocrUpdateBanner() {
+  const b = $('#ocrBanner');
+  const pages = pdfOpen() && !ocrSt().dismissed.has(cur) ? ocrScannedPages() : [];
+  b.hidden = !pages.length;
+  if (pages.length) $('#ocrBannerPages').textContent = pages.length === pdfPages.length ? (pdfPages.length > 1 ? ` (모든 쪽 ${pdfPages.length}쪽)` : '') : ` (${ocrPagesText(pages)}쪽)`;
+}
+function ocrAfterRender(name) { ocrHidePop(); if (cur === name) ocrUpdateBanner(); }
+
+// ---- 문서 OCR 대화상자 ----
+const ocrSyncMode = () => { $('#ocrEditNote').hidden = wdRadio('ocrMode') !== 'edit'; };
+document.querySelectorAll('input[name="ocrMode"]').forEach((r) => r.addEventListener('change', ocrSyncMode));
+async function openOcrDialog(opts = {}) {
+  if (!pdfOpen()) return;
+  const st = await ocrLoadStatus(), o = loadJson('retextpdf.ocr', {});
+  document.querySelectorAll('.ocrLang').forEach((c) => {
+    const have = (st.langs || []).some((l) => l.code === c.value && l.ok);
+    c.disabled = !have; c.checked = have && (Array.isArray(o.langs) ? o.langs.includes(c.value) : true);
+  });
+  const scanned = ocrScannedPages();
+  if (opts.scanned && scanned.length && scanned.length < pdfPages.length) setRangePick($('#ocrRange'), 'custom', ocrPagesText(scanned)); else setRangePick($('#ocrRange'), 'all');
+  const mode = o.mode === 'edit' ? 'edit' : 'search';
+  document.querySelectorAll('input[name="ocrMode"]').forEach((r) => { r.checked = r.value === mode; });
+  $('#ocrSkipText').checked = o.skipText !== false;
+  ocrSyncMode();
+  const mb = (n) => `${(n / 1048576).toFixed(1)}MB`;
+  $('#ocrInfo').textContent = st.available ? `인식 엔진: ${st.engine} · 인식 데이터 ${(st.langs || []).filter((l) => l.ok).map((l) => `${l.label} ${mb(l.bytes)}`).join(', ')} — 모두 앱에 들어 있습니다`
+    : `⚠ 글자 인식을 쓸 수 없습니다 — ${(st.langs || []).find((l) => l.error)?.error || '인식 엔진 파일을 찾지 못했습니다. 앱을 다시 설치하세요'}`;
+  $('#ocrRun').disabled = !st.available;
+  showError('#ocrError', '');
+  $('#ocrDialog').showModal();
+}
+$('#ocrBtn').onclick = () => openOcrDialog();
+$('#ocrBannerRun').onclick = () => openOcrDialog({ scanned: true });
+$('#ocrBannerClose').onclick = () => { if (cur) ocrSt().dismissed.add(cur); ocrUpdateBanner(); };
+$('#ocrCancel').onclick = () => $('#ocrDialog').close();
+$('#ocrRun').onclick = async () => {
+  const langs = [...document.querySelectorAll('.ocrLang:checked')].map((c) => c.value);
+  if (!langs.length) return showError('#ocrError', '인식할 언어를 하나 이상 고르세요');
+  const range = readRangePick($('#ocrRange'));
+  if (!range.ok) return showError('#ocrError', range.error);
+  const mode = wdRadio('ocrMode') === 'edit' ? 'edit' : 'search', skipText = $('#ocrSkipText').checked, name = cur;
+  showError('#ocrError', ''); $('#ocrRun').disabled = true;
+  let r;
+  try { r = await runJob('글자 인식(OCR)', (jobId) => pdfMutate('/api/pdf/ocr', { name, pages: range.idxs.map((k) => k + 1).join(','), langs, mode, skipText, jobId }, { silent: true })); }
+  catch (error) { if (!error.cancelled) showError('#ocrError', error.message); return; }
+  finally { $('#ocrRun').disabled = false; }
+  if (r.cancelled) return flash('글자 인식을 취소했습니다 — 문서는 바뀌지 않았습니다', 3000);
+  saveJson('retextpdf.ocr', { langs, mode, skipText });
+  if (r.ok === false) {
+    const sk = (r.skipped || []).length;
+    return showError('#ocrError', sk && !(r.pages || []).length ? `고른 쪽에 이미 글자가 있어 건너뛰었습니다(${sk}쪽) — 다시 읽으려면 [이미 글자가 있는 쪽은 건너뛰기]를 끄세요` : '읽을 수 있는 글자를 찾지 못했습니다');
+  }
+  $('#ocrDialog').close();
+  const pages = r.pages || [], words = pages.reduce((n, p) => n + p.words, 0);
+  const conf = words ? Math.round(pages.reduce((n, p) => n + p.confidence * p.words, 0) / words) : 0;
+  await afterDocChange(name, `글자 인식: ${pages.length}쪽에서 낱말 ${r.words}개를 ${mode === 'edit' ? '편집 가능한 글자로 바꿨습니다' : '찾을 수 있게 했습니다'}${(r.skipped || []).length ? ` · ${r.skipped.length}쪽 건너뜀` : ''}${(r.rotated || []).length ? ` · 옆으로·거꾸로 스캔한 ${r.rotated.length}쪽을 바로 세움` : ''} (평균 신뢰도 ${conf}%)`);
+};
+
+// ---- 영역 글자 인식: 끌어 감싼 곳만 읽어(문서는 그대로) 결과 창 → [복사] · [이 자리에 글자 넣기] 검색용·보이게 ----
+async function ocrRegionRun(i, rect, box) {
+  const st = ocrSt(), name = cur, seq = ++st.seq;
+  ocrHidePop();
+  box.classList.add('ocr');
+  const status = await ocrLoadStatus();
+  if (!status.available) { box.remove(); return flash('⚠ 글자 인식을 쓸 수 없습니다 — 인식 엔진 파일을 찾지 못했습니다. 앱을 다시 설치하세요', 5000); }
+  const langs = loadJson('retextpdf.ocr', {}).langs || status.defaultLangs || ['kor', 'eng'];
+  flash('글자를 읽는 중…', 15000);
+  let r;
+  try { r = await apiPost('/api/pdf/ocr-region', { name, i, rect, langs }, { silent: true }); }
+  catch (error) { if (seq === st.seq) { box.remove(); flash('⚠ 글자를 읽지 못했습니다: ' + error.message, 5000); } return; }
+  if (seq !== st.seq || cur !== name || !box.isConnected) { box.remove(); return; }
+  flash(r.lines?.length ? `낱말 ${r.words}개를 읽었습니다` : '이 영역에서 글자를 찾지 못했습니다', 2000);
+  ocrShowPop({ name, i, rect, box, r });
+}
+function ocrShowPop(p) {
+  const st = ocrSt(), pop = $('#ocrPop');
+  if (st.pop && st.pop.box !== p.box) st.pop.box?.remove();
+  st.pop = p;
+  const found = !!p.r.lines?.length;
+  $('#ocrPopText').value = p.r.text || '';
+  $('#ocrPopInfo').textContent = found ? `${p.i + 1}쪽 · 낱말 ${p.r.words}개 · 신뢰도 ${p.r.confidence}%` : `${p.i + 1}쪽 · 글자를 찾지 못했습니다`;
+  for (const id of ['#ocrPopCopy', '#ocrPopSearch', '#ocrPopEdit']) $(id).disabled = !found;
+  showError('#ocrPopError', '');
+  pop.hidden = false;
+  const b = p.box.getBoundingClientRect(), W = pop.offsetWidth, H = pop.offsetHeight; // 끈 상자 아래(모자라면 위)
+  const x = Math.min(window.innerWidth - W - 12, Math.max(12, b.left));
+  let y = b.bottom + 8; if (y + H > window.innerHeight - 12) y = Math.max(12, b.top - H - 8);
+  Object.assign(pop.style, { left: x + 'px', top: y + 'px' });
+  $('#ocrPopText').focus({ preventScroll: true });
+}
+function ocrHidePop() {
+  const st = ocrSt(), p = st.pop;
+  st.pop = null; $('#ocrPop').hidden = true;
+  p?.box?.remove();
+}
+$('#ocrPopClose').onclick = ocrHidePop;
+$('#ocrPopCopy').onclick = async () => {
+  const ta = $('#ocrPopText'), text = ta.value;
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { ta.focus(); ta.select(); try { ok = document.execCommand('copy'); } catch {} }
+  flash(ok ? '읽은 글을 복사했습니다' : '⚠ 복사하지 못했습니다 — 글을 골라 Ctrl+C로 복사하세요', 2500);
+};
+async function ocrPopApply(mode) {
+  const p = ocrSt().pop;
+  if (!p || cur !== p.name) return ocrHidePop();
+  let r;
+  try { r = await pdfMutate('/api/pdf/ocr-apply', { name: p.name, i: p.i, lines: p.r.lines, mode, rect: p.rect }, { silent: true }); }
+  catch (error) { if (!error.cancelled) showError('#ocrPopError', error.message); return; }
+  if (r.ok === false) return showError('#ocrPopError', '넣을 수 있는 글자가 없습니다');
+  ocrHidePop();
+  await refreshPage(p.i);
+  flash(`${p.i + 1}쪽에 ${mode === 'edit' ? '보이는' : '검색용(보이지 않는)'} 글자 낱말 ${r.words}개를 넣었습니다 · Ctrl+Z로 되돌리기`, 4000);
+}
+$('#ocrPopSearch').onclick = () => ocrPopApply('search');
+$('#ocrPopEdit').onclick = () => ocrPopApply('edit');
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#ocrPop').hidden) { e.preventDefault(); e.stopImmediatePropagation(); ocrHidePop(); } }, true);
+window.retextPdfE2 = { openOcrDialog, ocrScannedPages, ocrUpdateBanner, ocrRegionRun, ocrHidePop, get pop() { const p = ocrSt().pop; return p ? { i: p.i, rect: p.rect, text: p.r.text, words: p.r.words } : null; } };
 
 // 시험·화면 찍기용 손잡이(문서를 바꾸지 않는다)
 window.retextPdfE = { get forms() { return { doc: fmState.doc, type: fmState.type, fields: fmState.fields.map((f) => ({ ...f })) }; }, fmLoad, fmDrawAll, fmFocusField, fmTabOrder, openOfficeDialog, confirmRequiredFields, get formQueue() { return fmState.queue; } };
