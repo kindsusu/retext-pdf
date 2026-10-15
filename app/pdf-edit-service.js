@@ -216,8 +216,20 @@ const { planRuns, breakAtoms } = require('./run-edit');
 const RUN_WIDTH_TOL = 1;      // 문단 폭 여유(pt) — 안 고친 줄이 측정 오차로 넘치지 않게
 const CALIB_RANGE = [0.5, 2]; // 원래 글꼴 폭 보정(실측 ÷ 글리프 폭)의 허용 범위 — 자간·장평(Tz) 몫
 
+//   v6 덧붙임(모두 생략 가능):
+//     force: 글이 같아도 다시 배치한다(글자 모양을 바꾼 뒤 폭이 달라진 조각을 다시 놓기 — styleRuns·정렬·줄 간격·상자 폭)
+//     gaps: { [객체 idx]: pt } 그 조각 앞 틈을 이 값으로(자간) · pitch: 문단 줄 간격(pt, 모든 줄) · align(문단): 'left'|'center'|'right'|'justify'
+//     box: { x0, x1, dy } 상자 왼쪽·오른쪽 끝(쪽 좌표)과 세로 이동 — 화면 손잡이로 폭을 바꾸거나 옮긴 상자(한 줄이면 x1−x0이 줄바꿈 폭)
+//     pushDown: 고친 상자가 아래로 길어지면 같은 단(상자의 가로 범위)에서 아래 내용(글·그림·선)을 그만큼 내린다 — 줄 간격 2배 이상 빈 곳이나 쪽 끝에서 멈춘다
+//     overflow: 밀면 쪽 아래로 넘칠 때 'ask'(409 + overflow 표시로 되묻기, 문서는 되돌린다) | 'keep'(밀지 않고 겹쳐 둔다)
+//     fontScale: 상자 글자를 이 배율로 줄여 다시 흘린다(넘칠 때 [글자 줄여 맞추기] — 서버 라우트가 배율을 낮춰 가며 다시 시도한다)
 function editRuns(doc, i, req = {}) {
-  const { lines: reqLines, oldText, newText, mode = 'none', align, paragraph = false } = req;
+  const { lines: reqLines, oldText, newText, mode = 'none', align, paragraph = false, gaps: gapOv = null, pushDown = false, overflow = 'ask' } = req;
+  const box = req.box && Number.isFinite(+req.box.x0) && Number.isFinite(+req.box.x1) && +req.box.x1 > +req.box.x0 ? { x0: +req.box.x0, x1: +req.box.x1, dy: +req.box.dy || 0 } : null;
+  const fontScale = req.fontScale == null ? 1 : Number(req.fontScale);
+  if (!(fontScale >= 0.3 && fontScale <= 1)) throw new Error('글자 배율이 잘못됐습니다.');
+  const pitchOv = Number(req.pitch) > 0 ? Number(req.pitch) : 0;
+  const force = !!req.force || !!box || pitchOv > 0 || fontScale !== 1 || (paragraph && ['center', 'right', 'justify'].includes(align?.mode || align));
   let maxWidth = Number(req.maxWidth) > 0 ? Number(req.maxWidth) : Infinity; // 아래(줄 기하를 안 뒤)에서 옛 줄 폭 이상으로 넓힌다
   if (!Array.isArray(reqLines) || !reqLines.length || reqLines.some((L) => !Array.isArray(L?.objs) || !L.objs.length)) throw new Error('편집할 줄이 없습니다.');
   if (typeof newText !== 'string' || newText.length > 20000) throw new Error('고칠 글이 너무 깁니다.');
@@ -247,6 +259,16 @@ function editRuns(doc, i, req = {}) {
     const from = c.from ?? 0, to = c.to ?? s.bounds[s.bounds.length - 1];
     return s.idxs.filter((_, k) => s.bounds[k] >= from && s.bounds[k + 1] <= to);
   };
+  // 넘침 줄이기(fontScale): 줄마다 그 줄의 시작점·기준선을 중심으로 글자·틈을 함께 줄인다(아래에서 줄 간격도 같은 배율)
+  if (fontScale !== 1) {
+    for (const L of reqLines) {
+      const idxs = [...new Set(L.objs.flatMap((c) => segmentsOf(c)))], os = idxs.map((x) => objects[x]).filter((o) => o?.origin);
+      if (!os.length) continue;
+      const ink = os.find((o) => (o.text || '').trim()) || os[0];
+      doc.scaleAbout(i, idxs, fontScale, Math.min(...os.map((o) => o.origin.x)), ink.origin.y);
+    }
+    objects = doc.objects(i);
+  }
   // 2) 줄·조각 모양(기하)
   const used = new Set();
   const lines = reqLines.map((L, li) => {
@@ -274,20 +296,21 @@ function editRuns(doc, i, req = {}) {
     return { items, seps, x: Math.min(...items.map((it) => it.start)), y: main.y, size: main.size, end: Math.max(...items.map((it) => it.inkEnd)) };
   });
   // 쓸 수 있는 폭은 적어도 옛 줄 폭(+여유) — 화면이 이웃·본문 끝으로 잰 폭이 옛 줄보다 좁게 나와도(이웃이 없으면 그 줄이 곧 본문 끝) 같은 길이로 고친 줄이 줄바꿈되지 않게
-  if (!paragraph && Number.isFinite(maxWidth)) maxWidth = Math.max(maxWidth, Math.max(...lines.map((L) => L.end - L.x)) + RUN_WIDTH_TOL);
+  if (!paragraph && box) maxWidth = box.x1 - box.x0 + RUN_WIDTH_TOL; // 화면에서 정한 상자 폭(손잡이)이 곧 줄바꿈 폭
+  else if (!paragraph && Number.isFinite(maxWidth)) maxWidth = Math.max(maxWidth, Math.max(...lines.map((L) => L.end - L.x)) + RUN_WIDTH_TOL);
   const raw = lines.map((L) => L.items.map((it, j) => (j ? L.seps[j - 1] : '') + it.text).join('')).join('\n');
   if (typeof oldText === 'string' && oldText !== raw) throw new Error('문서가 바뀌었습니다. 줄을 다시 선택하세요.');
   // 조각 사이 틈(옛 위치)과 가린 자리(■)를 덮은 가림 상자
   for (const L of lines) {
-    L.gaps = L.items.slice(1).map((it, j) => it.start - L.items[j].end);
+    L.gaps = L.items.slice(1).map((it, j) => (gapOv && gapOv[it.idx] != null && Number.isFinite(+gapOv[it.idx]) ? +gapOv[it.idx] * fontScale : it.start - L.items[j].end));
     L.masks = L.items.slice(1).map((it, j) => (/■/.test(L.seps[j]) ? objects.filter((m) => m.mask && m.bounds && m.bounds.x0 >= L.items[j].end - 1 && m.bounds.x1 <= it.start + 1
       && m.bounds.y0 < L.y + L.size && m.bounds.y1 > L.y - 0.3 * L.size).map((m) => m.idx) : []));
   }
   // 3) 글자 차이 → 조각 배정
   const plan = planRuns(lines.map((L) => ({ items: L.items.map((it) => ({ text: it.text, style: it.style })), seps: L.seps })), newText);
   const allIdxs = () => lines.flatMap((L) => L.items.map((it) => it.idx));
-  if (!plan.changed) return { ok: true, unchanged: true, lineIdxs: allIdxs(), written: [], fallbackFont: false };
-  const first = plan.firstChanged;
+  if (!plan.changed && !force) return { ok: true, unchanged: true, lineIdxs: allIdxs(), written: [], fallbackFont: false };
+  const first = force ? 0 : plan.firstChanged, lastChanged = force ? lines.length - 1 : plan.lastChanged;
   // 4) 글자 폭: 안 고친 조각은 실측(글자 위치), 고친 조각은 글꼴 폭 추정 × 보정
   const calibOf = (it) => {
     if (it.calib == null) {
@@ -327,18 +350,30 @@ function editRuns(doc, i, req = {}) {
     }
   });
   // 줄 자리(slot): 첫 고친 줄부터 옛 줄 자리, 모자라면 같은 간격으로 아래에 더(문단은 둘째 줄의 x — 첫 줄 들여쓰기 제외)
-  const pitch = lines.length > 1 ? median(lines.slice(1).map((L, k) => lines[k].y - L.y)) : 1.2 * lines[0].size;
+  // 한 줄이면 줄 간격을 모르므로 같은 단 바로 아래의 같은 크기 줄과의 기준선 차(1~2.2배 크기 안)를 쓰고, 없으면 글자 크기의 1.2배
+  const singlePitch = () => {
+    const L = lines[0], near = objects.filter((o) => o.type === 'text' && o.origin && (o.text || '').trim() && !used.has(o.idx)
+      && Math.abs((o.scaledSize || o.size) - L.size) <= 0.1 * L.size && o.bounds.x1 > L.x && o.bounds.x0 < L.end
+      && L.y - o.origin.y >= 1.0 * L.size && L.y - o.origin.y <= 2.2 * L.size).map((o) => L.y - o.origin.y);
+    return near.length ? Math.min(...near) : 1.2 * L.size;
+  };
+  const pitch = pitchOv || (lines.length > 1 ? median(lines.slice(1).map((L, k) => lines[k].y - L.y)) : singlePitch() / fontScale) * fontScale;
   const extraX = lines.length > 1 ? lines[1].x : lines[0].x;
+  // 상자를 옮기거나 폭을 바꿨으면(box) 줄 자리를 그만큼 옮긴다. 줄 간격을 바꿨거나 글자를 줄였으면 첫 줄 기준선에서 같은 간격으로 다시 놓는다
+  // 화면 상자 왼쪽 끝은 잉크 상자(bounds.x0)라 글자 시작점(L.x)과 왼쪽 여백(lsb)만큼 다르다 — 0.15em 안의 차이는 옮긴 것으로 보지 않는다
+  const oldLeft = Math.min(...lines.map((L) => L.x)), sx0 = box ? box.x0 - oldLeft : 0, sy0 = box ? box.dy : 0;
+  const sx = Math.abs(sx0) < 0.15 * lines[0].size ? 0 : sx0, sy = Math.abs(sy0) < 0.15 * lines[0].size ? 0 : sy0;
+  const even = pitchOv > 0 || fontScale !== 1;
   const slot = (n) => {
     const k = first + n;
-    if (k < lines.length) return { x: lines[k].x, y: lines[k].y, orig: true };
-    return { x: extraX, y: lines[lines.length - 1].y - (k - lines.length + 1) * pitch, orig: false };
+    if (k < lines.length) return { x: lines[k].x + sx, y: (even ? lines[0].y - k * pitch : lines[k].y) + sy, orig: true };
+    return { x: extraX + sx, y: (even ? lines[0].y - k * pitch : lines[lines.length - 1].y - (k - lines.length + 1) * pitch) + sy, orig: false };
   };
-  const paraRight = Math.max(...lines.map((L) => L.end));
+  const paraRight = box ? box.x1 : Math.max(...lines.map((L) => L.end));
   const widthOf = (n) => (paragraph ? paraRight - slot(n).x + RUN_WIDTH_TOL : mode === 'wrap' ? maxWidth : Infinity);
   const stopAt = (start, n) => {
     const prev = atoms[start - 1];
-    return paragraph && prev?.el.t === 'soft' && prev.el.line + 1 > plan.lastChanged && first + n === prev.el.line + 1;
+    return !even && !box && paragraph && prev?.el.t === 'soft' && prev.el.line + 1 > lastChanged && first + n === prev.el.line + 1;
   };
   const broken = breakAtoms(atoms, widthOf, stopAt);
   // 6) 줄마다 조각 부분(line piece) — 줄바꿈으로 나뉜 줄의 머리 공백은 버린다
@@ -414,13 +449,15 @@ function editRuns(doc, i, req = {}) {
     return { start: g[0][0], end, ink };
   };
   const moves = []; // [idxs, dx, dy]
-  const placed = []; // 줄마다 { x, y, x1(잉크 끝), idxs }
+  const placed = []; // 줄마다 { x, y, x1(잉크 끝), idxs, pieces: [{ idxs, k(앞에 있는 낱말 틈 수) }], breaks, hardEnd }
   out.forEach((seq, n) => {
-    const { x, y } = slot(n), row = { x, y, x1: x, idxs: [] };
-    let cursor = x, gap = 0, started = false;
+    const { x, y } = slot(n), row = { x, y, x1: x, idxs: [], pieces: [], breaks: 0 };
+    const [, b] = broken.lines[n];
+    row.hardEnd = n === out.length - 1 || atoms[b]?.t === 'h';
+    let cursor = x, gap = 0, started = false, brk = false, lastText = '';
     for (const s of seq) {
       if (s.t === 'g') {
-        if (started) gap += s.atom.w;
+        if (started) { gap += s.atom.w; if (s.atom.brk || s.atom.el?.t === 'soft' || /\s/.test(s.atom.el?.value || '')) brk = true; }
         const m = s.atom.el?.t === 'sep' && !s.atom.el.deleted ? lines[s.atom.el.line].masks[s.atom.el.j] : [];
         if (m.length) { // 가린 자리: 틈 시작이 옮겨 간 만큼 가림 상자도
           const L = lines[s.atom.el.line], oldStart = L.items[s.atom.el.j].end;
@@ -431,8 +468,10 @@ function editRuns(doc, i, req = {}) {
       const it = itemOf(s.el), e = ext(s.obj, s.text), target = started ? cursor + gap : x;
       const dx = target - e.start, dy = y - lines[it.line].y;
       moves.push([[s.obj, ...(s.follow || [])], dx, dy]);
+      if (started && (brk || /\s$/.test(lastText))) row.breaks++;
+      row.pieces.push({ idxs: [s.obj, ...(s.follow || [])], k: row.breaks });
       cursor = target + (e.end - e.start); row.x1 = Math.max(row.x1, target + (e.ink - e.start));
-      row.idxs.push(s.obj); started = true; gap = 0;
+      row.idxs.push(s.obj); started = true; gap = 0; brk = false; lastText = s.text;
     }
     placed.push(row);
   });
@@ -454,11 +493,70 @@ function editRuns(doc, i, req = {}) {
     if (Math.abs(dx) > 1e-3 && idxs.length) doc.move(i, [...idxs, ...followersOf(idxs)], dx, 0);
     placed.forEach((r) => { r.x += dx; r.x1 += dx; });
   }
-  // 11) 새로 늘어난 줄이 다른 글자와 겹치는지(경고만)
+  // 10b) 문단 정렬(v6): 줄마다 상자 폭 안에서 가운데·오른쪽, 양쪽 맞춤은 문단 끝·강제 줄바꿈 줄을 빼고 낱말 틈(조각 사이)에 남는 폭을 나눠 준다.
+  //      한 객체 안의 공백은 늘릴 수 없다(PDFium에 낱말 간격 Tw가 없다) — 조각이 낱말마다 나뉜 PDF(Chromium·한글)에서만 고르게 맞는다
+  const pAlign = paragraph ? (align?.mode || align) : null;
+  if (pAlign && ['center', 'right', 'justify'].includes(pAlign)) {
+    placed.forEach((r) => {
+      const avail = paraRight - r.x, extra = avail - (r.x1 - r.x);
+      if (!r.idxs.length || extra <= 0.01) return;
+      if (pAlign === 'justify') {
+        if (r.hardEnd || !r.breaks) return;
+        for (const pc of r.pieces) if (pc.k) doc.move(i, [...pc.idxs], extra * pc.k / r.breaks, 0);
+        r.x1 += extra;
+        return;
+      }
+      const dx = pAlign === 'center' ? extra / 2 : extra;
+      doc.move(i, [...r.idxs, ...followersOf(r.idxs)], dx, 0);
+      r.x += dx; r.x1 += dx;
+    });
+  }
   const mine = new Set([...used, ...lines.flatMap((L) => L.masks.flat())]);
+  // 10c) 아래 내용 밀기(v6 pushDown): 고친 상자의 새 아래끝이 옛 아래끝보다 내려간 만큼, 같은 단의 아래 내용을 내린다
+  let pushed = null;
+  if (pushDown && Math.abs(sx) < 0.5 && Math.abs(sy) < 0.5) {
+    const now2 = doc.objects(i);
+    const y0s = (idxs, list) => idxs.map((x) => list[x]?.bounds?.y0).filter(Number.isFinite);
+    const oldBottom = Math.min(...y0s([...used], objects)), newBottom = Math.min(...y0s(placed.flatMap((r) => r.idxs), now2));
+    const growth = oldBottom - newBottom;
+    if (growth > 0.5 && Number.isFinite(growth)) {
+      if (doc.pageSize(i).rotation) pushed = { skipped: 'rotated', growth };
+      else {
+        const size = lines[lines.length - 1].size, pageH = doc.pageSize(i).h, pageW = doc.pageSize(i).w;
+        const colX0 = Math.min(oldLeft, ...placed.map((r) => r.x)), colX1 = Math.max(paraRight, ...lines.map((L) => L.end), ...placed.map((r) => r.x1));
+        // 단 안: 가운데가 단 범위(+0.3em 여유) 안이거나, 폭의 절반 이상이 단과 겹친다(줄 끝 글자가 단 끝을 살짝 넘는 경우 포함)
+        const tol = 0.3 * size;
+        const inCol = (b) => {
+          const w = b.x1 - b.x0, ov = Math.min(b.x1, colX1) - Math.max(b.x0, colX0), cx = (b.x0 + b.x1) / 2;
+          return (cx >= colX0 - tol && cx <= colX1 + tol) || (w >= 1 && ov > 0 && ov >= 0.5 * w);
+        };
+        const cand = objects.filter((o) => !mine.has(o.idx) && o.bounds && !o.pageNum && !o.headerFooter && !o.watermark
+          && (o.bounds.y1 - o.bounds.y0) < 0.5 * pageH && (o.bounds.x1 - o.bounds.x0) < 0.95 * pageW
+          && o.bounds.y1 <= oldBottom + 0.25 * size && inCol(o.bounds)).sort((a, b) => b.bounds.y1 - a.bounds.y1);
+        const block = [];
+        let cur = oldBottom;
+        // 줄 간격 2배 이상 빈 곳에서 멈춘다 — 단, 늘어난 만큼을 그 빈 곳이 다 받아 주지 못하면(겹친다) 그 아래도 민다
+        for (const o of cand) {
+          const gap = cur - o.bounds.y1;
+          if (gap >= 2 * pitch && growth <= gap - 0.5 * pitch) break;
+          block.push(o); cur = Math.min(cur, o.bounds.y0);
+        }
+        if (block.length) {
+          const lowest = Math.min(...objects.filter((o) => o.bounds && o.type !== 'other').map((o) => o.bounds.y0)), limit = Math.max(0, Math.min(18, lowest));
+          const room = cur - limit;
+          if (cur - growth < limit - 0.01) {
+            if (overflow === 'keep') pushed = { skipped: 'overflow', growth, room };
+            else throw Object.assign(new Error('아래 내용을 밀면 쪽 아래로 넘칩니다. 글자를 줄여 맞추거나 겹쳐 둘지 고르세요.'), { status: 409, extra: { overflow: true, growth: +growth.toFixed(2), room: +room.toFixed(2) } });
+          }
+          if (!pushed) { doc.move(i, block.map((o) => o.idx), 0, -growth); pushed = { moved: block.length, dy: -growth }; }
+        } else pushed = { moved: 0, dy: 0 };
+      }
+    }
+  }
+  // 11) 새로 늘어난 줄이 다른 글자와 겹치는지(경고만 — 아래 내용을 밀었으면 겹치지 않는다)
   let overlap = false;
   placed.forEach((r, n) => {
-    if (slot(n).orig || !r.idxs.length) return;
+    if (pushed?.moved != null || slot(n).orig || !r.idxs.length) return;
     const size = lines[lines.length - 1].size, y0 = r.y - 0.25 * size, y1 = r.y + 0.85 * size;
     if (objects.some((o) => o.type === 'text' && !mine.has(o.idx) && (o.text || '').trim() && o.bounds && o.bounds.x0 < r.x1 && o.bounds.x1 > r.x && o.bounds.y0 < y1 && o.bounds.y1 > y0)) overlap = true;
   });
@@ -474,6 +572,9 @@ function editRuns(doc, i, req = {}) {
     fallbackFont, scaled, overlap,
     addedLines: Math.max(0, placed.length - (paragraph ? origLines : 1)),
     lines: placed.length,
+    removed: [...gone].reverse(), // 지운 객체(이 호출 전 번호, 오름차순) — 같은 쪽을 여러 번 고칠 때 앞서 받은 번호를 고친다(찾아 바꾸기)
+    ...(pushed ? { pushed } : {}),
+    ...(fontScale !== 1 ? { fontScale } : {}),
   };
 }
 function median(a) { const s = a.slice().sort((p, q) => p - q); return s.length ? s[s.length >> 1] : 0; }
@@ -501,4 +602,217 @@ function verifyRuns(doc, i, result) {
   return 0;
 }
 
-module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, normalizeParts, redactRanges, redactArea, editRuns, verifyRuns };
+// ── v6: 밑줄·취소선 선 맞추기 ─────────────────────────────────────────────────
+// 쪽에 밑줄·취소선 표시(RetextPdfStyle u·s)나 옛 선(RetextPdfDeco)이 있으면 선을 다시 그린다(doc.syncDeco). 옛 선을 지운 만큼
+// result의 객체 번호(lineIdxs·written)를 당겨 고친다. 아무 표시도 없으면 손대지 않는다(예전 문서·시험 결과가 그대로)
+function syncDecoAfter(doc, i, result = {}) {
+  if (typeof doc.syncDeco !== 'function') return result;
+  if (!doc.objects(i).some((o) => o.deco || (o.style && (o.style.u || o.style.s)))) return result;
+  const { removed = [] } = doc.syncDeco(i);
+  if (!removed.length) return result;
+  const fix = (x) => x - removed.filter((r) => r < x).length;
+  if (result.lineIdxs) result.lineIdxs = result.lineIdxs.map(fix);
+  if (result.written) result.written = result.written.map((w) => ({ ...w, idx: fix(w.idx) }));
+  return result;
+}
+
+// ── v6: 고른 글자 모양 바꾸기(/api/pdf/style-runs) ─────────────────────────────────
+// req: { lines(edit-runs와 같은 줄 모양), oldText(줄 글 — 문단이면 줄 사이 '\n'), from, to(줄 글 위치, 소프트 하이픈 포함 — 비우면 모양 없이 다시 배치만),
+//        style: { bold, italic, underline, strike, script, fontId, size, color }, letterSpacing(pt, 고른 글자 사이),
+//        paragraph, align, pitch, box, pushDown, overflow, fontScale } — 뒤쪽은 editRuns에 그대로 넘긴다
+// 1) 고른 범위의 경계에서 객체를 가른다(splitText — 원래 글꼴로 다시 그릴 수 없는 글자면 그 객체 전체를 고른 것으로 넓힌다: expanded)
+// 2) 고른 조각마다 doc.restyleText 3) editRuns(force)로 줄을 다시 놓는다(굵게·크기로 폭이 바뀐 만큼 뒤 조각을 밀고, 문단이면 다시 흘린다)
+// 서버 라우트 하나 = 스냅샷 하나라 실행 취소 한 번에 모양·위치가 함께 돌아온다
+const STYLE_KEYS = ['bold', 'italic', 'underline', 'strike', 'script', 'fontId', 'size', 'color'];
+function styleRuns(doc, i, req = {}) {
+  const { lines: reqLines, oldText } = req;
+  const style = Object.fromEntries(Object.entries(req.style || {}).filter(([k, v]) => STYLE_KEYS.includes(k) && v !== undefined));
+  const letterSpacing = req.letterSpacing == null || req.letterSpacing === '' ? null : Number(req.letterSpacing);
+  if (letterSpacing != null && !(letterSpacing >= -5 && letterSpacing <= 50)) throw new Error('자간은 −5~50pt 범위로 입력하세요.');
+  if (!Array.isArray(reqLines) || !reqLines.length || reqLines.some((L) => !Array.isArray(L?.objs) || !L.objs.length)) throw new Error('모양을 바꿀 줄이 없습니다.');
+  let objects = doc.objects(i);
+  // 줄 글과 조각 자리(줄 글 위치)
+  let raw = '';
+  const spans = []; // { c, s, e, base }
+  reqLines.forEach((L, li) => {
+    if (li) raw += '\n';
+    L.objs.forEach((c, j) => {
+      if (j) raw += String(L.seps?.[j - 1] ?? '');
+      const o = objects[c?.idx];
+      if (!Number.isInteger(c?.idx) || !o || o.type !== 'text') throw new Error('편집할 텍스트 상자를 다시 선택하세요.');
+      const t = typeof c.text === 'string' ? c.text : o.text;
+      spans.push({ c, s: raw.length, e: raw.length + t.length, base: c.from ?? 0 });
+      raw += t;
+    });
+  });
+  if (typeof oldText === 'string' && oldText !== raw) throw new Error('문서가 바뀌었습니다. 줄을 다시 선택하세요.');
+  const from = Math.max(0, Math.min(raw.length, Number(req.from) || 0)), to = Math.max(from, Math.min(raw.length, Number(req.to) || 0));
+  const restyle = from < to && Object.keys(style).length > 0, spacing = from < to && letterSpacing != null;
+  // 1) 가를 자리: 객체 안 부분(15d)의 경계 + 고른 범위의 경계(+ 자간이면 고른 글자마다)
+  const cuts = new Map(), selLocal = new Map(); // idx → Set(위치) · idx → [[a, b]] 고른 객체 글 범위
+  const addCut = (idx, k) => { if (!cuts.has(idx)) cuts.set(idx, new Set()); cuts.get(idx).add(k); };
+  for (const { c, s, e, base } of spans) {
+    const o = objects[c.idx];
+    if (c.from != null || c.to != null) { addCut(c.idx, c.from ?? 0); addCut(c.idx, c.to ?? o.text.length); }
+    if (c.text === '' || !(from < e && to > s)) continue;
+    const a = base + Math.max(from, s) - s, b = base + Math.min(to, e) - s;
+    if (!selLocal.has(c.idx)) selLocal.set(c.idx, []);
+    selLocal.get(c.idx).push([a, b]);
+    if (restyle || spacing) { addCut(c.idx, a); addCut(c.idx, b); }
+    if (spacing) for (let k = a + 1; k < b; k++) if (!/[\uDC00-\uDFFF]/.test(o.text[k])) addCut(c.idx, k);
+  }
+  const segs = new Map(); // idx → { bounds, idxs }
+  const expanded = [];
+  for (const [idx, set] of cuts) {
+    const len = objects[idx].text.length, ks = [...set].filter((k) => k > 0 && k < len).sort((a, b) => a - b);
+    if (!ks.length) continue;
+    const r = doc.splitText(i, idx, ks);
+    if (r.ok) { segs.set(idx, { bounds: [0, ...ks, len], idxs: r.idxs }); continue; }
+    // 글자 대응이 어긋난 객체: 객체 안 부분(15d) 경계가 있으면 가를 수밖에 없다 — 그 밖에는 객체 전체를 고른 것으로 넓힌다
+    if (spans.some((sp) => sp.c.idx === idx && (sp.c.from != null || sp.c.to != null))) throw new Error(r.reason || '글자 조각을 나누지 못했습니다.');
+    expanded.push(idx);
+    if (selLocal.has(idx)) selLocal.set(idx, [[0, len]]);
+  }
+  if (segs.size) objects = doc.objects(i);
+  // 2) 새 줄 모양(가른 조각 사이는 '') · 고른 조각
+  const selected = [], gaps = {};
+  const lines = reqLines.map((L) => {
+    const objs = [], seps = [];
+    let prevSel = false;
+    L.objs.forEach((c, j) => {
+      const sg = segs.get(c.idx), base = c.from ?? 0, end = c.to ?? (sg ? sg.bounds[sg.bounds.length - 1] : objects[c.idx].text.length);
+      const parts = sg ? sg.idxs.map((x, k) => ({ idx: x, a: sg.bounds[k], b: sg.bounds[k + 1] })).filter((q) => q.a >= base && q.b <= end) : [{ idx: c.idx, a: base, b: end }];
+      parts.forEach((q, k) => {
+        const sep = objs.length ? (k ? '' : String(L.seps?.[j - 1] ?? '')) : null;
+        if (sep != null) seps.push(sep);
+        if (c.text === '') { objs.push({ idx: q.idx, text: '' }); return; }
+        objs.push({ idx: q.idx, text: objects[q.idx].text });
+        const inSel = (selLocal.get(c.idx) || []).some(([a, b]) => q.a >= a && q.b <= b && q.b > q.a);
+        // 자간: 고른 글자끼리 붙어 있는 자리(사이 글 '')만 — 낱말 사이 띄어쓰기 틈은 그대로 둔다
+        if (inSel && spacing && prevSel && sep === '') gaps[q.idx] = letterSpacing;
+        prevSel = inSel;
+        if (inSel) selected.push({ idx: q.idx, src: c.idx });
+      });
+    });
+    return { objs, seps };
+  });
+  // 조각 사이 틈은 모양을 바꾸기 전 것으로 지킨다 — 첨자·크기는 객체마다 제 원점을 중심으로 줄고 늘어 끝이 움직이므로, 바꾼 뒤에 재면
+  // 틈이 벌어지거나(첨자 "b l u e") 겹친다(굵은 면이 넓다). 자간으로 정한 틈은 그 값
+  for (const L of lines) {
+    const its = L.objs.filter((o) => o.text !== '').map((o) => itemGeometry(objects[o.idx], 0));
+    its.forEach((it, k) => { if (k && gaps[it.idx] == null) gaps[it.idx] = it.start - its[k - 1].end; });
+  }
+  // 3) 모양 바꾸기(객체 자리는 그대로)
+  const skipped = [], faces = new Set(), fake = { bold: false, italic: false };
+  if (restyle) {
+    for (const { idx } of selected) {
+      const r = doc.restyleText(i, idx, style);
+      if (!r.ok) throw new Error(r.reason || '글자 모양을 바꾸지 못했습니다.');
+      if (r.face) faces.add(r.face);
+      fake.bold ||= r.fakeBold; fake.italic ||= r.fakeItalic;
+      skipped.push(...(r.skipped || []));
+    }
+    objects = doc.objects(i);
+  }
+  // 4) 다시 놓기(글은 그대로) — 굵게·크기·글꼴로 폭이 바뀐 만큼 뒤 조각을 밀고, 문단이면 다시 흘린다
+  const lineText = (L) => L.objs.map((o, j) => (j ? L.seps[j - 1] : '') + objects[o.idx].text).join('');
+  lines.forEach((L) => L.objs.forEach((o) => { if (o.text !== '') o.text = objects[o.idx].text; }));
+  const newRaw = lines.map(lineText).join('\n');
+  const result = editRuns(doc, i, {
+    lines, oldText: newRaw, newText: newRaw.replace(/­/g, ''), force: true, gaps,
+    paragraph: !!req.paragraph, mode: req.paragraph ? undefined : (req.mode || 'none'), maxWidth: req.maxWidth,
+    align: req.align, pitch: req.pitch, box: req.box, pushDown: !!req.pushDown, overflow: req.overflow, fontScale: req.fontScale,
+  });
+  return { ...result, styled: selected.length, expanded: expanded.length, skipped: [...new Set(skipped)], faces: [...faces], fake };
+}
+
+// ── v6: 찾아 바꾸기(/api/pdf/replace) ─────────────────────────────────────────
+const fr = require('./find-replace');
+const { groupLines } = require('./text-grouping');
+const mergedLines = (objs) => groupLines(objs, { mergeStyledRuns: true });
+const runLineOf = (line) => ({ objs: line.objs.map((o) => ({ idx: o.idx, text: o.text, ...(o.partFrom != null ? { from: o.partFrom, to: o.partFrom + o.text.length } : {}) })), seps: line.seps });
+const MATCH_LIMIT = 2000;
+// 일치의 쪽 위 사각형(글자 위치로) — 화면이 현재 일치를 칠한다
+function matchRect(line, at, len) {
+  const raw = line.text, d2r = [];
+  for (let r = 0; r < raw.length; r++) if (raw[r] !== '­') d2r.push(r);
+  d2r.push(raw.length);
+  const a = d2r[at], b = d2r[at + len] ?? raw.length;
+  let off = 0, box = null;
+  line.objs.forEach((o, j) => {
+    const s = off, e = off + o.text.length; off = e + (line.seps[j] || '').length;
+    const lo = Math.max(a, s), hi = Math.min(b, e);
+    if (lo >= hi) return;
+    const g = o.glyphs?.length === o.text.length ? o.glyphs : null;
+    const x0 = g ? g[lo - s][0] : o.bounds.x0, x1 = g ? g[hi - s - 1][0] + g[hi - s - 1][2] : o.bounds.x1;
+    const r = { x0: Math.min(x0, x1), x1: Math.max(x0, x1), y0: o.bounds.y0, y1: o.bounds.y1 };
+    box = box ? { x0: Math.min(box.x0, r.x0), y0: Math.min(box.y0, r.y0), x1: Math.max(box.x1, r.x1), y1: Math.max(box.y1, r.y1) } : r;
+  });
+  return box;
+}
+// 문서 전체(또는 pages)의 일치 목록: [{ i, line(쪽 안 줄 번호 — 읽기 순서), at, len, lineText, context, rect, masked, editable, reason }]
+function findInDoc(doc, query, opts = {}, pages = null) {
+  const out = [];
+  for (const i of pages || Array.from({ length: doc.pageCount }, (_, k) => k)) {
+    const lines = mergedLines(doc.objects(i));
+    lines.forEach((line, k) => {
+      const ms = fr.lineMatches(line, query, opts);
+      if (!ms.length) return;
+      const block = fr.editBlock(line), disp = line.text.replace(/­/g, '');
+      for (const m of ms) {
+        if (out.length >= MATCH_LIMIT) return;
+        out.push({ i, line: k, at: m.at, len: m.len, lineText: line.text, context: fr.context(disp, m.at, m.len), rect: matchRect(line, m.at, m.len), masked: m.masked, editable: !m.masked && !block, reason: m.masked ? '가린 자리' : block });
+      }
+    });
+  }
+  return out;
+}
+// 바꾸기: target이 있으면 그 일치 하나({ i, line, at, lineText }), 없으면 문서 전체. 바꿀 줄마다 editRuns(조각별 모양 보존, 넘치면 그대로 둔다).
+// 같은 쪽을 여러 번 고치므로 고칠 때마다 줄을 다시 묶고(번호가 바뀐다), 앞서 쓴 객체 번호(written)는 지운 객체만큼 당긴다.
+// 반환 { count, pages:[쪽], written: { [i]: [{ idx, text }] }, skipped: [{ i, context, reason }] }
+function replaceInDoc(doc, query, replacement, opts = {}, target = null) {
+  if (!String(query || '')) throw Object.assign(new Error('찾을 말을 넣으세요.'), { status: 400 });
+  if (typeof replacement !== 'string' || replacement.length > 2000 || /[\r\n]/.test(replacement)) throw Object.assign(new Error('바꿀 말은 한 줄(2,000자 이하)로 넣으세요.'), { status: 400 });
+  const written = {}, skipped = [], pages = new Set();
+  let count = 0;
+  const editLine = (i, line, ms) => {
+    const disp = line.text.replace(/­/g, ''), newText = fr.applyReplace(disp, ms, replacement);
+    const r = editRuns(doc, i, { lines: [runLineOf(line)], oldText: line.text, newText, mode: 'none' });
+    const gone = r.removed || [];
+    const kept = (written[i] || []).filter((w) => !gone.includes(w.idx)).map((w) => ({ ...w, idx: w.idx - gone.filter((g) => g < w.idx).length }));
+    written[i] = [...kept, ...(r.written || [])];
+    count += ms.length; pages.add(i);
+    return r;
+  };
+  const pageList = target ? [target.i] : Array.from({ length: doc.pageCount }, (_, k) => k);
+  for (const i of pageList) {
+    if (!Number.isInteger(i) || i < 0 || i >= doc.pageCount) throw Object.assign(new Error('쪽 번호가 잘못됐습니다.'), { status: 400 });
+    let lines = mergedLines(doc.objects(i));
+    if (target) {
+      const k = Number.isInteger(target.line) && lines[target.line]?.text === target.lineText ? target.line : lines.findIndex((L) => L.text === target.lineText);
+      const m = k >= 0 ? fr.lineMatches(lines[k], query, opts).find((x) => x.at === target.at) : null;
+      if (!m) throw Object.assign(new Error('문서가 바뀌었습니다. 다시 찾으세요.'), { status: 409 });
+      const block = m.masked ? '가린 자리' : fr.editBlock(lines[k]);
+      if (block) throw Object.assign(new Error(`이 자리는 바꿀 수 없습니다(${block}).`), { status: 400 });
+      editLine(i, lines[k], [m]);
+      break;
+    }
+    for (let k = 0; k < lines.length; k++) {
+      const line = lines[k], ms = fr.lineMatches(line, query, opts);
+      if (!ms.length) continue;
+      const disp = line.text.replace(/­/g, ''), block = fr.editBlock(line);
+      for (const m of ms) if (m.masked || block) skipped.push({ i, context: fr.context(disp, m.at, m.len), reason: m.masked ? '가린 자리' : block });
+      const ok = block ? [] : ms.filter((m) => !m.masked);
+      if (!ok.length) continue;
+      const r = editLine(i, line, ok);
+      lines = mergedLines(doc.objects(i));
+      const nk = lines.findIndex((L) => L.objs.some((o) => (r.lineIdxs || []).includes(o.idx)));
+      if (nk >= 0) k = Math.max(k, nk); // 고친 줄 다음부터(묶음이 바뀌어도 앞으로만 간다)
+    }
+  }
+  // 밑줄·취소선 선을 고친 쪽마다 다시 그린다(written 번호도 함께 고친다)
+  for (const i of pages) written[i] = syncDecoAfter(doc, i, { written: written[i] || [] }).written;
+  return { count, pages: [...pages], written, skipped };
+}
+
+module.exports = { applyEdits, verifyEdits, maskParts, mergeLineCovers, normalizeParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc };

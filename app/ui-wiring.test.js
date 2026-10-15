@@ -233,7 +233,7 @@ console.log('OK — CRLF Markdown·여러 조각 줄 폰트 맞추기 단언 통
 
 // 2026-10-15 2단계(줄 묶기): 글꼴·색이 섞인 줄은 상자 하나, 조각별 편집·문단 선택·객체 안 부분(15d)
 assert.match(script, /const groupLines = \(objs\) => window\.groupLines\(objs, \{ mergeStyledRuns: true \}\)/, '화면 상자는 스타일 조각을 합친 줄 하나');
-assert.match(script, /pdfMutate\('\/api\/pdf\/edit-runs', \{ name, i, lines: sel\.para \? sel\.para\.map\(\(m\) => runLine\(m\.line\)\) : \[runLine\(sel\.line\)\]/, '문단·조각별 편집은 /api/pdf/edit-runs 한 번(실행 취소 한 번)');
+assert.match(script, /mutateWithOverflow\('\/api\/pdf\/edit-runs', \{ name, i, lines: sel\.para \? sel\.para\.map\(\(m\) => runLine\(m\.line\)\) : \[runLine\(sel\.line\)\]/, '문단·조각별 편집은 /api/pdf/edit-runs 한 번(실행 취소 한 번) — v6: 쪽 아래로 넘치면 묻고 다시 보낸다');
 assert.match(script, /if \(sel\.para \|\| \(sel\.line && needsRunEdit\(sel\.line\)\)\)/, '여러 모양 줄·부분 객체·문단만 조각별 편집, 나머지는 예전 경로');
 assert.match(script, /box\.ondblclick = \(e\) => \{[^}]*selectParagraph\(i, line, wrap\)/, '두 번 클릭 = 문단 선택');
 assert.match(script, /e && \(e\.ctrlKey \|\| e\.metaKey\) \? \(clearMulti\(\), selectParagraph\(i, line, wrap\)\)/, 'Ctrl+클릭 = 문단 선택');
@@ -777,5 +777,90 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.match(fnBodyOf(scriptLF, 'function redactAreaNote(pg)'), /if \(pg\.unmapped > 0\) parts\.push\('일부 내용\(양식 개체 안\)은 덮기만 했습니다'\)/, '양식 개체 안 내용은 덮기만 했다고 알린다');
   assert.match(scriptLF, /redact: '가릴 곳을 끌어서 감싸세요 — 그 안의 글자·그림은 파일에서 지워집니다/, '가리기 사용법: 안의 내용을 지운다');
   console.log('OK — P9 리본·주석·목차·보안·워터마크·쪽 목록 끌기 단언 통과');
+}
+// v6 Wave A: 쪽 위 편집기(순수 계산 · 한글 조합) · 찾아 바꾸기 계산 · 속성 창·꾸밈 막대·상자 테두리·Ctrl+H 배선
+{
+  const IE = require('./inplace-edit');
+  const FR = require('./find-replace');
+  // A. 키 처리: 한글 조합 중(isComposing·keyCode 229·조합 시작~끝)에는 Enter·Ctrl+Enter·Esc를 처리하지 않는다
+  assert.strictEqual(IE.keyAction({ key: 'Enter', isComposing: true }), null, '조합 중 Enter는 글자 확정 — 줄바꿈·적용 안 함');
+  assert.strictEqual(IE.keyAction({ key: 'Enter', keyCode: 229 }), null, 'keyCode 229(IME 처리 중)도 무시');
+  assert.strictEqual(IE.keyAction({ key: 'Enter', ctrlKey: true }, true), null, '조합 상태 표시(compositionstart~end) 중 Ctrl+Enter도 무시');
+  assert.strictEqual(IE.keyAction({ key: 'Escape', isComposing: true }), null, '조합 중 Esc는 조합 취소일 뿐 편집기를 닫지 않는다');
+  assert.strictEqual(IE.keyAction({ key: 'Enter', ctrlKey: true }), 'apply');
+  assert.strictEqual(IE.keyAction({ key: 'Enter', metaKey: true }), 'apply');
+  assert.strictEqual(IE.keyAction({ key: 'Enter' }), 'hardBreak');
+  assert.strictEqual(IE.keyAction({ key: 'Enter', shiftKey: true }), 'hardBreak');
+  assert.strictEqual(IE.keyAction({ key: 'Escape' }), 'cancel');
+  assert.strictEqual(IE.keyAction({ key: 'b', code: 'KeyB', ctrlKey: true }), 'bold');
+  assert.strictEqual(IE.keyAction({ key: 'ㅠ', code: 'KeyB', ctrlKey: true }), 'bold', '한글 입력 상태에서도 e.code로');
+  assert.strictEqual(IE.keyAction({ key: 'a' }), null);
+  // B. 편집기 DOM → 글: 옛 줄 경계(data-raw "\n")·가린 자리(data-raw "■")·↵ 표시(.hb, 글 아님)·BR·DIV·폭 없는 공백
+  const T = (v) => ({ nodeType: 3, nodeValue: v });
+  const E = (tag, kids = [], { raw, cls = [] } = {}) => ({ nodeType: 1, tagName: tag, childNodes: kids, dataset: raw == null ? {} : { raw }, classList: { contains: (c) => cls.includes(c) } });
+  const hb = E('SPAN', [T('↵')], { cls: ['hb'] }), soft = E('SPAN', [T(' ')], { raw: '\n', cls: ['soft'] });
+  const root = E('DIV', [E('SPAN', [T('굵은 ')]), E('SPAN', [T('글씨')]), soft, E('SPAN', [T('다음')]), E('SPAN', [T('■■')], { raw: '■■' }), hb, T('\n​'), T('끝'), E('BR'), E('DIV', [T('줄')]), E('SPAN', [T('↵')], { cls: ['hb', 'end'] })]);
+  assert.strictEqual(IE.extractText(root), '굵은 글씨\n다음■■\n끝\n줄', 'BR 뒤 DIV는 줄바꿈을 겹치지 않는다');
+  assert.strictEqual(IE.textOffset(root, root.childNodes[1].childNodes[0], 1), 4, 'DOM 위치 → 글 위치(앞 span 3글자 + 1)');
+  assert.strictEqual(IE.textOffset(root, root.childNodes[3].childNodes[0], 0), 6, '옛 줄 경계(1글자) 뒤');
+  assert.strictEqual(IE.textOffset(root, root.childNodes[6], 2), 11, '↵ 표시는 0글자, 폭 없는 공백은 빼고 센다');
+  // C. 줄 → 편집기 조각: 모양이 같으면 합치고, 한글이 꽉 찬 줄의 경계는 빈칸 없이, 가린 자리는 고칠 수 없는 조각
+  const obj = (text, x, extra = {}) => ({ text, font: 'BAAAAA+MalgunGothic', size: 11, scaledSize: 11, color: [0, 0, 0, 255], matrix: [1, 0, 0, 1, x, 100], origin: { x, y: 100 }, renderMode: 0, weight: 400, ...extra });
+  const L1 = { text: '가나다라', objs: [obj('가나', 0), obj('다라', 22, { font: 'CAAAAA+MalgunGothicBold', weight: 700 })], seps: [''], bounds: { x0: 0, x1: 100, y0: 98, y1: 110 }, size: 11 };
+  const L2 = { text: '마바 ■ 사', objs: [obj('마바', 0, { origin: { x: 0, y: 86 } }), obj('사', 40, { origin: { x: 40, y: 86 }, color: [204, 0, 0, 255], style: { u: '1' } })], seps: [' ■ '], bounds: { x0: 0, x1: 50, y0: 84, y1: 96 }, size: 11 };
+  const segs = IE.segmentsFor([L1, L2]);
+  assert.deepStrictEqual(segs.map((g) => g.t), ['text', 'text', 'soft', 'text', 'mask', 'text']);
+  assert.strictEqual(segs[1].style.bold, true); assert.strictEqual(segs[2].show, '', '한글이 꽉 찬 줄 경계는 빈칸 없이 잇는다');
+  assert.strictEqual(segs[4].raw, ' ■ '); assert.ok(segs[5].style.underline && segs[5].style.color === '#cc0000');
+  const shown = segs.map((g) => (g.t === 'text' ? g.text : g.raw)).join('');
+  assert.strictEqual(shown, '가나다라\n마바 ■ 사', '편집기 글 = 서버가 받는 줄 글(문단은 줄 사이 \\n)');
+  // D. 다시 흐른 뒤 위치 옮기기 · 속성 창 상태
+  assert.strictEqual(IE.mapOffset('ab cd\nef', 'ab\ncd ef', 3, 'start'), 3); assert.strictEqual(IE.mapOffset('ab cd\nef', 'ab\ncd ef', 5, 'end'), 5);
+  const st = IE.styleAt([L1, L2], 2, 4);
+  assert.ok(st.bold && !st.underline && st.color === '#000000', JSON.stringify(st));
+  assert.ok(IE.styleAt([L1, L2], 0, 4).bold === false, '섞이면 모두 그럴 때만 켜짐');
+  assert.ok(IE.styleAt([L1, L2], 10, 11).underline, '둘째 줄 밑줄 글자');
+  // E. 찾아 바꾸기 계산: 대소문자·단어 단위·가린 자리·겹치지 않게
+  assert.deepStrictEqual(FR.findAll('Mix mix MIX', 'mix'), [0, 4, 8]);
+  assert.deepStrictEqual(FR.findAll('Mix mix MIX', 'mix', { matchCase: true }), [4]);
+  assert.deepStrictEqual(FR.findAll('회의 회의는 회의', '회의', { wholeWord: true }), [0, 7]);
+  assert.deepStrictEqual(FR.findAll('aaaa', 'aa'), [0, 2], '겹치는 일치는 건너뛴다');
+  const ml = FR.lineMatches({ text: '이름 ■■ 이름', objs: [{ text: '이름' }, { text: '이름' }], seps: [' ■■ '] }, '■');
+  assert.ok(ml.length === 2 && ml.every((m) => m.masked), '가린 자리 일치는 masked');
+  assert.strictEqual(FR.applyReplace('회의 회의록', [{ at: 0, len: 2 }, { at: 3, len: 2 }], '모임'), '모임 모임록');
+  assert.strictEqual(FR.editBlock({ objs: [{ hidden: true }] }), '그림 위 투명 글자');
+  // F. 화면 배선
+  const s = script.replace(/\r\n/g, '\n');
+  assert.match(html, /<script src="\/inplace-edit\.js"><\/script>/); assert.match(html, /<script src="\/find-replace\.js"><\/script>/);
+  assert.match(serverSource, /'\/inplace-edit\.js' \|\| url\.pathname === '\/find-replace\.js'/, '서버가 두 스크립트를 내준다');
+  assert.match(html, /<section class="propPanel" id="propPanel"/, '오른쪽 속성 창');
+  for (const id of ['ppFont', 'ppSize', 'ppColor', 'pp-bold', 'pp-italic', 'pp-underline', 'pp-strike', 'pp-super', 'pp-sub', 'ppAlign', 'ppPitch', 'ppTracking', 'ppFontFit', 'ppMaskSel', 'ppMaskAll', 'ppPara']) assert.match(html, new RegExp(`id="${id}"`), `속성 창 ${id}`);
+  assert.match(html, /\.workarea\.withProps\{grid-template-columns:212px 1fr 264px\}/, '속성 창은 문서 영역 옆 칸 — 쪽을 덮지 않는다');
+  assert.match(html, /@media \(max-width:1180px\)\{\.workarea\.withProps[^}]*\}\.propPanel\{display:none!important\}/, '1180px 이하는 속성 창을 숨긴다');
+  assert.match(s, /const canInPlace = \(sel\) => !narrowUI\(\) && /, '좁은 창은 떠 있는 줄 고치기 창(예전 방식)');
+  assert.match(s, /return openInlineEditor\(initialText \?\? selectedObj\.shown, caret\);/, '쪽 위 편집기를 못 쓰면 떠 있는 창');
+  assert.match(s, /tx\.addEventListener\('compositionstart', \(\) => \{ st\.composing = true;/, '한글 조합 시작을 기억');
+  assert.match(s, /const act = IE\.keyAction\(e, st\.composing\);/, '키는 keyAction(조합 중 무시)');
+  assert.match(s, /if \(st\.composing \|\| e\.isComposing\) return;\n    if \(e\.inputType === 'insertParagraph'/, '조합 중에는 줄바꿈 입력을 가로채지 않는다');
+  assert.match(fnBodyOf(s, 'function openInPlaceEditor('), /el\.onOutside = \(\) => \(st\.dirty\(\) \? commit\(\) : close\(\)\);/, '바깥 누르기: 고쳤으면 적용');
+  assert.match(fnBodyOf(s, 'function openInPlaceEditor('), /await whenComposed\(\);\n    const newText = IE\.extractText\(tx\);/, '적용은 조합이 끝난 뒤 글을 읽는다');
+  assert.match(s, /mutateWithOverflow\('\/api\/pdf\/edit-runs', req\)/, '쪽 위 편집 적용 = edit-runs 한 번');
+  assert.match(s, /pushDown: true/, '아래 내용 밀기');
+  assert.match(s, /mutateWithOverflow\('\/api\/pdf\/style-runs', req\)/, '모양 바꾸기 = style-runs 한 번');
+  assert.match(s, /if \(error\.data\?\.overflow && !payload\.overflow\)/, '넘치면 묻는다(줄여 맞추기·겹쳐 두기)');
+  assert.match(html, /id="overflowDialog"/); assert.match(html, /id="ofShrink"/); assert.match(html, /id="ofKeep"/);
+  assert.match(html, /id="miniBar"/); assert.match(s, /function placeMiniBar\(st, range\)/, '고른 글자 위 작은 꾸밈 막대');
+  assert.match(s, /if \(st\.composing \|\| range\.collapsed \|\| st\.committing\) \{ bar\.hidden = true; return; \}/, '조합 중에는 꾸밈 막대를 숨긴다');
+  assert.match(html, /id="outlineToggle"/); assert.match(s, /localStorage\.setItem\('retextpdf\.outlines'/, '상자 테두리는 기억한다');
+  assert.match(html, /\.pdf\.showOutlines \.pdfBox/, '테두리 CSS');
+  assert.match(html, /id="replaceBtn"[^>]*><span class="tl">바꾸기</, '홈 [바꾸기]');
+  assert.ok(html.indexOf('id="searchToggle"') < html.indexOf('id="replaceBtn"') && html.indexOf('id="replaceBtn"') < html.indexOf('id="helpBtn"'), '[찾기] 옆');
+  assert.match(s, /e\.code === 'KeyH' && pdfOpen\(\)\) \{ e\.preventDefault\(\); openReplaceDialog\(\); \}/, 'Ctrl+H');
+  assert.match(s, /\{ group: '편집', keys: 'Ctrl\+H', label: '찾아 바꾸기/, '단축키 도움말');
+  for (const id of ['rpFind', 'rpWith', 'rpCase', 'rpWord', 'rpOne', 'rpAll', 'rpSkipped']) assert.match(html, new RegExp(`id="${id}"`), `찾아 바꾸기 ${id}`);
+  assert.match(s, /apiPost\('\/api\/pdf\/replace', \{ \.\.\.q, dryRun: true \}/, '찾기는 dryRun');
+  assert.match(serverSource, /url\.pathname === '\/api\/pdf\/style-runs'/); assert.match(serverSource, /url\.pathname === '\/api\/pdf\/replace'/);
+  assert.match(s, /document\.activeElement\?\.isContentEditable\) return;/, '쪽 위 편집기 안 Ctrl+Z는 글자 되돌리기(PDF 실행 취소 아님)');
+  console.log('OK — v6 Wave A 쪽 위 편집기(한글 조합·↵·DOM↔글)·찾아 바꾸기 계산·속성 창·꾸밈 막대·상자 테두리·Ctrl+H 단언 통과');
 }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }

@@ -31,7 +31,7 @@ const ROW_BASELINE_EPS = 0.2;
 const ANGLE_EPS_DEG = 1;
 // 위·아래 첨자: 본문보다 SUPSUB_SIZE_RATIO배 이하로 작고, 기준선 차(첨자 − 본문)가 본문 크기의 −SUPSUB_DROP ~ +SUPSUB_RAISE이며,
 // 본문 글자와 SUPSUB_ADJ_EM 안으로 붙어 있으면 본문 줄에 넣는다(실측 04-sup-sub.pdf: 위첨자 +0.36~+0.45, 아래첨자 −0.27, 크기 0.84배).
-const SUPSUB_SIZE_RATIO = 0.9, SUPSUB_RAISE = 0.6, SUPSUB_DROP = 0.45, SUPSUB_ADJ_EM = 0.25;
+const SUPSUB_SIZE_RATIO = 0.9, SUPSUB_RAISE = 0.6, SUPSUB_DROP = 0.45, SUPSUB_ADJ_EM = 0.25, SUPSUB_MARKED_ADJ_EM = 1.0;
 
 // ── 조각 잇기 판정(같은 행 안) ────────────────────────────────────────────────
 // 글자 크기 차이가 이 값(pt) 이상이면 다른 글자로 보고 잇지 않는다(20c: 12 vs 11.5pt는 같은 줄). 단 첨자·작은 대문자는 예외
@@ -167,7 +167,8 @@ function splitByAngle(items) {
 // 같은 방향의 조각들을 기준선(v)으로 행(줄)으로 나눈다. 위 → 아래 순서로 정렬한 뒤
 // 앞 항목(대표 기준선)과 같은 행이면 그 행에 넣고, 아니면 새 행을 연다. 그 다음 첨자를 본문 행에 붙인다.
 function splitIntoRows(items) {
-  const sorted = items.slice().sort((a, b) => geomOf(b).v - geomOf(a).v);
+  // 우리가 만든 첨자(v6 RetextPdfStyle sc)는 맨 뒤에 놓아 본문 행의 대표가 되지 않게 한다 — 첨자가 먼저 행을 열면 기준선이 가까운 큰 글자가 첨자 행으로 들어간다
+  const sorted = items.slice().sort((a, b) => (a.style?.sc ? 1 : 0) - (b.style?.sc ? 1 : 0) || geomOf(b).v - geomOf(a).v);
   const rows = [];
   for (const o of sorted) {
     const row = rows[rows.length - 1], g = geomOf(o);
@@ -192,7 +193,8 @@ function attachScripts(rows) {
         const host = rows.find((m) => m !== r && m.items.length && g.size <= SUPSUB_SIZE_RATIO * m.size && (() => {
           const d = (g.v - m.v) / m.size;
           if (d > SUPSUB_RAISE || d < -SUPSUB_DROP) return false;
-          const adj = SUPSUB_ADJ_EM * m.size;
+          // 우리가 첨자로 만든 글자(RetextPdfStyle sc — v6 글자 모양)는 첨자임을 알므로 낱말 사이 공백 하나쯤 떨어져 있어도 붙인다
+          const adj = (o.style?.sc ? SUPSUB_MARKED_ADJ_EM : SUPSUB_ADJ_EM) * m.size;
           return m.items.some((p) => { const q = geomOf(p); return q.hasInk && g.inkU0 <= q.inkU1 + adj && q.inkU0 <= g.inkU1 + adj; });
         })());
         if (!host) continue;
@@ -254,7 +256,8 @@ const insideMask = (o, nonText) => nonText.some((m) => m.mask && o.bounds.x0 >= 
 // ── 행의 글자 흐름과 통계 ──────────────────────────────────────────────────
 // 같은 글꼴이면 공백 조각을 줄의 공백으로 센다(전자계약 양식은 입력 칸 밑에 다른 글꼴의 넓은 공백 조각을 깐다 — 그건 세지 않는다)
 const baseName = (f) => String(f || '').replace(/^[A-Z]{6}\+/, '');
-const wsCounts = (w, a) => !!a && baseName(w.font) === baseName(a.font) && !!w.hidden === !!a.hidden;
+// 우리가 고쳐 쓴 글자(대체 글꼴 "Untitled"·설치 폰트 RetextPdfFont)는 원래 글꼴의 공백 조각 옆에 놓이므로 그 공백도 센다(v6 — 굵게 바꾼 낱말 뒤 공백이 칸 경계로 보이던 문제)
+const wsCounts = (w, a) => !!a && (baseName(w.font) === baseName(a.font) || !!a.fontId || baseName(a.font) === 'Untitled') && !!w.hidden === !!a.hidden;
 
 // 행의 조각들(u 순서)을 잉크 글자 흐름으로 펴고, 이웃 잉크 글자 사이 틈 목록을 만든다.
 //   gaps: [{ g(em), ws(사이 공백 글자 수), u0, u1(틈 구간), at(경계면 오른쪽 조각, 조각 안 틈이면 null) }]

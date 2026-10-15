@@ -219,6 +219,193 @@ async function stage2(dir, post, get) {
   console.log('stage2 runs/paragraph: OK — 조각별 모양 보존·조각 지우기·경계 삽입·15d 부분·문단 다시 흘리기·넘침(줄바꿈·축소)·실행 취소 원상');
 }
 
+// ── v6 Wave A: 고른 글자 모양 · 찾아 바꾸기 · 아래 내용 밀기 ─────────────────────────────
+async function v6(dir, post, get, hiddenBytes) {
+  const { styleRuns, syncDecoAfter } = require('./pdf-edit-service');
+  const c05 = fs.readFileSync(path.join(GDIR, '05-mixed-styles.pdf'));
+  const objsOf = (b, w, n = 0) => { let k = -1; for (let q = 0; q <= n; q++) k = b.text.indexOf(w, k + 1); let off = 0; return b.objs.filter((o, j) => { const s = off; off += o.text.length + (b.seps[j] || '').length; return s < k + w.length && s + o.text.length > k && o.text.trim(); }); };
+  const boldish = (o) => isBoldObj(o) || o.renderMode === 2 || /bold/i.test(o.fontLabel || '');
+  const sig = (os) => os.map((o) => `${o.font}|${o.fontLabel || ''}|${o.color.slice(0, 3)}|${o.renderMode}|${o.matrix.slice(0, 4).map((v) => v.toFixed(3))}`).join(' ');
+  const lineOf = (objs, start) => merged(objs).find((b) => b.text.startsWith(start));
+  const info = async (name) => (await fetch(`http://127.0.0.1:${process.env.RETEXTPDF_PORT}/api/pdf/info?${new URLSearchParams({ name })}`)).json().catch(() => ({}));
+  // ① 엔진·서비스: 여러 조각 줄 가운데 낱말에 굵게·빨강 / 기울임·밑줄 / 위첨자 / 취소선·크기 → 저장·다시 열어도 그대로
+  {
+    const doc = await open(c05);
+    const run = (start, word, style, extra = {}) => {
+      const line = lineOf(doc.objects(0), start), from = line.text.indexOf(word);
+      assert.ok(from >= 0, `${word} in ${line.text}`);
+      const r = doc.batch(() => syncDecoAfter(doc, 0, styleRuns(doc, 0, { lines: [runLine(line)], oldText: line.text, from, to: from + word.length, style, ...extra })));
+      assert.ok(r.ok && r.styled > 0, JSON.stringify(r));
+      return r;
+    };
+    const L0 = lineOf(doc.objects(0), 'Mix of');
+    const keep = { Mix: sig(objsOf(L0, 'Mix')), italic: sig(objsOf(L0, 'italic')), blue: sig(objsOf(L0, 'blue')), ko: sig(lineOf(doc.objects(0), '이 문장').objs) };
+    const rb = run('Mix of', 'and', { bold: true, color: '#cc0000' });
+    let L = lineOf(doc.objects(0), 'Mix of');
+    assert.strictEqual(L.text, L0.text, '글은 그대로');
+    assert.ok(objsOf(L, 'and').every((o) => boldish(o) && o.color[0] === 204 && o.color[1] === 0), `고른 낱말만 굵게·빨강: ${sig(objsOf(L, 'and'))}`);
+    assert.ok(rb.faces.length || rb.fake.bold, '진짜 굵은 면(설치 폰트) 또는 흉내 굵게');
+    assert.strictEqual(sig(objsOf(L, 'Mix')), keep.Mix, '앞 조각 그대로'); assert.strictEqual(sig(objsOf(L, 'italic')), keep.italic, '기울임 조각 그대로');
+    assert.strictEqual(sig(objsOf(L, 'blue')), keep.blue, '파란 조각 모양 그대로');
+    assert.strictEqual(sig(lineOf(doc.objects(0), '이 문장').objs), keep.ko, '다른 줄 그대로');
+    const blueX0 = objsOf(L0, 'blue')[0].origin.x;
+    assert.ok(objsOf(L, 'blue')[0].origin.x >= blueX0 - 0.01, '굵어진 만큼 뒤 조각은 그 자리이거나 오른쪽');
+    run('이 문장', '섞여', { italic: true, underline: true });
+    const K = lineOf(doc.objects(0), '이 문장'), seok = objsOf(K, '섞여');
+    assert.ok(seok.every((o) => Math.abs(o.matrix[2] / o.matrix[0] - 0.2) < 0.01 && o.style?.fi && o.style?.u), `흉내 기울임 c=0.2a·밑줄 표시: ${JSON.stringify(seok.map((o) => [o.matrix, o.style]))}`);
+    const deco = doc.objects(0).filter((o) => o.deco);
+    assert.ok(deco.some((d) => d.bounds.x0 <= seok[0].glyphs[0][0] + 0.5 && d.bounds.x1 >= seok[1].glyphs[0][0] && d.bounds.y1 < seok[0].origin.y), `밑줄 선이 그 낱말 아래: ${JSON.stringify(deco.map((d) => d.bounds))}`);
+    const blue0 = objsOf(lineOf(doc.objects(0), 'Mix of'), 'blue');
+    run('Mix of', 'blue', { script: 'super' });
+    L = lineOf(doc.objects(0), 'Mix of');
+    assert.ok(L.text.includes('blue words'), `위첨자도 같은 줄: ${L.text}`);
+    objsOf(L, 'blue').forEach((o, k) => {
+      assert.ok(Math.abs(o.scaledSize / blue0[k].scaledSize - 0.65) < 0.01, '위첨자 0.65배');
+      assert.ok(Math.abs((o.origin.y - blue0[k].origin.y) / blue0[k].scaledSize - 0.33) < 0.01, '기준선 +0.33em');
+    });
+    run('Mix of', 'words', { strike: true, size: 13 });
+    L = lineOf(doc.objects(0), 'Mix of');
+    assert.ok(objsOf(L, 'words').every((o) => Math.abs(o.scaledSize - 13) < 0.05 && o.style?.s), '취소선 표시·13pt');
+    assert.strictEqual(doc.objects(0).filter((o) => o.deco).length, 2, '밑줄 선 1 + 취소선 선 1');
+    const re = await open(doc.save()); doc.close();
+    const R = lineOf(re.objects(0), 'Mix of'), RK = lineOf(re.objects(0), '이 문장');
+    assert.strictEqual(R.text, L.text, '저장·다시 열어도 글 그대로');
+    assert.ok(objsOf(R, 'and').every((o) => boldish(o) && o.color[0] === 204), '저장 뒤에도 굵게·빨강');
+    assert.ok(objsOf(RK, '섞여').every((o) => o.style?.u && o.style?.fi), '저장 뒤에도 밑줄·기울임 표시');
+    assert.ok(objsOf(R, 'blue').every((o) => o.style?.sc === 'sup'), '저장 뒤에도 위첨자 표시');
+    assert.strictEqual(re.objects(0).filter((o) => o.deco).length, 2, '저장 뒤에도 선 2개');
+    // 다시 열린 문서에서 밑줄 낱말 글을 고쳐도 선이 따라온다(조각별 편집 → syncDeco)
+    const r2 = re.batch(() => syncDecoAfter(re, 0, editRuns(re, 0, { lines: [runLine(RK)], oldText: RK.text, newText: RK.text.replace('기울임', '기울임 글씨'), mode: 'none' })));
+    assert.ok(r2.ok);
+    const RK2 = lineOf(re.objects(0), '이 문장'), u2 = objsOf(RK2, '섞여'), d2 = re.objects(0).filter((o) => o.deco && o.bounds.y1 < u2[0].origin.y && o.bounds.y1 > u2[0].origin.y - 5);
+    assert.ok(d2.length === 1 && Math.abs(d2[0].bounds.x0 - u2[0].glyphs[0][0]) < 0.6, `밑줄이 옮겨진 낱말을 따라간다: ${JSON.stringify(d2.map((d) => d.bounds))} vs ${u2[0].glyphs[0][0]}`);
+    re.close();
+    // 첨자 끄기 · 굵게 끄기는 원래대로
+    const d3 = await open(c05);
+    const M = lineOf(d3.objects(0), 'Mix of'), beforeSig = sig(M.objs.filter((o) => o.text.trim()));
+    const f = M.text.indexOf('blue');
+    d3.batch(() => styleRuns(d3, 0, { lines: [runLine(M)], oldText: M.text, from: f, to: f + 4, style: { script: 'sub' } }));
+    const M2 = lineOf(d3.objects(0), 'Mix of');
+    d3.batch(() => styleRuns(d3, 0, { lines: [runLine(M2)], oldText: M2.text, from: f, to: f + 4, style: { script: null } }));
+    const M3 = lineOf(d3.objects(0), 'Mix of');
+    assert.ok(objsOf(M3, 'blue').every((o, k) => Math.abs(o.scaledSize - objsOf(M, 'blue')[k].scaledSize) < 0.01 && Math.abs(o.origin.y - objsOf(M, 'blue')[k].origin.y) < 0.01), '첨자를 끄면 크기·기준선이 돌아온다');
+    assert.ok(beforeSig.length > 0);
+    d3.close();
+  }
+  // ② 서버: 모양 바꾸기 한 번 = 실행 취소 한 번, 네 번 되돌리면 객체가 원상
+  {
+    const name = path.join(dir, 'v6-style.pdf'); fs.writeFileSync(name, c05);
+    const before = await get('/api/pdf/objects', name);
+    const steps = [['Mix of', 'and', { bold: true, color: '#cc0000' }], ['이 문장', '섞여', { italic: true, underline: true }], ['Mix of', 'blue', { script: 'super' }], ['Mix of', 'words', { strike: true, size: 13 }]];
+    for (const [k, [start, word, style]] of steps.entries()) {
+      const line = lineOf(await get('/api/pdf/objects', name), start), from = line.text.indexOf(word);
+      const r = await post('/api/pdf/style-runs', { name, i: 0, lines: [runLine(line)], oldText: line.text, from, to: from + word.length, style });
+      assert.strictEqual(r.status, 200, JSON.stringify(r));
+      assert.strictEqual(r.undoLeft, k + 1, '모양 바꾸기 한 번 = 실행 취소 한 번');
+    }
+    // 진짜 가리기는 모양을 바꾼 글자(설치 폰트 굵은 면·흉내 기울임·첨자)에서도 글자를 지운다
+    const partsFor = (b, w) => { const k = b.text.indexOf(w); let off = 0; const parts = []; b.objs.forEach((o, j) => { const s0 = off; off += o.text.length + (b.seps[j] || '').length; const a = Math.max(k, s0), e = Math.min(k + w.length, s0 + o.text.length); if (a < e) parts.push({ idx: o.idx, from: a - s0 + (o.partFrom || 0), to: e - s0 + (o.partFrom || 0) }); }); return parts; };
+    const cur = await get('/api/pdf/objects', name);
+    const mk = await post('/api/pdf/mask', { name, i: 0, parts: [...partsFor(lineOf(cur, 'Mix of'), 'and'), ...partsFor(lineOf(cur, 'Mix of'), 'blue')] });
+    assert.ok(mk.ok && !/and|blue/.test(mk.textLeft), `굵게·첨자 글자도 지워진다: ${mk.textLeft}`);
+    const mk2 = await post('/api/pdf/mask', { name, i: 0, parts: partsFor(lineOf(await get('/api/pdf/objects', name), '이 문장'), '섞여') });
+    assert.ok(mk2.ok && !mk2.textLeft.includes('섞여'), '기울임·밑줄 글자도 지워진다');
+    await post('/api/pdf/undo', { name }); await post('/api/pdf/undo', { name });
+    for (let k = 0; k < steps.length; k++) await post('/api/pdf/undo', { name });
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before, '네 번 되돌리면 글·위치·글꼴·색·선 모두 원상');
+    // 낡은 줄로 보내면 거절하고 문서는 그대로
+    const line = lineOf(before, 'Mix of');
+    const bad = await post('/api/pdf/style-runs', { name, i: 0, lines: [runLine(line)], oldText: line.text + 'x', from: 0, to: 3, style: { bold: true } });
+    assert.notStrictEqual(bad.status, 200);
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before);
+  }
+  // ③ 찾아 바꾸기: 여러 모양 줄의 한국어 낱말 · 모두 바꾸기 한 번 = 실행 취소 한 번 · 대소문자·단어 단위 · 가린 자리·투명 글자는 건너뛴다
+  {
+    const name = path.join(dir, 'v6-replace.pdf'); fs.writeFileSync(name, c05);
+    const before = await get('/api/pdf/objects', name);
+    const dry = await post('/api/pdf/replace', { name, query: '글씨', dryRun: true });
+    assert.strictEqual(dry.total, 2); assert.strictEqual(dry.editable, 2);
+    assert.ok(dry.matches.every((m) => m.rect && m.rect.x1 > m.rect.x0), '일치마다 쪽 위 사각형');
+    assert.strictEqual((await post('/api/pdf/replace', { name, query: '글씨', wholeWord: true, dryRun: true })).total, 0, '단어 단위: "글씨와"·"글씨가"는 빠진다');
+    assert.strictEqual((await post('/api/pdf/replace', { name, query: 'mix', dryRun: true })).total, 1, '대소문자 무시');
+    assert.strictEqual((await post('/api/pdf/replace', { name, query: 'mix', matchCase: true, dryRun: true })).total, 0, '대소문자 구분');
+    const r = await post('/api/pdf/replace', { name, query: '글씨', replacement: '글자' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r));
+    assert.ok(r.ok && r.count === 2 && r.undoLeft === 1, `모두 바꾸기 = 실행 취소 한 번: ${JSON.stringify(r)}`);
+    const K = lineOf(await get('/api/pdf/objects', name), '이 문장');
+    assert.strictEqual(K.text, '이 문장에는 굵은 글자와 기울임, 빨간 글자가 섞여 있습니다.');
+    assert.ok(objsOf(K, '굵은 글자').every(boldish), '굵은 조각은 굵게');
+    assert.ok(objsOf(K, '빨간 글자').every((o) => o.color[0] > 150 && o.color[1] < 60), '빨간 조각은 빨강');
+    await post('/api/pdf/undo', { name });
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before, '한 번 되돌리면 원상');
+    // 다음 바꾸기(하나): 두 번째 일치만
+    const m2 = dry.matches[1];
+    const one = await post('/api/pdf/replace', { name, query: '글씨', replacement: '글자', target: { i: m2.i, line: m2.line, at: m2.at, lineText: m2.lineText } });
+    assert.ok(one.ok && one.count === 1, JSON.stringify(one));
+    assert.strictEqual(lineOf(await get('/api/pdf/objects', name), '이 문장').text, '이 문장에는 굵은 글씨와 기울임, 빨간 글자가 섞여 있습니다.');
+    // 가린 자리: "기울임"을 가리면 줄에 ■가 생긴다 — ■는 찾아도 바꾸지 않고 문서·실행 취소 기록도 그대로
+    const K2 = lineOf(await get('/api/pdf/objects', name), '이 문장'), at = K2.text.indexOf('기울임');
+    const mk = await post('/api/pdf/mask', { name, i: 0, parts: (() => { let off = 0; const parts = []; K2.objs.forEach((o, j) => { const s = off; off += o.text.length + (K2.seps[j] || '').length; const a = Math.max(at, s), b = Math.min(at + 3, s + o.text.length); if (a < b) parts.push({ idx: o.idx, from: a - s + (o.partFrom || 0), to: b - s + (o.partFrom || 0) }); }); return parts; })() });
+    assert.ok(mk.ok, JSON.stringify(mk));
+    const masked = await post('/api/pdf/replace', { name, query: '■', dryRun: true });
+    assert.ok(masked.total > 0 && masked.matches.every((m) => m.masked && !m.editable && m.reason === '가린 자리'), JSON.stringify(masked.matches));
+    const infoBefore = await info(name), objsBefore = await get('/api/pdf/objects', name);
+    const none = await post('/api/pdf/replace', { name, query: '■', replacement: 'X' });
+    assert.ok(none.ok === false && none.count === 0 && none.skipped.every((s) => s.reason === '가린 자리'), JSON.stringify(none));
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), objsBefore); assert.strictEqual((await info(name)).undoLeft, infoBefore.undoLeft, '바꿀 것이 없으면 실행 취소 기록도 없다');
+    // 투명 글자(그림 위 글자)는 바꿀 수 없다고 알린다
+    const hname = path.join(dir, 'v6-hidden.pdf'); fs.writeFileSync(hname, hiddenBytes);
+    const hid = await post('/api/pdf/replace', { name: hname, query: 'BBB', dryRun: true });
+    assert.ok(hid.total === 1 && !hid.matches[0].editable && hid.matches[0].reason === '그림 위 투명 글자', JSON.stringify(hid.matches));
+  }
+  // ④ 아래 내용 밀기: 문단이 한 줄 늘면 같은 단의 아래 내용이 줄 간격만큼 내려간다(위·다른 단은 그대로). 쪽 아래로 넘치면 409로 묻는다
+  {
+    const name = path.join(dir, 'v6-push.pdf'); fs.writeFileSync(name, fs.readFileSync(path.join(__dirname, '..', 'workspace', '독서모임_안내.pdf')));
+    const before = await get('/api/pdf/objects', name), B = merged(before), y0 = (L, t) => L.find((b) => b.text.startsWith(t)).bounds.y0;
+    const para = groupParagraphs(B).find((p) => p.text.startsWith('『어린'));
+    const pitch = para.boxes[0].objs[0].origin.y - para.boxes[1].objs[0].origin.y;
+    const newText = para.text.replace('나눕니다.', '나눕니다. 책을 읽고 느낀 점을 자유롭게 이야기하고, 다음 모임에서 함께 읽을 책 후보도 두세 권씩 가져와 주세요. 한 줄이 더 늘어나도록 덧붙인 문장입니다.');
+    const r = await post('/api/pdf/edit-runs', { name, i: 0, paragraph: true, lines: para.boxes.map(runLine), oldText: para.text, newText, pushDown: true });
+    assert.strictEqual(r.status, 200, JSON.stringify(r));
+    assert.ok(r.addedLines === 1 && r.pushed?.moved > 0 && r.undoLeft === 1, JSON.stringify({ added: r.addedLines, pushed: r.pushed }));
+    const A = merged(await get('/api/pdf/objects', name));
+    for (const t of ['진행 순서', '2:00', '준비물', '참고', '모임 사진']) assert.ok(Math.abs(y0(A, t) - y0(B, t) + pitch) < 0.6, `${t}: ${y0(A, t) - y0(B, t)} ≈ −${pitch}`);
+    for (const t of ['10월 독서', '이번 달 책', '일시:']) assert.ok(Math.abs(y0(A, t) - y0(B, t)) < 0.01, `${t}: 위 내용은 그대로`);
+    await post('/api/pdf/undo', { name });
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before, '실행 취소 한 번에 밀린 내용까지 원상');
+    // 넘침: 아래 내용을 쪽 밖으로 밀어야 하면 409(overflow) — 문서·실행 취소 기록 그대로. keep = 밀지 않음, shrink = 글자를 줄여 맞춘다
+    const P2 = groupParagraphs(B).find((p) => p.text.startsWith('읽은 책과'));
+    const huge = P2.text + ' ' + '모임 전에 미리 책을 읽어 오시면 이야기가 훨씬 풍성해집니다. '.repeat(30);
+    const req = { name, i: 0, paragraph: true, lines: P2.boxes.map(runLine), oldText: P2.text, newText: huge, pushDown: true };
+    const of = await post('/api/pdf/edit-runs', req);
+    assert.ok(of.status === 409 && of.overflow === true && of.growth > of.room, JSON.stringify(of));
+    assert.deepStrictEqual(await get('/api/pdf/objects', name), before, '넘치면 문서는 그대로');
+    assert.strictEqual((await info(name)).undoLeft, 0, '실행 취소 기록도 그대로');
+    const keep = await post('/api/pdf/edit-runs', { ...req, overflow: 'keep' });
+    assert.ok(keep.status === 200 && keep.pushed?.skipped === 'overflow', JSON.stringify(keep.pushed));
+    const cham = B.find((b) => b.text.startsWith('참고')).objs.find((o) => o.text.trim()).origin.y;
+    assert.ok((await get('/api/pdf/objects', name)).some((o) => o.text?.startsWith('참') && Math.abs(o.origin.y - cham) < 0.01), 'keep: 아래 내용은 그대로(겹침)');
+    await post('/api/pdf/undo', { name });
+    const shrink = await post('/api/pdf/edit-runs', { ...req, overflow: 'shrink' });
+    assert.ok(shrink.status === 200 && shrink.fontScale < 1 && shrink.pushed?.moved > 0 && shrink.undoLeft === 1, JSON.stringify({ s: shrink.status, f: shrink.fontScale, p: shrink.pushed, e: shrink.error }));
+    const S = await get('/api/pdf/objects', name);
+    assert.ok(S.filter((o) => o.type === 'text' && o.bounds).every((o) => o.bounds.y0 > 0), 'shrink: 모든 글자가 쪽 안');
+    // 두 단(08): 왼쪽 단 줄을 늘리면 왼쪽 단만 내려가고 오른쪽 단은 그대로
+    const n8 = path.join(dir, 'v6-cols.pdf'); fs.writeFileSync(n8, fs.readFileSync(path.join(GDIR, '08-two-columns.pdf')));
+    const b8 = merged(await get('/api/pdf/objects', n8)), left = b8.find((b) => b.text.startsWith('왼쪽 단의 첫째'));
+    const r8 = await post('/api/pdf/edit-runs', { name: n8, i: 0, lines: [runLine(left)], oldText: left.text, newText: left.text + ' 그리고 길게 늘려서 왼쪽 단 안에서 다음 줄로 넘어가게 만든 문장', mode: 'wrap', box: { x0: left.bounds.x0, x1: left.bounds.x1 }, pushDown: true });
+    assert.strictEqual(r8.status, 200, JSON.stringify(r8));
+    const objs8 = await get('/api/pdf/objects', n8), gone = r8.removed || [];
+    // 옛 객체 번호 → 새 번호(지운 객체만큼 당겨진다). 줄마다 첫 글자 객체가 얼마나 내려갔나
+    const dyOf = (t) => { const o = b8.find((b) => b.text.startsWith(t)).objs.find((x) => x.text.trim()); const n = objs8[o.idx - gone.filter((g) => g < o.idx).length]; assert.strictEqual(n.text, o.text); return n.origin.y - o.origin.y; };
+    const d = dyOf('왼쪽 단의 둘째');
+    assert.ok(d < -10 && Math.abs(r8.pushed.dy - d) < 0.01, `왼쪽 단 아래가 내려간다: ${d}`);
+    for (const t of ['08b', 'Left column first', 'Left column second']) assert.ok(Math.abs(dyOf(t) - d) < 0.01, `${t}도 같은 만큼`);
+    for (const t of ['오른쪽 단의 첫째', '오른쪽 단의 둘째', 'Right column first', 'Right column second']) assert.ok(Math.abs(dyOf(t)) < 0.01, `${t}: 다른 단은 그대로`);
+  }
+  console.log('v6 Wave A: OK — 고른 글자 굵게·색·기울임·밑줄·위첨자·취소선·크기(저장·다시 열기·실행 취소 원상) · 찾아 바꾸기(모양 유지·한 번 되돌리기·가린 자리·투명 글자) · 아래 내용 밀기(단·넘침 409·keep·shrink)');
+}
+
 process.env.RETEXTPDF_PORT = '4861';
 const app = require('./server');
 
@@ -394,6 +581,7 @@ const app = require('./server');
       console.log(`mask covers: OK — 연락처 ${phone.length}조각 → 덮개 1개(높이 ${(cover.y1 - cover.y0).toFixed(2)}pt), 두 줄 → 2개`);
     }
     await stage2(dir, post, get);
+    await v6(dir, post, get, bytes);
     console.log('pdf edit transaction: OK');
   } finally {
     const absolute = path.resolve(dir), root = path.resolve(os.tmpdir()) + path.sep;

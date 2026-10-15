@@ -13,7 +13,7 @@ const pdfEngine = require('./pdf-engine');
 const pdfEncrypt = require('./pdf-encrypt');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
-const { applyEdits, verifyEdits, maskParts, redactRanges, redactArea, editRuns, verifyRuns } = require('./pdf-edit-service');
+const { applyEdits, verifyEdits, maskParts, redactRanges, redactArea, editRuns, verifyRuns, styleRuns, syncDecoAfter, findInDoc, replaceInDoc } = require('./pdf-edit-service');
 const pdfRewrite = require('./pdf-rewrite');
 const pii = require('./pii');
 const { parsePageRange } = require('./page-range');
@@ -183,6 +183,17 @@ async function textTransaction(entry, i, apply, verify) {
   entry.dirty = true;
   doc.close();
   return result;
+}
+// v6 넘침 줄이기: overflow:'shrink'면 글자 배율을 1부터 0.05씩 낮춰 가며(0.6까지) 아래 내용을 밀어도 쪽 안에 들어갈 때까지 다시 시도한다.
+// 시도마다 트랜잭션이 실패하면 문서를 되돌리므로 성공한 한 번만 실행 취소 스택에 남는다
+async function shrinkToFit(q, attempt) {
+  if (q.overflow !== 'shrink') return attempt({});
+  let last;
+  for (let s = 1; s >= 0.6 - 1e-9; s = Math.round((s - 0.05) * 100) / 100) {
+    try { return await attempt({ overflow: 'ask', fontScale: s }); }
+    catch (error) { if (!error.extra?.overflow) throw error; last = error; }
+  }
+  throw Object.assign(new Error('글자를 60%까지 줄여도 쪽 안에 들어가지 않습니다. 겹쳐 두거나 글을 줄이세요.'), { status: 409, extra: { overflow: true, ...(last?.extra || {}), exhausted: true } });
 }
 // undoTrimmed는 1회성: 한 번 실어 보낸 뒤 되돌린다(UI가 "오래된 실행 취소 기록을 버렸습니다"를 한 번만 알리게)
 const stacks = (entry) => {
@@ -425,7 +436,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
     if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
     // P9: 쪽 범위 해석기·목차 글 형식은 화면과 서버가 같은 파일을 쓴다(window.parsePageRange · window.parseOutlineText)
-    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
+    if (url.pathname === '/page-range.js' || url.pathname === '/outline-text.js' || url.pathname === '/inplace-edit.js' || url.pathname === '/find-replace.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, url.pathname.slice(1))).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION }); // 화면 머리줄의 앱 버전(#ver)이 읽는다
@@ -863,12 +874,44 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...result, lineIdxs: result.primaryResult.lineIdxs || [result.primaryResult.idx], ...stacks(entry) });
     }
     // 2단계: 글꼴·색이 섞인 줄(조각별 모양 보존)·문단 다시 흘리기·객체 안 부분(15d) 편집 — pdf-edit-service.editRuns. 한 요청 = 스냅샷 하나(실행 취소 한 번)
+    // v6: box(손잡이로 바꾼 폭·자리)·pushDown(아래 내용 밀기)·overflow('ask'|'keep'|'shrink')·align·pitch도 받는다. 밑줄·취소선 선은 같은 트랜잭션에서 다시 그린다
     if (url.pathname === '/api/pdf/edit-runs' && req.method === 'POST') {
       const q = await readJson(req);
       const entry = await getEditableDoc(q.name);
-      if (typeof q.oldText === 'string' && q.newText === q.oldText.replace(/­/g, '')) return json(res, 200, { ok: true, unchanged: true, lineIdxs: [], ...stacks(entry) });
-      const r = await textTransaction(entry, q.i, (doc) => editRuns(doc, q.i, q), (persisted, result) => verifyRuns(persisted, q.i, result));
+      const relayout = q.box || q.pitch || (q.paragraph && q.align && q.align !== 'left') || q.force;
+      if (!relayout && typeof q.oldText === 'string' && q.newText === q.oldText.replace(/­/g, '')) return json(res, 200, { ok: true, unchanged: true, lineIdxs: [], ...stacks(entry) });
+      const r = await shrinkToFit(q, (opts) => textTransaction(entry, q.i, (doc) => syncDecoAfter(doc, q.i, editRuns(doc, q.i, { ...q, ...opts })), (persisted, result) => verifyRuns(persisted, q.i, result)));
       return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    // v6: 고른 글자 모양(굵게·기울임·밑줄·취소선·첨자·글꼴·크기·색·자간)과 정렬·줄 간격 — pdf-edit-service.styleRuns. 한 요청 = 실행 취소 한 번
+    if (url.pathname === '/api/pdf/style-runs' && req.method === 'POST') {
+      const q = await readJson(req);
+      const entry = await getEditableDoc(q.name);
+      const r = await shrinkToFit(q, (opts) => textTransaction(entry, q.i, (doc) => syncDecoAfter(doc, q.i, styleRuns(doc, q.i, { ...q, ...opts })), (persisted, result) => verifyRuns(persisted, q.i, result)));
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    // v6 찾아 바꾸기(Ctrl+H): dryRun이면 일치 목록만(문서 그대로), 아니면 target 하나 또는 문서 전체를 한 트랜잭션으로(실행 취소 한 번).
+    // 줄마다 조각별 편집(모양 보존). 가린 자리·그림 위 투명 글자·묶음·회전 글자의 일치는 바꾸지 않고 skipped로 알린다
+    if (url.pathname === '/api/pdf/replace' && req.method === 'POST') {
+      const q = await readJson(req);
+      const query = String(q.query || '');
+      if (!query) return json(res, 400, { error: '찾을 말을 넣으세요' });
+      const opts = { matchCase: !!q.matchCase, wholeWord: !!q.wholeWord };
+      if (q.dryRun) {
+        const { doc } = await getPdfDoc(q.name);
+        const matches = findInDoc(doc, query, opts);
+        return json(res, 200, { matches, total: matches.length, editable: matches.filter((m) => m.editable).length });
+      }
+      const entry = await getEditableDoc(q.name);
+      const target = q.target && Number.isInteger(q.target.i) ? q.target : null;
+      // 바꿀 수 있는 일치가 없으면 트랜잭션 없이 알린다(실행 취소 기록이 헛되이 쌓이지 않게)
+      if (!target) {
+        const found = findInDoc(entry.doc, query, opts);
+        if (!found.some((m) => m.editable)) return json(res, 200, { ok: false, count: 0, pages: [], skipped: found.map((m) => ({ i: m.i, context: m.context, reason: m.reason })), ...stacks(entry) });
+      }
+      const r = await textTransaction(entry, target ? target.i : null, (doc) => replaceInDoc(doc, query, String(q.replacement ?? ''), opts, target),
+        (persisted, result) => { for (const i of result.pages) verifyRuns(persisted, i, { written: result.written[i] || [] }); });
+      return json(res, 200, { ok: r.count > 0, count: r.count, pages: r.pages, skipped: r.skipped, reloadAll: !target && r.pages.length > 1, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/group' && req.method === 'POST') { // 상자 묶기(id 생략→새 그룹) / 풀기(id:null)
       const { name, i, idxs, id } = await readJson(req);
@@ -895,7 +938,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/move' && req.method === 'POST') {
       const { name, i, idxs, dx, dy } = await readJson(req);
       const entry = await getEditableDoc(name);
-      const r = await mutate(entry, i, () => entry.doc.move(i, idxs, dx, dy));
+      const r = await mutate(entry, i, () => { const m = entry.doc.move(i, idxs, dx, dy); if (m.ok) syncDecoAfter(entry.doc, i, {}); return m; }); // 밑줄·취소선 선도 글자를 따라간다(v6)
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/rect' && req.method === 'POST') {

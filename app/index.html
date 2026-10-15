@@ -7,6 +7,8 @@
 <script src="/vendor/purify.js"></script>
 <script src="/font-editor.js"></script>
 <script src="/text-grouping.js"></script>
+<script src="/inplace-edit.js"></script><!-- v6: 쪽 위에서 바로 고치기 편집기의 순수 계산(window.inplaceEdit) — Node 시험도 같이 쓴다 -->
+<script src="/find-replace.js"></script><!-- v6: 찾아 바꾸기 일치 계산(window.findReplace, 서버와 같은 규칙) -->
 <script src="/page-range.js"></script><!-- P9: 쪽 범위 해석기(window.parsePageRange, 서버와 같은 규칙). 없으면 화면 안 checkPageRange로 대신한다 -->
 <style>
   /* 밝은 아이보리 테마: 창 틀(도구줄·패널·대화상자)은 거의 흰 아이보리, 문서 보는 자리만 옅은 회색이라 흰 쪽이 또렷하다.
@@ -327,6 +329,68 @@
   .toast .tclose{background:transparent;border-color:transparent;color:var(--mut);padding:2px 6px}
   @keyframes toastIn{from{opacity:0;transform:translateY(6px)}}
   @media (prefers-reduced-motion:reduce){.toast{animation:none}}
+  /* ---- v6 오른쪽 속성 창: 글꼴·스타일·정렬·간격·동작. 문서 영역 옆 셋째 칸이라 쪽을 덮지 않는다(문서 영역이 줄어든다). 접으면 좁은 띠.
+     1180px 이하는 숨기고 떠 있는 줄 고치기 창(.pdfEditor)을 쓴다 ---- */
+  .workarea.withProps{grid-template-columns:212px 1fr 264px}
+  .workarea.withProps.propsCollapsed{grid-template-columns:212px 1fr 32px}
+  @media (max-width:1180px){.workarea.withProps,.workarea.withProps.propsCollapsed{grid-template-columns:184px 1fr}.propPanel{display:none!important}}
+  .propPanel{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden;font-size:12px}
+  .propPanel>.ppHead{display:flex;align-items:center;gap:6px;padding:7px 6px 6px 12px;border-bottom:1px solid var(--line);flex-shrink:0}
+  .propPanel>.ppHead b{font-size:12.5px;white-space:nowrap}
+  .propPanel>.ppHead .kind{color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .propPanel>.ppHead .sp{flex:1}
+  #ppCollapse{width:22px;height:22px;padding:0;background:transparent;border-color:transparent;color:var(--mut)}
+  #ppCollapse:hover{background:var(--hover);color:var(--fg)}
+  .propsCollapsed .propPanel>.ppHead{padding:7px 4px;justify-content:center}
+  .propsCollapsed .propPanel>.ppHead>:not(#ppCollapse),.propsCollapsed .ppScroll{display:none}
+  .ppScroll{flex:1;overflow:auto;padding:2px 12px 14px;scrollbar-width:thin;scrollbar-color:var(--scroll) transparent}
+  .ppSec{padding:9px 0;border-bottom:1px solid var(--line)}
+  .ppSec:last-child{border-bottom:0}
+  .ppSec h6{margin:0 0 6px;font-size:11px;color:var(--mut);font-weight:600;letter-spacing:.2px}
+  .ppRow{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+  .ppRow label{display:flex;align-items:center;gap:4px;color:var(--mut)}
+  .ppScroll select{width:100%;font-size:12px}
+  .ppScroll input[type=number]{width:62px;background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:2px 4px;font:inherit}
+  .ppScroll input[type=color]{width:34px;height:24px;padding:0 2px;background:var(--input);border:1px solid var(--line2);border-radius:6px;cursor:pointer}
+  .ppBtns{display:flex;gap:3px;flex-wrap:wrap}
+  .ppBtns button{min-width:31px;height:28px;padding:0 6px;font-size:12.5px}
+  .ppBtns button[aria-pressed="true"]{background:var(--sel);border-color:var(--accLine);color:var(--accText)}
+  .ppBtns svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;vertical-align:middle}
+  .ppAct{display:flex;flex-direction:column;gap:4px}
+  .ppAct button{text-align:left;font-size:12px}
+  .ppAct .two{display:flex;gap:4px}.ppAct .two button{flex:1;text-align:center}
+  #ppType{color:var(--fg);word-break:break-all}
+  .ppEmpty,.ppHint{color:var(--mut);line-height:1.6}
+  .ppEmpty{padding:12px 0}.ppHint{font-size:11px;margin-top:8px}
+  /* 쪽 위에서 바로 고치기: 상자 자리에 겹친 편집기(바탕은 그 자리 색으로 원래 글자를 가린다) · ↵ 줄바꿈 표시 · 손잡이 8개 */
+  .pdfEditor.inplace{min-width:0;max-width:none;padding:0;border:0;border-radius:0;box-shadow:none;background:transparent}
+  .ipText{position:relative;outline:1.5px solid var(--acc);outline-offset:2px;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere;color:var(--paperInk);caret-color:var(--accStrong);text-align:left;cursor:text;box-shadow:0 0 0 4px rgba(217,119,87,.12)}
+  .ipText:focus{outline-color:var(--accStrong)}
+  .ipText .hb{color:var(--info);font:400 .78em/1 system-ui,sans-serif;user-select:none;margin:0 1px;vertical-align:baseline}
+  .ipText .soft{user-select:none}
+  .ipText .mk{background:var(--paperInk);color:var(--paperInk);user-select:none}
+  .ipHandle{position:absolute;width:9px;height:9px;background:#fff;border:1.5px solid var(--accStrong);border-radius:2px;z-index:2}
+  .ipHandle[data-h="nw"]{left:-8px;top:-8px;cursor:nwse-resize}.ipHandle[data-h="n"]{left:calc(50% - 5px);top:-8px;cursor:move}
+  .ipHandle[data-h="ne"]{right:-8px;top:-8px;cursor:nesw-resize}.ipHandle[data-h="e"]{right:-8px;top:calc(50% - 5px);cursor:ew-resize}
+  .ipHandle[data-h="se"]{right:-8px;bottom:-8px;cursor:nwse-resize}.ipHandle[data-h="s"]{left:calc(50% - 5px);bottom:-8px;cursor:move}
+  .ipHandle[data-h="sw"]{left:-8px;bottom:-8px;cursor:nesw-resize}.ipHandle[data-h="w"]{left:-8px;top:calc(50% - 5px);cursor:ew-resize}
+  /* 고른 글자 위 작은 꾸밈 막대 */
+  .miniBar{position:fixed;z-index:15;display:flex;align-items:center;gap:2px;padding:3px;background:var(--panel);border:1px solid var(--line2);border-radius:8px;box-shadow:var(--shadow)}
+  .miniBar button{width:27px;height:25px;padding:0;font-size:12.5px}
+  .miniBar button[aria-pressed="true"]{background:var(--sel);border-color:var(--accLine);color:var(--accText)}
+  .miniBar input[type=color]{width:27px;height:25px;padding:0 2px;border:1px solid var(--line2);border-radius:6px;background:var(--input)}
+  .miniBar .msep{width:1px;height:18px;background:var(--line);margin:0 2px}
+  /* 글자 고치기 상자 테두리(상황줄 [상자 테두리]) */
+  .pdf.showOutlines .pdfBox:not(.pdfMask):not(.pdfImage){outline:1px dashed rgba(181,84,58,.32);outline-offset:1px}
+  .pdf.showOutlines .pdfBox:not(.pdfMask):not(.pdfImage):hover{outline:1px solid var(--acc)}
+  /* 찾아 바꾸기(Ctrl+H): 쪽을 가리지 않게 오른쪽 위에 뜨는 창(모달 아님) */
+  dialog.rpDialog{position:fixed;inset:118px 20px auto auto;margin:0;z-index:14;box-shadow:var(--shadow);border-radius:14px}
+  dialog.rpDialog .card{width:380px;padding:16px 18px}
+  dialog.rpDialog input[type=text]{flex:1;min-width:0;background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:4px 8px;font:inherit}
+  dialog.rpDialog label.f{display:flex;align-items:center;gap:8px;width:100%}
+  dialog.rpDialog label.f span{width:46px;color:var(--mut);flex-shrink:0}
+  .rpSkipped{max-height:120px;overflow:auto;font-size:11.5px;color:var(--fg);background:var(--bannerBg);border:1px solid var(--bannerLine);border-radius:8px;padding:6px 8px;line-height:1.5}
+  .rpSkipped b{color:var(--bannerFg)}
 </style>
 </head>
 <body>
@@ -369,6 +433,7 @@
   <div class="tsp"></div>
   <div class="tgroup" id="groupView" role="group" aria-label="보기">
     <button type="button" class="tb" id="searchToggle" data-icon="search" data-modes="pdf" data-tip="문서에서 찾기"><span class="tl">찾기</span></button>
+    <button type="button" class="tb" id="replaceBtn" data-icon="replace" data-modes="pdf" data-tip="찾아 바꾸기: 글자 모양(굵게·색)을 지키며 바꿉니다"><span class="tl">바꾸기</span></button>
     <button type="button" class="tb" id="helpBtn" data-icon="help" data-tip="단축키 도움말"><span class="tl">도움말</span></button>
   </div>
  </div>
@@ -460,6 +525,8 @@
       <span id="annInkBtns" hidden><button type="button" id="annInkDone" class="pri">넣기 (Enter)</button><button type="button" id="annInkClear">지우기</button></span>
     </span>
     <span id="ctxMulti" hidden></span><!-- 여러 상자 선택(Shift 클릭) 동작: renderMultiBar가 채운다 -->
+    <!-- v6 글자 고치기 옵션: 고칠 수 있는 상자마다 옅은 테두리(기억한다 — retextpdf.outlines) -->
+    <span id="ctxEditOpts" hidden><label title="고칠 수 있는 글 상자마다 옅은 테두리를 그립니다"><input type="checkbox" id="outlineToggle"> 상자 테두리</label></span>
   </div>
   <span id="ctxHint"></span>
 </div>
@@ -533,6 +600,46 @@
   <div class="split" id="md" hidden><textarea id="src" spellcheck="false" aria-label="Markdown 원문"></textarea><div class="prev" id="prev"></div></div>
   <div class="pdf" id="pdf" hidden></div>
 </main>
+<!-- v6 속성 창(오른쪽, 문서 영역 옆 칸): 쪽 위 편집기에서 고른 글자·상자의 글꼴·크기·색 · B I U S 위첨자 아래첨자 · 정렬 · 줄 간격·자간 · 동작.
+     바꾸면 바로 PDF에 적용한다(/api/pdf/style-runs — 한 번 = 실행 취소 한 번). 접기는 기억한다(retextpdf.propPanel) -->
+<section class="propPanel" id="propPanel" hidden aria-label="속성">
+  <div class="ppHead"><b>속성</b><span class="kind" id="ppKind"></span><span class="sp"></span><button type="button" id="ppCollapse" title="속성 창 접기">»</button></div>
+  <div class="ppScroll">
+    <div class="ppEmpty" id="ppEmpty">고칠 줄을 누르면 여기서 글꼴·크기·색·정렬·간격을 바꿉니다.</div>
+    <div id="ppBody" hidden>
+      <div class="ppSec"><h6>종류</h6><div id="ppType"></div></div>
+      <div class="ppSec"><h6>글꼴</h6>
+        <select id="ppFont" aria-label="글꼴"><option value="">원래 글꼴</option></select>
+        <div class="ppRow"><label>크기 <input id="ppSize" type="number" min="1" max="300" step="0.5" aria-label="글자 크기(pt)"> pt</label><label>색 <input id="ppColor" type="color" value="#000000" aria-label="글자 색"></label></div>
+      </div>
+      <div class="ppSec"><h6>스타일</h6><div class="ppBtns">
+        <button type="button" id="pp-bold" aria-pressed="false" title="굵게 (Ctrl+B)"><b>B</b></button>
+        <button type="button" id="pp-italic" aria-pressed="false" title="기울임 (Ctrl+I)"><i style="font-family:Georgia,serif">I</i></button>
+        <button type="button" id="pp-underline" aria-pressed="false" title="밑줄 (Ctrl+U)"><u>U</u></button>
+        <button type="button" id="pp-strike" aria-pressed="false" title="취소선"><s>S</s></button>
+        <button type="button" id="pp-super" aria-pressed="false" title="위첨자">X<sup>2</sup></button>
+        <button type="button" id="pp-sub" aria-pressed="false" title="아래첨자">X<sub>2</sub></button>
+      </div></div>
+      <div class="ppSec"><h6>정렬</h6><div class="ppBtns" id="ppAlign">
+        <button type="button" data-align="left" aria-pressed="true" title="왼쪽 맞춤"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h10M4 14h16M4 18h10"/></svg></button>
+        <button type="button" data-align="center" aria-pressed="false" title="가운데 맞춤"><svg viewBox="0 0 24 24"><path d="M4 6h16M7 10h10M4 14h16M7 18h10"/></svg></button>
+        <button type="button" data-align="right" aria-pressed="false" title="오른쪽 맞춤"><svg viewBox="0 0 24 24"><path d="M4 6h16M10 10h10M4 14h16M10 18h10"/></svg></button>
+        <button type="button" data-align="justify" aria-pressed="false" title="양쪽 맞춤"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h10"/></svg></button>
+      </div></div>
+      <div class="ppSec"><h6>간격</h6>
+        <div class="ppRow"><label title="문단의 줄과 줄 사이(기준선 간격)">줄 간격 <input id="ppPitch" type="number" min="1" max="200" step="0.5"> pt</label></div>
+        <div class="ppRow"><label title="고른 글자 사이를 이만큼 띄웁니다(고르지 않으면 상자 전체)">자간 <input id="ppTracking" type="number" min="-5" max="50" step="0.1" value="0"> pt</label></div>
+      </div>
+      <div class="ppSec"><h6>동작</h6><div class="ppAct">
+        <div class="two"><button type="button" id="ppApply" class="pri">적용 (Ctrl+Enter)</button><button type="button" id="ppCancel">취소 (Esc)</button></div>
+        <button type="button" id="ppFontFit" title="설치된 TTF 폰트로 이 줄을 다시 그립니다">폰트 맞추기…</button>
+        <button type="button" id="ppMaskSel" title="고른 글자를 파일에서 지우고 덮습니다">선택 글자 가리기</button>
+        <button type="button" id="ppMaskAll">줄 전체 가리기</button>
+        <button type="button" id="ppPara" hidden>문단 선택</button>
+      </div><div class="ppHint" id="ppHint"></div></div>
+    </div>
+  </div>
+</section>
 </div>
 <div class="statusbar" id="statusbar">
   <span class="sb-nav" id="sbPdfNav" hidden><input id="pageNumInput" type="number" min="1" value="1" title="쪽 번호 (Enter로 이동)" aria-label="쪽 번호"><span id="pageCountLabel">/ 0</span></span>
@@ -861,6 +968,35 @@
   <div class="row"><span class="sp"></span><button id="olTextApply" class="pri" type="button">적용</button><button id="olTextCancel" type="button">취소</button></div>
 </div></dialog>
 
+<!-- v6 찾아 바꾸기(Ctrl+H): 모달이 아니어서 쪽에서 바뀌는 자리를 보며 바꾼다 -->
+<dialog id="replaceDialog" class="panel rpDialog" aria-labelledby="rpTitle">
+  <div class="card">
+    <h2 id="rpTitle">찾아 바꾸기</h2>
+    <div class="row"><label class="f"><span>찾을 말</span><input id="rpFind" type="text" autocomplete="off" spellcheck="false"></label></div>
+    <div class="row"><label class="f"><span>바꿀 말</span><input id="rpWith" type="text" autocomplete="off" spellcheck="false"></label></div>
+    <div class="row"><label><input type="checkbox" id="rpCase"> 대소문자 구분</label><label><input type="checkbox" id="rpWord"> 단어 단위</label></div>
+    <div class="row"><span id="rpCount" class="hint2">찾을 말을 넣으세요</span></div>
+    <div class="row"><button type="button" id="rpPrev" title="이전 (Shift+Enter)">◀</button><button type="button" id="rpNext" title="다음 (Enter)">▶</button><span class="sp"></span><button type="button" id="rpOne" class="pri">다음 바꾸기</button><button type="button" id="rpAll">모두 바꾸기</button></div>
+    <div id="rpSkipped" class="rpSkipped" hidden></div>
+    <div class="row"><span class="hint2">글자 모양은 그 자리 조각대로 지킵니다 · 모두 바꾸기도 실행 취소 한 번</span><span class="sp"></span><button type="button" id="rpClose">닫기</button></div>
+  </div>
+</dialog>
+<!-- v6 아래 내용을 밀면 쪽 아래로 넘칠 때 -->
+<dialog id="overflowDialog" class="panel" aria-labelledby="ofTitle">
+  <div class="card" style="max-width:440px">
+    <h2 id="ofTitle">쪽 아래로 넘칩니다</h2>
+    <p id="ofMsg"></p>
+    <p class="hint2">[글자 줄여 맞추기]는 이 상자 글자를 조금씩 줄여(60%까지) 아래 내용이 쪽 안에 남게 합니다. [겹쳐 두기]는 아래 내용을 밀지 않습니다.</p>
+    <div class="row"><button type="button" id="ofShrink" class="pri">글자 줄여 맞추기</button><button type="button" id="ofKeep">겹쳐 두기</button><span class="sp"></span><button type="button" id="ofCancel">취소</button></div>
+  </div>
+</dialog>
+<!-- v6 고른 글자 위 작은 꾸밈 막대 -->
+<div class="miniBar" id="miniBar" hidden role="toolbar" aria-label="글자 꾸밈">
+  <button type="button" id="mb-bold" title="굵게 (Ctrl+B)"><b>B</b></button><button type="button" id="mb-italic" title="기울임 (Ctrl+I)"><i style="font-family:Georgia,serif">I</i></button>
+  <button type="button" id="mb-underline" title="밑줄 (Ctrl+U)"><u>U</u></button><button type="button" id="mb-strike" title="취소선"><s>S</s></button>
+  <span class="msep"></span><input type="color" id="mbColor" title="글자 색" aria-label="글자 색"><span class="msep"></span>
+  <button type="button" id="mbSmaller" title="글자 작게(1pt)">A−</button><button type="button" id="mbBigger" title="글자 크게(1pt)">A+</button>
+</div>
 <script type="module">
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -1228,6 +1364,7 @@ function noteExternalChange(r) {
   flash('⚠ 다른 프로그램이 이 파일을 바꿨습니다 — 저장하지 않은 편집본을 유지하고 있으며, 저장하면 그 변경을 덮어씁니다', 8000);
 }
 function closeAnyPanel() {
+  if (inplace) dropInplace();
   $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
   $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
   selectedObj = null; selectedMask = null;
@@ -1270,7 +1407,7 @@ $('#redoBtn').onclick = redo;
 document.addEventListener('keydown', (e) => {
   if (!cur || !cur.endsWith('.pdf') || !e.ctrlKey) return;
   const tag = (document.activeElement || {}).tagName;
-  if (tag === 'TEXTAREA' || tag === 'INPUT') return; // MD 에디터·패널 텍스트박스는 브라우저 기본 실행취소 유지
+  if (tag === 'TEXTAREA' || tag === 'INPUT' || document.activeElement?.isContentEditable) return; // MD 에디터·패널 텍스트박스·쪽 위 편집기는 브라우저 기본 실행취소 유지
   const k = e.key.toLowerCase();
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
@@ -1863,9 +2000,10 @@ function availableWidth(sel) {
 // 선택 상태(selectedObj)는 항상 이 모양으로 만든다. seps(가리기 범위 매핑)·group(그룹 해제 버튼)을 빠뜨리면 이동·확대 후 기능이 사라진다
 // runs: 글꼴·색이 섞인 줄의 조각 범위(2단계), line: 화면 상자(조각별 편집 요청을 만든다), para: 문단 선택이면 그 줄 상자들({ line, box })
 const lineSelection = (i, line, wrap, box) => ({ i, objs: line.objs, seps: line.seps, text: line.text, shown: displayText(line.text), wrap, box, size: line.size, font: line.font, bounds: line.bounds, group: line.group || null, runs: line.runs || null, line, para: null });
-function selectLine(i, line, wrap, box) {
+function selectLine(i, line, wrap, box, initialText, caret, restore) {
+  if (inplaceBusy()) return; // v6: 쪽 위 편집기에서 고친 글이 있으면 먼저 적용한다(다른 줄을 누른 것은 적용 신호) — 다시 누르면 그 줄이 열린다
   selectedObj = lineSelection(i, line, wrap, box);
-  openInlineEditor(selectedObj.shown);
+  openTextEditor(initialText ?? selectedObj.shown, caret, restore);
 }
 // 문단 선택(9번 — ezPDF "문장 수정"의 문단 블록): 이 줄이 든 문단(window.groupParagraphs — 같은 크기·같은 단·고른 줄 간격으로 이어진 줄들)을
 // 한 편집 창에 줄마다 '\n'으로 보여 주고, 적용하면 서버가 문단 폭에 맞춰 다시 흘린다(/api/pdf/edit-runs paragraph — 조각별 모양 유지, 실행 취소 한 번)
@@ -1875,7 +2013,8 @@ function paragraphOf(i, line, wrap) {
   const para = window.groupParagraphs(lines).find((p) => p.boxes.includes(line));
   return para ? para.boxes.map((l) => ({ line: l, box: boxes[lines.indexOf(l)] })) : [{ line, box: boxes[lines.indexOf(line)] }];
 }
-function selectParagraph(i, line, wrap, initialText, caret) {
+function selectParagraph(i, line, wrap, initialText, caret, restore) {
+  if (inplaceBusy()) return;
   const members = paragraphOf(i, line, wrap);
   const first = members[0];
   if (members.length < 2 || !members.every((m) => runEditable(m.line))) { // 한 줄 문단이거나 투명·묶음·회전 줄이 끼면 줄 편집으로
@@ -1888,7 +2027,7 @@ function selectParagraph(i, line, wrap, initialText, caret) {
   const text = members.map((m) => m.line.text).join('\n');
   const b = members.reduce((u, m) => ({ x0: Math.min(u.x0, m.line.bounds.x0), y0: Math.min(u.y0, m.line.bounds.y0), x1: Math.max(u.x1, m.line.bounds.x1), y1: Math.max(u.y1, m.line.bounds.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
   selectedObj = { i, objs, seps, text, shown: displayText(text), wrap, box: members[members.length - 1].box, size: first.line.size, font: first.line.font, bounds: b, group: null, runs: null, line: null, para: members };
-  openInlineEditor(initialText ?? selectedObj.shown, caret);
+  openTextEditor(initialText ?? selectedObj.shown, caret, restore);
 }
 // 줄 아래에 뜨는 편집 패널. 페이지 바닥을 넘으면 줄 위로 뒤집고, 페이지 폭 안으로 clamp한다.
 // caret({start,end}): 확대·화살표 이동으로 다시 열 때 이전 커서·선택을 복원한다. 없으면(처음 열기) 전체 선택
@@ -2027,8 +2166,10 @@ function openInlineEditor(initialText, caret) {
       // 2단계: 문단, 또는 글꼴·색이 섞인 줄·객체 안 부분(15d)은 조각별 편집 — 고친 글자만 그 조각 모양으로 다시 쓰고 뒤 조각을 민다(서버 한 번 = 실행 취소 한 번)
       if (sel.para || (sel.line && needsRunEdit(sel.line))) {
         const fit = sel.para ? 'wrap' : fitSel.value;
-        r = await pdfMutate('/api/pdf/edit-runs', { name, i, lines: sel.para ? sel.para.map((m) => runLine(m.line)) : [runLine(sel.line)], oldText: sel.text, newText: ta.value,
-          paragraph: !!sel.para, mode: fit, maxWidth: !sel.para && fit !== 'none' ? availableWidth(sel) : undefined, align: !sel.para && align !== 'left' ? { mode: align } : undefined });
+        // v6: 문단이 아래로 길어지면 같은 단의 아래 내용을 민다(pushDown). 쪽 아래로 넘치면 줄여 맞출지·겹쳐 둘지 묻는다(mutateWithOverflow)
+        r = await mutateWithOverflow('/api/pdf/edit-runs', { name, i, lines: sel.para ? sel.para.map((m) => runLine(m.line)) : [runLine(sel.line)], oldText: sel.text, newText: ta.value,
+          paragraph: !!sel.para, mode: fit, maxWidth: !sel.para && fit !== 'none' ? availableWidth(sel) : undefined, align: !sel.para && align !== 'left' ? { mode: align } : undefined, pushDown: !!sel.para });
+        if (!r) { ta.readOnly = false; okBtn.disabled = false; return; }
         first = null;
         close();
         return afterRunEdit(r, sel, name);
@@ -2119,6 +2260,567 @@ function openInlineEditor(initialText, caret) {
   // 객체 안 부분(15d)은 그 부분의 글자 범위만(partFrom부터)
   maskLineBtn.onclick = () => maskParts(selectedObj.objs.filter((o) => o.text.length).map((o) => ({ idx: o.idx, from: o.partFrom || 0, to: (o.partFrom || 0) + o.text.length })), selectedObj.text);
 }
+// ==== v6 글자 고치기: 쪽 위에서 바로 고치기(in-place) · 오른쪽 속성 창 · 고른 글자 모양 ====
+// 넓은 창(1180px 초과)에서 조각별 편집이 되는 줄·문단은 상자 자리에 겹친 편집기(contenteditable)로 바로 고친다 — 글꼴 크기·색·굵기를 흉내 내고,
+// 상자 폭 안에서 다시 흐르며 아래로 늘어난다. 줄바꿈 자리에는 ↵ 표시. 8개 손잡이: 좌우·모서리 = 폭(다시 흘릴 폭), 위·아래 = 옮기기.
+// 적용: Ctrl+Enter 또는 바깥 누르기, 취소: Esc. 한글 조합 중에는 키를 처리하지 않는다(window.inplaceEdit.keyAction).
+// 좁은 창(1180px 이하)·투명 글자·묶음·회전 글자·회전한 쪽은 예전처럼 떠 있는 줄 고치기 창(openInlineEditor)을 쓴다
+const IE = window.inplaceEdit;
+const narrowUI = () => window.matchMedia('(max-width:1180px)').matches;
+var inplace = null; // 열린 쪽 위 편집기(아래 openInPlaceEditor가 만든 상태). var: 이 블록보다 앞서 정의된 함수(closeAnyPanel)가 먼저 불려도 안전하게
+const inplaceLines = (sel) => (!sel ? null : sel.para ? sel.para.map((m) => m.line) : sel.line ? [sel.line] : null);
+const canInPlace = (sel) => !narrowUI() && !!inplaceLines(sel) && inplaceLines(sel).every(runEditable) && !((pdfPages[sel.i]?.rotation || 0) % 4);
+function openTextEditor(initialText, caret, restore) {
+  if (canInPlace(selectedObj)) return openInPlaceEditor(caret, restore);
+  return openInlineEditor(initialText ?? selectedObj.shown, caret);
+}
+// 다른 줄을 누르기 전에: 쪽 위 편집기에 고친 글(또는 바꾼 폭)이 있으면 적용하고 true(그 클릭은 적용으로 끝난다)
+function inplaceBusy() {
+  if (!inplace) return false;
+  if (inplace.committing) return true;
+  if (inplace.dirty()) { inplace.commit(); return true; }
+  return false;
+}
+// 쪽 위 편집기 정리(적용하지 않는다) — closeAnyPanel·refreshPage가 .pdfEditor를 지울 때 함께
+function dropInplace() {
+  if (!inplace) return;
+  inplace.el.remove(); inplace = null;
+  $('#miniBar').hidden = true;
+  updateCtxBar();
+}
+// 쪽 이미지에서 상자 자리의 바탕색(가장 흔한 색) — 편집기 바탕으로 원래 글자를 가린다. 못 재면 흰색
+function sampleBg(wrap, s) {
+  try {
+    const img = wrap.querySelector('img'), rx = img.naturalWidth / wrap.offsetWidth, ry = img.naturalHeight / wrap.offsetHeight;
+    const w = Math.max(1, Math.round(s.width * rx)), h = Math.max(1, Math.round(s.height * ry));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, s.left * rx, s.top * ry, w, h, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data, count = new Map();
+    for (let k = 0; k < d.length; k += 4 * 3) { const key = ((d[k] >> 3) << 10) | ((d[k + 1] >> 3) << 5) | (d[k + 2] >> 3); count.set(key, (count.get(key) || 0) + 1); }
+    let best = 0, n = -1; for (const [key, v] of count) if (v > n) { best = key; n = v; }
+    return `rgb(${((best >> 10) & 31) * 8 + 4},${((best >> 5) & 31) * 8 + 4},${(best & 31) * 8 + 4})`;
+  } catch { return '#fff'; }
+}
+// 편집기 글 위치 ↔ DOM 위치(커서·고른 범위 되살리기)
+function domPointAt(root, k) {
+  let acc = 0, hit = null;
+  const walk = (n) => {
+    for (const c of [...n.childNodes]) {
+      if (hit) return;
+      if (c.nodeType === 3) {
+        const len = c.nodeValue.replace(/​/g, '').length;
+        if (acc + len >= k) { let off = 0, seen = 0; while (off < c.nodeValue.length && seen < k - acc) { if (c.nodeValue[off] !== '​') seen++; off++; } hit = [c, off]; return; }
+        acc += len; continue;
+      }
+      if (c.nodeType !== 1) continue;
+      if (c.dataset.raw != null || c.classList.contains('hb')) { acc += c.dataset.raw?.length || 0; if (acc >= k && c.dataset.raw != null) { hit = [c.parentNode, [...c.parentNode.childNodes].indexOf(c) + 1]; return; } continue; }
+      walk(c);
+    }
+  };
+  walk(root);
+  return hit || [root, root.childNodes.length];
+}
+function setEditorSelection(root, a, b) {
+  const r = document.createRange(), [n1, o1] = domPointAt(root, a), [n2, o2] = domPointAt(root, b ?? a);
+  try { r.setStart(n1, o1); r.setEnd(n2, o2); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); } catch {}
+}
+// 조각 모양 → span 꾸밈(화면 배율 z). 굵게·기울임은 글꼴 굵기·기울임으로, 밑줄·취소선은 text-decoration, 첨자는 기준선 올림·내림
+function spanStyle(st, z) {
+  const deco = [st.underline && 'underline', st.strike && 'line-through'].filter(Boolean).join(' ');
+  return `font-family:${st.family};font-size:${(st.size * z).toFixed(2)}px;color:${st.color};font-weight:${st.bold ? 700 : 400};font-style:${st.italic ? 'italic' : 'normal'};`
+    + (deco ? `text-decoration:${deco};` : '') + (st.script ? `vertical-align:${st.script === 'super' ? 'super' : 'sub'};` : '');
+}
+function fillEditor(tx, segs, z) {
+  tx.replaceChildren();
+  for (const g of segs) {
+    if (g.t === 'text') { const sp = document.createElement('span'); sp.style.cssText = spanStyle(g.style, z); sp.textContent = g.text; tx.appendChild(sp); continue; }
+    const sp = document.createElement('span'); sp.contentEditable = 'false'; sp.dataset.raw = g.raw;
+    if (g.t === 'soft') { sp.className = 'soft'; sp.textContent = g.show; sp.title = '원래 줄이 끝난 자리 — 지우면 앞뒤 줄이 붙습니다'; }
+    else { sp.className = 'mk'; sp.textContent = g.raw; sp.title = '가린 자리(고칠 수 없습니다)'; }
+    tx.appendChild(sp);
+  }
+  const end = document.createElement('span'); end.className = 'hb end'; end.contentEditable = 'false'; end.textContent = '↵'; end.title = '문단 끝';
+  tx.appendChild(end);
+}
+// 쪽 위 편집기 열기. caret: { start, end }(편집기 글 위치) · restore: { html, zoom } — 확대·축소로 다시 열 때 고치던 내용을 그대로 되살린다
+function openInPlaceEditor(caret, restore) {
+  const sel = selectedObj, { wrap, i } = sel, lines = inplaceLines(sel), page = pdfPages[i], z = pdfScale;
+  // caret.map: 다시 흘리기 전 글 — 같은 글자를 가리키게 위치를 옮긴다(공백 아닌 글자 수)
+  if (caret?.map != null) caret = { start: IE.mapOffset(caret.map, sel.shown, caret.start, 'start'), end: IE.mapOffset(caret.map, sel.shown, caret.end, 'end') };
+  $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
+  if (inplace) { inplace = null; $('#miniBar').hidden = true; }
+  $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
+  sel.box?.classList.add('editing'); (sel.para || []).forEach((m) => m.box?.classList.add('editing'));
+  // 줄 기하(쪽 좌표): 왼쪽 끝·오른쪽 끝·첫 줄 기준선·줄 간격·본문 크기
+  const inkOf = (L) => L.objs.filter((o) => (o.text || '').trim() && o.origin);
+  const mainOf = (L) => inkOf(L).reduce((m, o) => ((o.scaledSize || o.size || 0) > (m?.scaledSize || m?.size || 0) + 0.01 ? o : m), null) || L.objs[0];
+  const base = lines.map((L) => ({ y: mainOf(L)?.origin?.y ?? L.bounds.y0, size: mainOf(L)?.scaledSize || L.size || 10 }));
+  const size = base[0].size, pitch = lines.length > 1 ? Math.max(size, base[0].y - base[1].y) : 1.25 * size;
+  const x0 = Math.min(...lines.map((L) => L.bounds.x0)), x1 = Math.max(...lines.map((L) => L.bounds.x1));
+  const single = lines.length === 1, avail = single ? Math.max(x1 - x0, availableWidth(sel)) : x1 - x0;
+  const H = page.h, scr = pdfToScreen(page, sel.bounds);
+  const lineH = pitch * z, fontPx = size * z;
+  const top0 = (H - base[0].y) * z - (lineH / 2 + 0.36 * fontPx);
+  const el = document.createElement('div'); el.className = 'pdfEditor inplace';
+  el.style.left = (x0 * z) + 'px'; el.style.top = top0 + 'px';
+  const tx = document.createElement('div'); tx.className = 'ipText'; tx.contentEditable = 'true'; tx.spellcheck = false;
+  tx.setAttribute('role', 'textbox'); tx.setAttribute('aria-multiline', 'true'); tx.setAttribute('aria-label', single ? '줄 고치기' : `문단 고치기 (${lines.length}줄)`);
+  tx.style.lineHeight = lineH + 'px'; tx.style.background = sampleBg(wrap, scr);
+  // 폭: 문단은 문단 폭에 고정(그 안에서 다시 흐른다). 한 줄은 줄 폭에서 시작해 옆 글자·쪽 끝까지 늘어나고, 넘치면 그 폭에서 다음 줄로
+  const frame = { left: x0 * z, top: top0, width: (x1 - x0) * z, fixed: !single };
+  const applyFrame = () => {
+    el.style.left = frame.left + 'px'; el.style.top = frame.top + 'px';
+    if (frame.fixed) { tx.style.width = frame.width + 'px'; tx.style.minWidth = ''; tx.style.maxWidth = ''; }
+    else { tx.style.width = 'max-content'; tx.style.minWidth = frame.width + 'px'; tx.style.maxWidth = (avail * z) + 'px'; }
+  };
+  applyFrame();
+  if (restore?.html != null) {
+    tx.innerHTML = restore.html;
+    const k = z / (restore.zoom || z);
+    tx.querySelectorAll('span[style]').forEach((sp) => { const px = parseFloat(sp.style.fontSize); if (px) sp.style.fontSize = (px * k).toFixed(2) + 'px'; });
+  } else fillEditor(tx, IE.segmentsFor(lines), z);
+  el.appendChild(tx);
+  // 손잡이 8개
+  for (const h of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+    const hd = document.createElement('div'); hd.className = 'ipHandle'; hd.dataset.h = h;
+    hd.title = h === 'n' || h === 's' ? '끌어서 옮기기' : '끌어서 폭 바꾸기(그 폭에서 다시 흐릅니다)';
+    hd.addEventListener('mousedown', (e) => startHandle(e, h));
+    el.appendChild(hd);
+  }
+  wrap.appendChild(el);
+  const st = inplace = {
+    i, sel, el, tx, wrap, frame, z, single, x0, x1, align: localStorage.getItem('retextpdf.align') || 'left',
+    shown: sel.shown, composing: false, committing: false, boxChanged: !!restore?.boxChanged, lastSel: caret ? { from: caret.start, to: caret.end } : null,
+    text: () => IE.extractText(tx),
+    dirty: () => st.boxChanged || IE.extractText(tx) !== sel.shown,
+    selOffsets: () => st.lastSel || { from: 0, to: 0 },
+    commit, cancel, whenComposed,
+  };
+  if (restore?.frame) { const k = z / (restore.zoom || z); Object.assign(frame, { left: restore.frame.left * k, top: restore.frame.top * k, width: restore.frame.width * k, fixed: restore.frame.fixed }); applyFrame(); }
+  // 한글 조합: 조합 중에는 Enter·Esc·바깥 누르기를 미룬다
+  let composedWaiters = [];
+  function whenComposed() { return st.composing ? new Promise((res) => { composedWaiters.push(res); setTimeout(res, 400); }) : Promise.resolve(); }
+  tx.addEventListener('compositionstart', () => { st.composing = true; $('#miniBar').hidden = true; });
+  tx.addEventListener('compositionend', () => { st.composing = false; const w = composedWaiters; composedWaiters = []; w.forEach((f) => f()); });
+  tx.addEventListener('keydown', (e) => {
+    const act = IE.keyAction(e, st.composing);
+    if (!act) return;
+    e.preventDefault(); e.stopPropagation();
+    if (act === 'apply') commit();
+    else if (act === 'cancel') cancel();
+    else if (act === 'hardBreak') insertBreak();
+    else toggleStyle(act);
+  });
+  // 브라우저가 Enter로 문단(div)을 끼우지 않게: 줄바꿈 입력은 ↵ 표시 + '\n'으로 바꾼다(조합 중이면 그대로 둔다)
+  tx.addEventListener('beforeinput', (e) => {
+    if (st.composing || e.isComposing) return;
+    if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') { e.preventDefault(); insertBreak(); }
+    else if (e.inputType === 'formatBold' || e.inputType === 'formatItalic' || e.inputType === 'formatUnderline') e.preventDefault(); // 꾸밈은 서버(속성 창)가 한다
+  });
+  tx.addEventListener('paste', (e) => { e.preventDefault(); insertPlain(e.clipboardData.getData('text/plain')); });
+  tx.addEventListener('drop', (e) => e.preventDefault());
+  // 줄 상자를 두 번 누르면 문단 전체(첫 클릭이 편집기를 열어 두 번째 클릭은 편집기에 떨어진다 — 열자마자의 두 번 클릭만)
+  const openedAt = Date.now();
+  tx.addEventListener('dblclick', (e) => {
+    if (!single || !sel.line || st.dirty() || Date.now() - openedAt > 900) return;
+    if (paragraphOf(i, sel.line, wrap).length < 2) return;
+    e.preventDefault(); const line = sel.line; dropInplace(); selectedObj = null; selectParagraph(i, line, wrap);
+  });
+  tx.addEventListener('input', () => { if (!st.composing) syncPropPanel(); });
+  function insertNodes(nodes) {
+    const s = window.getSelection(); if (!s.rangeCount || !tx.contains(s.anchorNode)) return;
+    const r = s.getRangeAt(0); r.deleteContents();
+    const frag = document.createDocumentFragment(); nodes.forEach((n) => frag.appendChild(n));
+    const last = nodes[nodes.length - 1];
+    r.insertNode(frag); r.setStartAfter(last); r.collapse(true); s.removeAllRanges(); s.addRange(r);
+  }
+  function breakNodes() {
+    const hb = document.createElement('span'); hb.className = 'hb'; hb.contentEditable = 'false'; hb.textContent = '↵'; hb.title = '줄바꿈';
+    return [hb, document.createTextNode('\n​')]; // 끝의 빈 줄도 높이를 갖게(폭 없는 공백은 글에서 뺀다)
+  }
+  function insertBreak() { insertNodes(breakNodes()); syncPropPanel(); }
+  function insertPlain(t) {
+    const parts = String(t || '').replace(/\r\n?/g, '\n').split('\n'), nodes = [];
+    parts.forEach((p, k) => { if (k) nodes.push(...breakNodes()); if (p) nodes.push(document.createTextNode(p)); });
+    if (nodes.length) insertNodes(nodes);
+  }
+  // 손잡이 끌기: 좌우·모서리 = 폭(쪽 좌표 상자 x0·x1), 위·아래 = 상자 옮기기. 놓으면 적용할 때 쓴다(boxChanged)
+  function startHandle(e, h) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sy = e.clientY, f0 = { ...frame, width: tx.offsetWidth };
+    const move = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (h === 'n' || h === 's') { frame.left = f0.left + dx; frame.top = f0.top + dy; }
+      else {
+        const minW = Math.max(16, 2 * fontPx);
+        if (h.includes('e')) frame.width = Math.max(minW, f0.width + dx);
+        if (h.includes('w')) { const w = Math.max(minW, f0.width - dx); frame.left = f0.left + (f0.width - w); frame.width = w; }
+        frame.fixed = true;
+      }
+      st.boxChanged = true; applyFrame();
+    };
+    const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); tx.focus(); syncPropPanel(); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  }
+  // 적용할 상자(쪽 좌표): 손잡이로 바꿨을 때만. dy = 위·아래 손잡이로 옮긴 만큼(위가 +)
+  const boxPdf = () => ({ x0: frame.left / z, x1: (frame.left + (frame.fixed ? frame.width : tx.offsetWidth)) / z, dy: -(frame.top - top0) / z });
+  function close() {
+    if (inplace === st) inplace = null;
+    el.remove(); $('#miniBar').hidden = true;
+    sel.box?.classList.remove('editing'); (sel.para || []).forEach((m) => m.box?.classList.remove('editing'));
+    if (selectedObj === sel) selectedObj = null;
+    updateCtxBar();
+  }
+  function cancel() { close(); }
+  // 적용: 글(편집기 글)을 /api/pdf/edit-runs로. 한 줄은 넘치면 상자 폭(손잡이)·옆 글자까지의 폭에서 줄바꿈, 문단은 문단 폭(또는 손잡이 폭)에서 다시 흐른다.
+  // 아래로 길어지면 같은 단의 아래 내용을 민다(pushDown). 실행 취소 한 번. opts.reopen: 적용한 뒤 같은 상자를 다시 연다(모양 바꾸기 전에 글부터 적용할 때)
+  async function commit(opts = {}) {
+    if (st.committing) return false;
+    await whenComposed();
+    const newText = IE.extractText(tx);
+    if (newText === sel.shown && !st.boxChanged) { if (!opts.reopen) close(); return { unchanged: true }; }
+    st.committing = true; tx.contentEditable = 'false';
+    const name = cur, req = { name, i, lines: lines.map(runLine), oldText: sel.text, newText: newText.trim() ? newText : ' ', paragraph: !single, pushDown: true };
+    if (st.boxChanged) req.box = boxPdf();
+    if (single) { req.mode = 'wrap'; if (!st.boxChanged) req.maxWidth = avail; if (st.align === 'center' || st.align === 'right') req.align = { mode: st.align }; }
+    else if (st.align !== 'left') req.align = st.align;
+    const r = await mutateWithOverflow('/api/pdf/edit-runs', req);
+    st.committing = false;
+    if (!r) { if (inplace === st) { tx.contentEditable = 'true'; tx.focus(); } return false; }
+    close();
+    if (cur !== name) return r;
+    const boxed = await refreshPage(i, r.lineIdxs?.[0]);
+    if (!opts.reopen) flash(runEditNote(r, !single));
+    else reopenAt(boxed, i, r.lineIdxs || [], !single, { ...opts.reopen, map: newText });
+    return r;
+  }
+  updateCtxBar(); loadPropFonts(); // 상황줄 사용법·속성 창(updateCtxBar가 syncPropPanel을 부른다)
+  requestAnimationFrame(() => {
+    tx.focus();
+    const len = IE.extractText(tx).length;
+    if (caret) setEditorSelection(tx, caret.start, caret.end); else setEditorSelection(tx, len, len);
+  });
+  el.onOutside = () => (st.dirty() ? commit() : close());
+  return st;
+}
+// 적용 결과 한 줄 안내(밀어낸 내용·넘침·대체 글꼴)
+function runEditNote(r, para) {
+  if (r.unchanged) return '바뀐 글자가 없습니다';
+  const pushed = r.pushed?.moved ? ` · 아래 내용 ${r.pushed.moved}개를 ${Math.abs(r.pushed.dy).toFixed(1)}pt 내렸습니다` : r.pushed?.skipped === 'overflow' ? ' · 아래 내용과 겹칩니다(밀지 않음)' : '';
+  const scaled = r.fontScale ? ` · 글자를 ${Math.round(r.fontScale * 100)}%로 줄여 맞췄습니다` : '';
+  return (para ? `문단을 다시 흘렸습니다 — ${r.lines || 0}줄${r.addedLines ? `(${r.addedLines}줄 늘어남)` : ''}` : r.addedLines ? `줄 ${r.addedLines}개를 아래에 더했습니다` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '고쳤습니다')
+    + pushed + scaled + ' · Ctrl+Z로 되돌리기';
+}
+// 다시 그린 쪽에서 lineIdxs가 든 상자(문단이면 그 문단)를 다시 고르고 편집기를 연다(모양을 바꾼 뒤·글을 먼저 적용한 뒤)
+function reopenAt(boxed, i, lineIdxs, para, caret) {
+  const hit = (boxed || []).find(({ line }) => line.objs.some((o) => lineIdxs.includes(o.idx)));
+  if (!hit) return;
+  const wrap = $('#pdf').children[i], c = caret && caret.start != null ? caret : undefined;
+  if (para) selectParagraph(i, hit.line, wrap, undefined, c); else selectLine(i, hit.line, wrap, hit.box, undefined, c);
+}
+// 서버 변경 + 쪽 아래로 넘칠 때 묻기: 409 overflow면 [글자 줄여 맞추기]('shrink') · [겹쳐 두기]('keep') · [취소]. 실패·취소면 null
+async function mutateWithOverflow(path, payload) {
+  try { return await pdfMutate(path, payload, { silent: true }); }
+  catch (error) {
+    if (error.data?.overflow && !payload.overflow) {
+      const choice = await askOverflow(error.data);
+      if (!choice) return null;
+      return mutateWithOverflow(path, { ...payload, overflow: choice });
+    }
+    flash('⚠ ' + (error.message || '적용하지 못했습니다'), 6000);
+    return null;
+  }
+}
+function askOverflow(info) {
+  return new Promise((resolve) => {
+    const d = $('#overflowDialog');
+    $('#ofMsg').textContent = `고친 상자가 ${(+info.growth || 0).toFixed(1)}pt 길어져 아래 내용을 밀면 쪽 아래로 넘칩니다(남은 자리 ${Math.max(0, +info.room || 0).toFixed(1)}pt).`;
+    const done = (v) => { d.close(); resolve(v); };
+    $('#ofShrink').onclick = () => done('shrink'); $('#ofKeep').onclick = () => done('keep'); $('#ofCancel').onclick = () => done(null);
+    d.onclose = () => resolve(null);
+    d.showModal(); $('#ofShrink').focus();
+  });
+}
+// ---- 고른 글자 모양(굵게·기울임·밑줄·취소선·첨자·글꼴·크기·색) · 정렬 · 줄 간격 · 자간 → /api/pdf/style-runs(한 번 = 실행 취소 한 번) ----
+// 글을 고친 채면 먼저 글을 적용하고(실행 취소 한 번 더) 같은 상자를 다시 연 뒤, 같은 글자(공백 아닌 글자 수로 옮긴 위치)에 모양을 준다.
+// 고른 글자가 없으면 상자 전체에 준다
+async function applyStyle(style = {}, extra = {}) {
+  let st = inplace;
+  if (!st || st.committing) return;
+  await st.whenComposed();
+  let { from, to } = st.selOffsets();
+  if (st.dirty()) {
+    const before = st.text(), r = await st.commit({ reopen: { start: from, end: to } });
+    if (!r) return;
+    st = inplace;
+    if (!st) return;
+    from = IE.mapOffset(before, st.shown, from, 'start'); to = IE.mapOffset(before, st.shown, to, 'end');
+  }
+  const sel = st.sel, name = cur, i = sel.i, lines = inplaceLines(sel);
+  if (from === to && !extra.relayout) { from = 0; to = sel.shown.length; } // 고른 글자가 없으면 상자 전체
+  const a = Math.min(from, to), b = Math.max(from, to);
+  const req = { name, i, lines: lines.map(runLine), oldText: sel.text, from: rawOffset(sel.text, a), to: rawOffset(sel.text, b), style, paragraph: !st.single, pushDown: true, ...extra };
+  delete req.relayout;
+  st.committing = true;
+  const r = await mutateWithOverflow('/api/pdf/style-runs', req);
+  st.committing = false;
+  if (!r || cur !== name) return;
+  const shown0 = sel.shown;
+  dropInplace(); selectedObj = null;
+  const boxed = await refreshPage(i, r.lineIdxs?.[0]);
+  reopenAt(boxed, i, r.lineIdxs || [], !st.single, { start: a, end: b, map: shown0 });
+  if (r.skipped?.length) flash('일부 글자는 같은 글꼴의 보통 굵기·바로 선 면을 찾지 못해 그대로 두었습니다', 5000);
+  else if (r.fake?.bold || r.fake?.italic) flash(`${r.fake.bold ? '굵게' : '기울임'}: 설치된 같은 글꼴에 그 면이 없어 흉내 냈습니다(${r.fake.bold ? '외곽선' : '기울이기'}) · Ctrl+Z로 되돌리기`, 4000);
+  else flash((r.faces?.length ? `${r.faces[0]} 글꼴로 바꿨습니다 · ` : '') + '모양을 바꿨습니다 · Ctrl+Z로 되돌리기');
+}
+// 키(Ctrl+B·I·U)·단추로 켜고 끄기: 고른 글자가 모두 그 모양이면 끄고, 아니면 켠다
+function toggleStyle(key) {
+  const s = propState();
+  if (!s) return;
+  if (key === 'super' || key === 'sub') return applyStyle({ script: s.script === key ? null : key });
+  applyStyle({ [key]: !s[key] });
+}
+// 정렬(왼·가운데·오른·양쪽): 상자 폭 안에서 다시 놓는다(한 줄은 손잡이로 넓힌 폭 안). 고친 글을 적용할 때도 같은 정렬을 쓴다
+function applyAlign(mode) {
+  const st = inplace; if (!st) return;
+  st.align = mode; localStorage.setItem('retextpdf.align', mode);
+  const extra = { relayout: true, align: mode, paragraph: true };
+  if (st.single || st.boxChanged) extra.box = { x0: st.frame.left / st.z, x1: (st.frame.left + (st.frame.fixed ? st.frame.width : st.tx.offsetWidth)) / st.z, dy: 0 };
+  applyStyle({}, extra);
+}
+// 속성 창 상태: 편집기에서 고른 글자(없으면 커서 앞 글자)의 모양
+function propState() {
+  const st = inplace; if (!st) return null;
+  const { from, to } = st.selOffsets();
+  return IE.styleAt(inplaceLines(st.sel), from, to);
+}
+// 편집기 안 선택이 바뀔 때: 마지막 선택을 기억하고(속성 창 입력칸을 누르면 선택이 그쪽으로 옮겨 간다) 작은 꾸밈 막대·속성 창을 맞춘다
+document.addEventListener('selectionchange', () => {
+  const st = inplace; if (!st) return;
+  const s = window.getSelection();
+  if (!s.rangeCount || !st.tx.contains(s.anchorNode)) return;
+  const r = s.getRangeAt(0);
+  const a = IE.textOffset(st.tx, r.startContainer, r.startOffset), b = IE.textOffset(st.tx, r.endContainer, r.endOffset);
+  if (a >= 0 && b >= 0) st.lastSel = { from: Math.min(a, b), to: Math.max(a, b) };
+  placeMiniBar(st, r);
+  syncPropPanel();
+});
+// 작은 꾸밈 막대(고른 글자 위): B I U S · 색 · 크기 −/+
+function placeMiniBar(st, range) {
+  const bar = $('#miniBar');
+  if (st.composing || range.collapsed || st.committing) { bar.hidden = true; return; }
+  const rects = range.getClientRects(), rr = rects[0] || range.getBoundingClientRect();
+  if (!rr || !rr.width) { bar.hidden = true; return; }
+  bar.hidden = false; // 화면 고정(position:fixed) — 쪽을 다시 그려도 사라지지 않고, 문서를 굴리면 숨긴다
+  const left = Math.max(4, Math.min(rr.left, window.innerWidth - bar.offsetWidth - 4)), top = rr.top - bar.offsetHeight - 8;
+  bar.style.left = left + 'px'; bar.style.top = (top < 4 ? rr.bottom + 8 : top) + 'px';
+  const s = propState();
+  if (s) { for (const k of ['bold', 'italic', 'underline', 'strike']) $(`#mb-${k}`).setAttribute('aria-pressed', String(!!s[k])); $('#mbColor').value = s.color || '#000000'; }
+}
+$('#miniBar').addEventListener('mousedown', (e) => { if (e.target.tagName !== 'INPUT') e.preventDefault(); }); // 편집기의 선택을 잃지 않게
+$('#pdf').addEventListener('scroll', () => { $('#miniBar').hidden = true; }, { passive: true });
+for (const k of ['bold', 'italic', 'underline', 'strike']) $(`#mb-${k}`).onclick = () => toggleStyle(k);
+$('#mbColor').onchange = () => applyStyle({ color: $('#mbColor').value });
+$('#mbSmaller').onclick = () => { const s = propState(); if (s) applyStyle({ size: Math.max(1, Math.round((s.size - 1) * 2) / 2) }); };
+$('#mbBigger').onclick = () => { const s = propState(); if (s) applyStyle({ size: Math.min(300, Math.round((s.size + 1) * 2) / 2) }); };
+
+// ---- 오른쪽 속성 창: PDF를 열면 문서 영역 오른쪽에 붙는다(문서 영역이 그만큼 줄어든다 — 쪽을 덮지 않는다). 접기는 기억한다 ----
+var ppFonts = null; // /api/fonts 집안 목록 [{ family, id(보통 면) }]
+async function loadPropFonts() {
+  if (ppFonts) return ppFonts;
+  try {
+    const list = await (await fetch('/api/fonts')).json();
+    const fam = new Map();
+    for (const f of list) {
+      const regular = /^(regular|normal|book|)$/i.test(String(f.style || '').trim());
+      if (!fam.has(f.family) || (regular && !fam.get(f.family).regular)) fam.set(f.family, { family: f.family, id: f.id, regular });
+    }
+    ppFonts = [...fam.values()].sort((a, b) => a.family.localeCompare(b.family, 'ko'));
+  } catch { ppFonts = []; }
+  const sel = $('#ppFont');
+  sel.replaceChildren(new Option('원래 글꼴', ''), ...ppFonts.map((f) => new Option(f.family, f.id)));
+  syncPropPanel();
+  return ppFonts;
+}
+const normFam = (s) => String(s || '').replace(/^[A-Z]{6}\+/, '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '').replace(/(bold|italic|regular|mt|ps)+$/g, '');
+function syncPropPanel() {
+  const area = document.querySelector('.workarea'), pdf = docMode() === 'pdf';
+  area.classList.toggle('withProps', pdf);
+  area.classList.toggle('propsCollapsed', pdf && localStorage.getItem('retextpdf.propPanel') === 'collapsed');
+  $('#propPanel').hidden = !pdf;
+  $('#ppCollapse').textContent = area.classList.contains('propsCollapsed') ? '«' : '»';
+  $('#ppCollapse').title = area.classList.contains('propsCollapsed') ? '속성 창 펴기' : '속성 창 접기';
+  if (!pdf) return;
+  const st = inplace, on = !!st;
+  $('#ppEmpty').hidden = on; $('#ppBody').hidden = !on;
+  if (!on) {
+    const why = selectedObj ? '이 상자는 떠 있는 창에서 고칩니다(투명 글자·묶은 상자·회전 글자이거나 창이 좁음).' : tool !== 'edit' ? '[글자 고치기] 도구에서 쓸 수 있습니다.' : '고칠 줄을 누르면 여기서 글꼴·크기·색·정렬·간격을 바꿉니다. 글자를 골라 굵게·밑줄도 줍니다.';
+    $('#ppEmpty').textContent = why;
+    return;
+  }
+  const s = propState() || {}, lines = inplaceLines(st.sel);
+  $('#ppKind').textContent = st.single ? '줄' : `문단 ${lines.length}줄`;
+  $('#ppType').textContent = `${s.font || '기본 글꼴'} · ${s.size ? s.size.toFixed(1) : '?'}pt${s.mixed?.font || s.mixed?.size ? ' (섞임)' : ''}`;
+  for (const k of ['bold', 'italic', 'underline', 'strike']) $(`#pp-${k}`).setAttribute('aria-pressed', String(!!s[k]));
+  $('#pp-super').setAttribute('aria-pressed', String(s.script === 'super')); $('#pp-sub').setAttribute('aria-pressed', String(s.script === 'sub'));
+  if (document.activeElement !== $('#ppSize')) $('#ppSize').value = s.size ? (Math.round(s.size * 10) / 10) : '';
+  if (document.activeElement !== $('#ppColor')) $('#ppColor').value = s.color || '#000000';
+  if (ppFonts && document.activeElement !== $('#ppFont')) {
+    const want = (s.fontId && ppFonts.find((f) => f.id === s.fontId)) || ppFonts.find((f) => normFam(f.family) === normFam(s.font));
+    $('#ppFont').value = want ? want.id : '';
+  }
+  document.querySelectorAll('#ppAlign button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.align === st.align)));
+  const pitchOk = !st.single;
+  $('#ppPitch').disabled = !pitchOk;
+  if (pitchOk && document.activeElement !== $('#ppPitch')) {
+    const y = lines.map((L) => L.objs.find((o) => (o.text || '').trim() && o.origin)?.origin.y).filter(Number.isFinite);
+    $('#ppPitch').value = y.length > 1 ? (Math.round((y[0] - y[1]) * 10) / 10) : '';
+  }
+  const dirty = st.dirty();
+  $('#ppMaskSel').disabled = dirty; $('#ppMaskAll').textContent = st.single ? '줄 전체 가리기' : '문단 전체 가리기';
+  $('#ppFontFit').disabled = !st.single;
+  const members = st.single && st.sel.line ? paragraphOf(st.i, st.sel.line, st.wrap) : [];
+  $('#ppPara').hidden = !(st.single && members.length > 1); $('#ppPara').textContent = `문단 선택 (${members.length}줄)`;
+  $('#ppHint').textContent = dirty ? '고친 글이 있습니다 — Ctrl+Enter 또는 바깥을 누르면 적용, Esc로 취소' : '글자를 골라 모양을 바꾸거나, 고르지 않으면 상자 전체에 줍니다';
+}
+$('#ppCollapse').onclick = () => {
+  const collapsed = !document.querySelector('.workarea').classList.contains('propsCollapsed');
+  localStorage.setItem('retextpdf.propPanel', collapsed ? 'collapsed' : 'open');
+  syncPropPanel();
+};
+for (const k of ['bold', 'italic', 'underline', 'strike', 'super', 'sub']) {
+  $(`#pp-${k}`).addEventListener('mousedown', (e) => e.preventDefault()); // 편집기 선택을 지킨다
+  $(`#pp-${k}`).onclick = () => toggleStyle(k);
+}
+$('#ppFont').onfocus = () => loadPropFonts();
+$('#ppFont').onchange = () => { const id = $('#ppFont').value; if (id) applyStyle({ fontId: id }); };
+$('#ppSize').onchange = () => { const v = +$('#ppSize').value; if (v >= 1 && v <= 300) applyStyle({ size: v }); else flash('글자 크기는 1~300pt로 넣으세요'); };
+$('#ppColor').onchange = () => applyStyle({ color: $('#ppColor').value });
+document.querySelectorAll('#ppAlign button').forEach((b) => { b.addEventListener('mousedown', (e) => e.preventDefault()); b.onclick = () => applyAlign(b.dataset.align); });
+$('#ppPitch').onchange = () => { const v = +$('#ppPitch').value; if (v > 0 && v <= 200) applyStyle({}, { relayout: true, pitch: v }); };
+$('#ppTracking').onchange = () => { const v = +$('#ppTracking').value; if (Number.isFinite(v) && v >= -5 && v <= 50) applyStyle({}, { letterSpacing: v }); else flash('자간은 −5~50pt로 넣으세요'); };
+$('#ppApply').onclick = () => inplace?.commit();
+$('#ppCancel').onclick = () => inplace?.cancel();
+$('#ppPara').onclick = () => { const st = inplace; if (st?.sel.line && !st.dirty()) { const { i, wrap } = st, line = st.sel.line; dropInplace(); selectedObj = null; selectParagraph(i, line, wrap); } };
+$('#ppFontFit').onclick = () => {
+  const st = inplace; if (!st || !st.single) return;
+  const sel = st.sel, name = cur, text = st.text().replace(/\n/g, ' ');
+  const idx0 = sel.objs[0].idx;
+  window.openPdfFontEditor({ name, i: sel.i, idx: idx0, remove: sel.objs.slice(1).map((o) => o.idx).filter((x, k, a) => x !== idx0 && a.indexOf(x) === k), text,
+    onApply: async (result) => {
+      if (cur !== name) return;
+      mutationSeq++; pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft); maybeFlashUndoTrimmed(result);
+      dropInplace(); selectedObj = null;
+      await refreshPage(sel.i, result.idx);
+      flash(`${result.fontLabel} 적용됨 (Ctrl+S로 저장)`);
+    } });
+};
+// 가리기(진짜 지우기): 고른 글자 / 상자 전체. 글을 고친 채면 고른 자리가 PDF 글과 어긋나므로 먼저 적용하거나 취소해야 한다
+async function inplaceMask(all) {
+  const st = inplace; if (!st) return;
+  if (st.dirty()) return flash('고친 글을 먼저 적용하거나 취소하세요');
+  const sel = st.sel, { from, to } = st.selOffsets();
+  let parts;
+  if (all) parts = sel.objs.filter((o) => o.text.length).map((o) => ({ idx: o.idx, from: o.partFrom || 0, to: (o.partFrom || 0) + o.text.length }));
+  else {
+    if (from === to) return flash('가릴 글자를 고르세요');
+    parts = mapRangeToParts(sel.objs, rawOffset(sel.text, from), rawOffset(sel.text, to), sel.seps);
+  }
+  const name = cur, i = sel.i;
+  dropInplace(); selectedObj = null;
+  const r = await pdfMutate('/api/pdf/mask', { name, i, parts, color: maskColor() });
+  await refreshPage(i);
+  flash(r.ok === false ? '가리지 못했습니다 — 이 글자는 가릴 수 없는 형식입니다. 사각형 가리기로 덮으세요' : '가림 완료 — 텍스트에서도 제거됨');
+}
+$('#ppMaskSel').onclick = () => inplaceMask(false);
+$('#ppMaskAll').onclick = () => inplaceMask(true);
+window.addEventListener('resize', () => { if (inplace && narrowUI()) { const st = inplace; if (st.dirty()) st.commit(); else st.cancel(); } }); // 좁아지면 떠 있는 창 방식으로 돌아간다
+
+// ---- 글자 고치기 상자 테두리(상황줄 [상자 테두리], 기억한다): 고칠 수 있는 상자마다 옅은 점선 ----
+$('#outlineToggle').checked = localStorage.getItem('retextpdf.outlines') === '1';
+function applyOutlines() { $('#pdf').classList.toggle('showOutlines', $('#outlineToggle').checked && tool === 'edit'); }
+$('#outlineToggle').onchange = () => { localStorage.setItem('retextpdf.outlines', $('#outlineToggle').checked ? '1' : '0'); applyOutlines(); };
+
+// ---- 찾아 바꾸기(Ctrl+H · 홈 [바꾸기]): 줄마다 조각별 편집으로 바꿔 글자 모양을 지킨다. [모두 바꾸기]는 실행 취소 한 번 ----
+// 가린 자리(■)·그림 위 투명 글자·묶은 상자·회전 글자의 일치는 바꾸지 않고 목록으로 알린다
+var rp = { matches: [], cur: -1, seq: 0 };
+function openReplaceDialog() {
+  if (!pdfOpen()) return;
+  const d = $('#replaceDialog');
+  if (!d.open) d.show();
+  if (!$('#rpFind').value && !$('#searchBar').hidden) $('#rpFind').value = $('#searchInput').value;
+  $('#rpFind').focus(); $('#rpFind').select();
+  if ($('#rpFind').value) rpFind();
+}
+function rpOpts() { return { name: cur, query: $('#rpFind').value, matchCase: $('#rpCase').checked, wholeWord: $('#rpWord').checked }; }
+async function rpFind(keepAfter) {
+  const seq = ++rp.seq, q = rpOpts();
+  rpClearHit();
+  if (!q.query) { rp.matches = []; rp.cur = -1; rpShow(); return; }
+  try {
+    const r = await apiPost('/api/pdf/replace', { ...q, dryRun: true }, { silent: true });
+    if (seq !== rp.seq) return;
+    rp.matches = r.matches || [];
+    // keepAfter: 방금 바꾼 자리 다음의 첫 일치로(쪽·줄·위치 순서)
+    const after = (m) => !keepAfter || m.i > keepAfter.i || (m.i === keepAfter.i && (m.line > keepAfter.line || (m.line === keepAfter.line && m.at >= keepAfter.at)));
+    rp.cur = rp.matches.length ? Math.max(0, rp.matches.findIndex(after)) : -1;
+  } catch (error) { rp.matches = []; rp.cur = -1; $('#rpCount').textContent = '⚠ ' + (error.message || '찾지 못했습니다'); return; }
+  rpShow(true);
+}
+function rpShow(scroll) {
+  const n = rp.matches.length, ok = rp.matches.filter((m) => m.editable).length, bad = rp.matches.filter((m) => !m.editable);
+  $('#rpCount').textContent = !$('#rpFind').value ? '찾을 말을 넣으세요' : n ? `${rp.cur + 1}/${n}개 · 바꿀 수 있는 것 ${ok}개` : '찾지 못했습니다';
+  $('#rpOne').disabled = !rp.matches[rp.cur]?.editable; $('#rpAll').disabled = !ok;
+  $('#rpSkipped').hidden = !bad.length;
+  $('#rpSkipped').innerHTML = bad.length ? `<b>바꿀 수 없는 자리 ${bad.length}개</b>` + bad.slice(0, 12).map((m) => `<div>${m.i + 1}쪽 · ${escapeHtml(m.reason || '')} · ${escapeHtml(m.context)}</div>`).join('') + (bad.length > 12 ? `<div>… 외 ${bad.length - 12}개</div>` : '') : '';
+  rpDrawHit(scroll);
+}
+function rpClearHit() { document.querySelectorAll('.rpHit').forEach((el) => el.remove()); }
+function rpDrawHit(scroll) {
+  rpClearHit();
+  const m = rp.matches[rp.cur]; if (!m || !m.rect) return;
+  const wrap = $('#pdf').children[m.i], page = pdfPages[m.i]; if (!wrap || !page) return;
+  const s = pdfToScreen(page, m.rect), el = document.createElement('div');
+  el.className = 'searchHit cur rpHit'; el.style.cssText = `left:${s.left}px;top:${s.top}px;width:${s.width}px;height:${s.height}px`;
+  wrap.appendChild(el);
+  if (scroll) el.scrollIntoView({ block: 'center' });
+}
+function rpStep(dir) { if (!rp.matches.length) return; rp.cur = (rp.cur + dir + rp.matches.length) % rp.matches.length; rpShow(true); }
+async function rpReplaceOne() {
+  let m = rp.matches[rp.cur];
+  if (!m) return;
+  if (!m.editable) { const k = rp.matches.findIndex((x, j) => j > rp.cur && x.editable); if (k < 0) return flash('바꿀 수 있는 다음 자리가 없습니다'); rp.cur = k; m = rp.matches[k]; }
+  closeAnyPanel();
+  const r = await mutateWithOverflow('/api/pdf/replace', { ...rpOpts(), replacement: $('#rpWith').value, target: { i: m.i, line: m.line, at: m.at, lineText: m.lineText } });
+  if (!r) return;
+  await refreshPage(m.i);
+  await rpFind({ i: m.i, line: m.line, at: m.at + $('#rpWith').value.length });
+  flash(`1곳을 바꿨습니다 · Ctrl+Z로 되돌리기`);
+}
+async function rpReplaceAll() {
+  closeAnyPanel();
+  const r = await mutateWithOverflow('/api/pdf/replace', { ...rpOpts(), replacement: $('#rpWith').value });
+  if (!r) return;
+  if (r.reloadAll) await renderPdfDoc(cur); else for (const i of r.pages || []) await refreshPage(i);
+  await rpFind();
+  const skipped = (r.skipped || []).length;
+  toast(`${r.count}곳을 바꿨습니다${skipped ? ` · 바꾸지 못한 자리 ${skipped}개(창의 목록 참고)` : ''} — 실행 취소 한 번으로 모두 되돌립니다`, { kind: skipped ? 'warning' : 'info', ms: 7000, action: '실행 취소', onAction: undo });
+}
+$('#replaceBtn').onclick = openReplaceDialog;
+$('#rpFind').addEventListener('input', () => { clearTimeout(rp.t); rp.t = setTimeout(() => rpFind(), 250); });
+$('#rpFind').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); rpStep(e.shiftKey ? -1 : 1); } });
+$('#rpWith').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); rpReplaceOne(); } });
+$('#rpCase').onchange = () => rpFind(); $('#rpWord').onchange = () => rpFind();
+$('#rpPrev').onclick = () => rpStep(-1); $('#rpNext').onclick = () => rpStep(1);
+$('#rpOne').onclick = rpReplaceOne; $('#rpAll').onclick = rpReplaceAll;
+$('#rpClose').onclick = () => $('#replaceDialog').close();
+$('#replaceDialog').addEventListener('close', () => { rpClearHit(); rp.matches = []; rp.cur = -1; });
+$('#replaceDialog').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); $('#replaceDialog').close(); } });
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.code === 'KeyH' && pdfOpen()) { e.preventDefault(); openReplaceDialog(); }
+});
+
 async function refreshPage(i, editedIdx) {
   const renderGeneration = pdfRenderGeneration, name = cur, seq = refreshSeq[i] = (refreshSeq[i] || 0) + 1; // seq: 같은 쪽의 더 새로운 호출이 있으면 이 응답은 버린다
   clearMulti(); // 상자를 다시 그리므로 다중 선택은 해제
@@ -2129,6 +2831,7 @@ async function refreshPage(i, editedIdx) {
   const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json();
   if (renderGeneration !== pdfRenderGeneration || cur !== name || !wrap.isConnected || seq !== refreshSeq[i] || !Array.isArray(objs)) return [];
   pdfObjects[i] = objs;
+  if (inplace && inplace.i === i) dropInplace(); // 쪽 위 편집기도 다시 그린 상자와 어긋나므로 닫는다(적용하지 않음 — 적용 경로는 먼저 닫고 부른다)
   wrap.querySelectorAll('.pdfBox, .pdfEditor, .searchHit').forEach((el) => el.remove());
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i]);
   p9AfterRefresh(i, wrap); // P9: 그 쪽의 주석 자리·개인정보 표시를 새로 그리고 주석 목록을 다시 읽는다
@@ -2180,6 +2883,8 @@ function applyZoom(next, anchor) {
     || wraps.reduce((best, w) => (Math.abs(w.offsetTop - docY) < Math.abs(best.offsetTop - docY) ? w : best), wraps[0]);
   const fx = (docX - target.offsetLeft) / target.offsetWidth, fy = (docY - target.offsetTop) / target.offsetHeight;
   const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => `${o.idx}:${o.partFrom || 0}`), para: !!selectedObj.para, text: el.querySelector('.pdfEditor textarea')?.value, caret: (() => { const t = el.querySelector('.pdfEditor textarea'); return t && { start: t.selectionStart, end: t.selectionEnd }; })() };
+  // v6 쪽 위 편집기: 고치던 내용(DOM)·고른 범위·손잡이 상자를 새 배율에서 되살린다
+  if (editing && inplace) { editing.restore = { html: inplace.tx.innerHTML, zoom: pdfScale, boxChanged: inplace.boxChanged, frame: inplace.boxChanged ? { ...inplace.frame } : null }; editing.caret = inplace.lastSel && { start: inplace.lastSel.from, end: inplace.lastSel.to }; }
   closeAnyPanel(); clearMulti();
   pdfScale = next; showZoom();
   const boxedByPage = wraps.map((wrap, i) => {
@@ -2195,8 +2900,8 @@ function applyZoom(next, anchor) {
   el.scrollLeft = target.offsetLeft + fx * target.offsetWidth - ax;
   if (editing) {
     const hit = boxedByPage[editing.i].find(({ line }) => line.objs.some((o) => editing.idxs.includes(`${o.idx}:${o.partFrom || 0}`)));
-    if (hit && editing.para) selectParagraph(editing.i, hit.line, wraps[editing.i], editing.text, editing.caret || undefined); // 문단은 문단으로 다시 연다
-    else if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); openInlineEditor(editing.text ?? displayText(hit.line.text), editing.caret || undefined); }
+    if (hit && editing.para) selectParagraph(editing.i, hit.line, wraps[editing.i], editing.text, editing.caret || undefined, editing.restore); // 문단은 문단으로 다시 연다
+    else if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); openTextEditor(editing.text ?? displayText(hit.line.text), editing.caret || undefined, editing.restore); }
   }
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => {
@@ -3040,6 +3745,7 @@ const HINTS = {
   md: '왼쪽에서 고치면 오른쪽 미리보기에 바로 반영됩니다 · Ctrl+S로 저장',
   edit: '고칠 줄을 클릭하세요. 여러 줄은 Shift+클릭',
   editOpen: 'Enter로 적용, Esc로 취소 · 글자를 골라 [선택 글자 가리기]로 지울 수 있습니다 · 두 번 클릭(Ctrl+클릭)하면 문단 전체',
+  editInplace: 'Ctrl+Enter 또는 바깥을 누르면 적용 · Esc 취소 · Enter는 줄바꿈(↵) · 글자를 골라 오른쪽 속성 창·꾸밈 막대로 굵게·색·크기 · 손잡이로 폭',
   multi: 'Shift+클릭으로 상자를 더하거나 뺍니다 · [그룹 설정]으로 한 상자처럼 묶습니다',
   mask: '◀▲▼▶로 조금씩 옮기고(Shift: 크게) [삭제]로 지웁니다',
   redact: '가릴 곳을 끌어서 감싸세요 — 그 안의 글자·그림은 파일에서 지워집니다 · 이미 가린 상자를 누르면 옮기거나 지웁니다 · Esc로 끝',
@@ -3089,7 +3795,7 @@ function updateCtxBar() {
   else if (mode === 'md') { name = 'Markdown 편집'; hint = HINTS.md; }
   else {
     name = TOOL_NAMES[tool];
-    hint = multi.size ? HINTS.multi : selectedMask ? HINTS.mask : tool === 'edit' && selectedObj ? HINTS.editOpen
+    hint = multi.size ? HINTS.multi : selectedMask ? HINTS.mask : tool === 'edit' && inplace ? HINTS.editInplace : tool === 'edit' && selectedObj ? HINTS.editOpen
       : tool === 'text' && textDraft ? HINTS.textTyping : tool === 'stamp' && !stampLib.length ? HINTS.stampEmpty
       : tool === 'ink' && inkDraft?.strokes.length ? `펜 획 ${inkDraft.strokes.length}개 — ${HINTS.inkDrawing}` : HINTS[tool];
   }
@@ -3100,7 +3806,9 @@ function updateCtxBar() {
   $('#ctxStampOpts').hidden = !(pdf && tool === 'stamp');
   $('#ctxAnnotOpts').hidden = !(pdf && isAnnotTool(tool));
   if (pdf && isAnnotTool(tool)) syncAnnotOpts();
+  $('#ctxEditOpts').hidden = !(pdf && tool === 'edit' && !multi.size);
   $('#ctxHint').textContent = hint; $('#ctxHint').title = hint;
+  applyOutlines(); syncPropPanel(); // v6: 상자 테두리·속성 창도 도구·문서 상태를 따른다
 }
 // 가림 색: 'black' → [0,0,0,255], 'auto' → 서버가 그 자리 배경색을 추출. 실행마다 검정으로 시작(기억 안 함)
 const maskColor = () => ($('#maskColor').value === 'auto' ? 'auto' : [0, 0, 0, 255]);
@@ -3206,6 +3914,7 @@ const ICONS = {
   lock: '<rect x="4.5" y="10.5" width="15" height="11" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/><path d="M12 14.5v3"/>',
   eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>',
+  replace: '<circle cx="9" cy="9" r="5.5"/><path d="m13 13 2.5 2.5"/><path d="M14 4.5h5.5v5"/><path d="M19.5 4.5 15.8 8.2"/><path d="M4 19.5h9M16.5 15v5.5h4"/>',
   minus: '<path d="M5 12h14"/>',
   plus: '<path d="M5 12h14M12 5v14"/>',
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 1 1 3.4 2.6c-.6.3-1 .8-1 1.5v.6"/><path d="M12 17h.01"/>',
@@ -3246,6 +3955,9 @@ const SHORTCUTS = [
   { group: '편집', keys: 'Ctrl+Z', label: '실행 취소', target: 'undoBtn' },
   { group: '편집', keys: 'Ctrl+Y / Ctrl+Shift+Z', label: '다시 실행', target: 'redoBtn' },
   { group: '편집', keys: 'Ctrl+F', label: '문서에서 찾기', target: 'searchToggle' },
+  { group: '편집', keys: 'Ctrl+H', label: '찾아 바꾸기(글자 모양 유지)', target: 'replaceBtn' },
+  { group: '편집', keys: 'Ctrl+Enter', label: '쪽 위 편집기: 적용(Esc 취소 · Enter 줄바꿈)' },
+  { group: '편집', keys: 'Ctrl+B / Ctrl+I / Ctrl+U', label: '쪽 위 편집기: 고른 글자 굵게 · 기울임 · 밑줄' },
   { group: '편집', keys: 'Enter / Shift+Enter', label: '찾기: 다음 · 이전 결과' },
   { group: '편집', keys: 'Shift+클릭', label: '여러 줄 상자 고르기(묶기)' },
   { group: '도구', keys: 'E', label: '글자 고치기', target: 'toolEdit' },

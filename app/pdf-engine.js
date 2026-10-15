@@ -10,6 +10,8 @@ const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
 const MARK_HF = 'RetextPdfHeaderFooter'; // 머리말·꼬리말 글자(다시 넣으면 교체)
 const MARK_WM = 'RetextPdfWatermark';    // 워터마크 글자·그림(다시 넣으면 모든 쪽에서 교체)
+const MARK_STYLE = 'RetextPdfStyle';     // v6: 고른 글자에 준 모양(밑줄·취소선·가짜 굵게·가짜 기울임·첨자) — 글을 고쳐 써도 따라간다
+const MARK_DECO = 'RetextPdfDeco';       // v6: 밑줄·취소선 선(얇은 채움 사각형). syncDeco가 RetextPdfStyle에서 다시 그린다
 const META_KEYS = ['Title', 'Author', 'Subject', 'Keywords', 'Creator', 'Producer', 'CreationDate', 'ModDate'];
 const META_EDITABLE = ['Title', 'Author', 'Subject', 'Keywords'];
 
@@ -535,6 +537,24 @@ async function open(buffer, password) {
     if (id) { mk = P.FPDFPageObj_AddMark(o, MARK_GROUP); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', id); }
   };
   const newGroupId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  // ── v6 글자 모양 마크: 텍스트 객체에 RetextPdfStyle(u 밑줄 · s 취소선 · fb 가짜 굵게 · fi 가짜 기울임 · sc 위/아래첨자 + k 배율 · sy 기준선 이동)
+  // 값은 문자열('1', 'sup', '0.65'…). 밑줄·취소선 선(RetextPdfDeco 사각형)은 이 표시에서 syncDeco가 다시 그린다 — 글을 고치거나 옮겨도 선이 따라온다
+  const STYLE_KEYS = ['u', 's', 'fb', 'fi', 'sc', 'k', 'sy'];
+  const styleOf = (o) => {
+    const mk = findMark(o, MARK_STYLE);
+    if (!mk) return null;
+    const st = {};
+    for (const k of STYLE_KEYS) { const v = markParam(mk, k); if (v != null && v !== '') st[k] = v; }
+    return Object.keys(st).length ? st : null;
+  };
+  const setStyleMark = (o, st) => {
+    let mk; while ((mk = findMark(o, MARK_STYLE))) P.FPDFPageObj_RemoveMark(o, mk);
+    const keys = STYLE_KEYS.filter((k) => st && st[k] != null && st[k] !== '' && st[k] !== false);
+    if (!keys.length) return;
+    mk = P.FPDFPageObj_AddMark(o, MARK_STYLE);
+    if (mk) for (const k of keys) P.FPDFPageObjMark_SetStringParam(doc, o, mk, k, String(st[k]));
+  };
+  const copyStyleMark = (src, dst) => { const st = styleOf(src); if (st) setStyleMark(dst, st); };
 
   // 페이지 인덱스가 바뀌는 작업(삭제·끼우기·복제·순서 변경) 전에: 미룬 콘텐츠를 쓰고 캐시된 페이지 핸들을 모두 닫는다
   const resetPages = () => { flush(); for (const h of pages.values()) P.FPDF_ClosePage(h); pages.clear(); };
@@ -1092,6 +1112,9 @@ async function open(buffer, password) {
           if (findMark(o, MARK_PAGENUM)) item.pageNum = true; // 쪽 번호 글자(다시 매기기·지우기 대상)
           if (findMark(o, MARK_HF)) item.headerFooter = true; // 머리말·꼬리말 글자
           if (findMark(o, MARK_WM)) item.watermark = true;    // 워터마크 글자·그림
+          if (findMark(o, MARK_DECO)) item.deco = true;       // v6 밑줄·취소선 선(syncDeco가 다시 그린다)
+          const st = t === OBJ_TEXT ? styleOf(o) : null;
+          if (st) item.style = st;                            // v6 글자 모양 표시(밑줄·취소선·가짜 굵게/기울임·첨자)
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) {
             const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7;
@@ -1177,7 +1200,7 @@ async function open(buffer, password) {
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 줄을 만들지 못했습니다.' }; }
           M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
-          copyTextStyle(o, neo);
+          copyTextStyle(o, neo); copyStyleMark(o, neo);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
           tagGroup(neo, gid);
           if (entry) tagFont(neo, entry);
@@ -1331,7 +1354,7 @@ async function open(buffer, password) {
         if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
           P.FPDFPageObj_SetFillColor(neo, i32(scratch), i32(scratch + 4), i32(scratch + 8), i32(scratch + 12));
         }
-        copyTextStyle(o, neo);
+        copyTextStyle(o, neo); copyStyleMark(o, neo);
         if (entry) tagFont(neo, entry);
         const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         // 같은 자리에 넣어 idx가 밀리지 않게 한다
@@ -1391,7 +1414,7 @@ async function open(buffer, password) {
         if (!neo || !P.FPDFText_SetText(neo, u16)) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 텍스트 객체를 만들지 못했습니다.' }; }
         if (P.FPDFPageObj_GetMatrix(o, s)) P.FPDFPageObj_SetMatrix(neo, s);
         if (P.FPDFPageObj_GetFillColor(o, s, s + 4, s + 8, s + 12)) P.FPDFPageObj_SetFillColor(neo, i32(s), i32(s + 4), i32(s + 8), i32(s + 12));
-        copyTextStyle(o, neo);
+        copyTextStyle(o, neo); copyStyleMark(o, neo);
         if (entry) tagFont(neo, entry);
         const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         P.FPDFPage_InsertObject(p, neo);
@@ -1425,7 +1448,7 @@ async function open(buffer, password) {
             m.forEach((v, k) => M.setValue(s + k * 4, k === 4 ? g[0] : k === 5 ? g[1] : v, 'float'));
             P.FPDFPageObj_SetMatrix(neo, s);
             P.FPDFPageObj_SetFillColor(neo, item.color[0], item.color[1], item.color[2], item.color[3]);
-            copyTextStyle(o, neo);
+            copyTextStyle(o, neo); copyStyleMark(o, neo);
             const fm = findMark(o, 'RetextPdfFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
             P.FPDFPage_InsertObject(p, neo);
             idxs.push(P.FPDFPage_CountObjects(p) - 1);
@@ -1450,6 +1473,154 @@ async function open(buffer, password) {
       }
       if (done) regen(p);
       return { ok: done > 0, scaled: done };
+    },
+
+    // ── v6: 고른 글자 모양 바꾸기(글자 조각 하나 = 텍스트 객체 하나) ─────────────────────────────
+    // opts: { bold, italic (true/false — 없으면 그대로), fontId(설치 폰트 집안 바꾸기), size(pt, 보이는 크기), color('#rrggbb'),
+    //         script('super'|'sub'|null), underline, strike }
+    // 굵게·기울임: 같은 집안의 진짜 굵게·기울임 면(설치 폰트)이 있고 글자가 다 있으면 그 글꼴로 다시 만든다(RetextPdfFont 표시 — 다음 편집도 그 글꼴).
+    //   없으면 흉내: 굵게 = 렌더 모드 2(채움+외곽선, 선 굵기 0.03em — Word가 쓰는 방식), 기울임 = 행렬 c = 0.2·a(글자 공간에서 x += 0.2·y)
+    // 첨자: 기준선 원점을 중심으로 0.65배 + 기준선 ±0.33em. 되돌릴 때 쓰려고 배율(k)·이동(sy)을 RetextPdfStyle에 적는다
+    // 객체 자리(인덱스)는 그대로다(새로 만들 때도 같은 자리에 넣는다). 반환 { ok, idx, face, fakeBold, fakeItalic, skipped: [이유] }
+    restyleText(i, idx, opts = {}) {
+      return api.batch(() => {
+        const p = page(i);
+        let o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: '텍스트 상자를 다시 선택하세요.' };
+        const item = api.objects(i)[idx], text = item.text || '';
+        if (item.hidden) return { ok: false, reason: '그림 위 투명 글자는 모양을 바꿀 수 없습니다.' };
+        if (!item.matrix || Math.abs(item.matrix[1]) > 1e-3 || !(item.matrix[0] > 0) || !(item.matrix[3] > 0)) return { ok: false, reason: '회전한 글자는 모양을 바꿀 수 없습니다.' };
+        const st = { ...(styleOf(o) || {}) }, skipped = [];
+        const font = P.FPDFTextObj_GetFont(o);
+        const ia = mal(4); let italicAngle = 0; try { if (P.FPDFFont_GetItalicAngle(font, ia)) italicAngle = i32(ia); } finally { free(ia); }
+        const entryNow = fontOf(o) ? (() => { try { return fontRegistry.get(fontOf(o)); } catch { return null; } })() : null;
+        const realB = isBold(o), realI = /italic|oblique/i.test(item.font || '') || italicAngle !== 0 || (entryNow ? fontRegistry.isItalicFace(entryNow) : false);
+        const m = [...item.matrix], skew = m[0] ? m[2] / m[0] : 0;
+        const curB = realB || item.renderMode === 2, curI = realI || Math.abs(skew) > 0.05;
+        const B = opts.bold ?? curB, I = opts.italic ?? curI;
+        const family = opts.fontId ? fontRegistry.get(opts.fontId).family : entryNow ? entryNow.family : fontRegistry.familyFor(item.font);
+        const usable = (e) => e && !fontRegistry.missing(e, text).length;
+        // 바꿀 글꼴(면): 진짜 면이 필요하면(집안 바꾸기·진짜 굵게/기울임 빼기) 반드시, 굵게·기울임을 더할 때는 있으면 쓴다
+        const mustSwitch = !!opts.fontId || (realB && !B) || (realI && !I);
+        const wantSwitch = mustSwitch || (B && !realB) || (I && !realI);
+        let face = null;
+        if (wantSwitch && family) {
+          const exact = fontRegistry.faceFor(family, B, I);
+          if (usable(exact)) face = exact;
+          else if (mustSwitch) face = [fontRegistry.faceFor(family, B, false), fontRegistry.faceFor(family, false, I), fontRegistry.faceFor(family, false, false), opts.fontId ? fontRegistry.get(opts.fontId) : null].find(usable) || null;
+          if (mustSwitch && !face) {
+            if (opts.fontId) return { ok: false, reason: `선택한 폰트에 없는 글자: ${fontRegistry.missing(fontRegistry.get(opts.fontId), text).slice(0, 12).join(' ')}` };
+            skipped.push(realB && !B ? 'bold' : 'italic');
+          }
+        } else if (mustSwitch && !family) skipped.push(realB && !B ? 'bold' : 'italic');
+        if (face && face.id === entryNow?.id) face = null; // 이미 그 면이다
+        // 진짜 굵게·기울임을 뺄 면을 못 찾았으면 그 모양은 그대로 둔다(skipped로 알린다)
+        const faceB = face ? fontRegistry.isBoldFace(face) : realB, faceI = face ? fontRegistry.isItalicFace(face) : realI;
+        const fakeBold = B && !faceB, fakeItalic = I && !faceI;
+        // 행렬: 진짜 기울임 면이면 흉내 기울임을 뺀다. 흉내 기울임은 원래 기울어 있던 값(Chromium 합성 기울임)을 그대로 두고, 없으면 0.2
+        m[2] = fakeItalic ? (Math.abs(skew) > 0.05 ? skew : 0.2) * m[0] : 0;
+        const fill = item.color || [0, 0, 0, 255];
+        const color = opts.color ? parseColor(opts.color) : [...fill];
+        color[3] = fill[3] ?? 255;
+        if (face) { // 새 면으로 다시 만든다(같은 자리)
+          const f = customFont(face, text);
+          const neo = P.FPDFPageObj_CreateTextObj(doc, f, item.size);
+          const u = utf16(text || ' '); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
+          if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 글꼴로 글자를 만들지 못했습니다.' }; }
+          copyTextStyle(o, neo);
+          const gid = groupOf(o); if (gid) tagGroup(neo, gid);
+          tagFont(neo, face);
+          if (!P.FPDFPage_InsertObjectAtIndex(p, neo, idx)) { P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 글꼴로 바꾸지 못했습니다.' }; }
+          P.FPDFPage_RemoveObject(p, o); P.FPDFPageObj_Destroy(o);
+          o = neo;
+        }
+        setMatrix(o, m);
+        P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3]);
+        const origin = () => { const b = mal(24); try { P.FPDFPageObj_GetMatrix(o, b); return [f32(b + 16), f32(b + 20), Math.hypot(f32(b), f32(b + 4))]; } finally { free(b); } };
+        // 크기(보이는 크기, pt): 기준선 원점을 중심으로 늘리고 줄인다
+        if (opts.size != null && opts.size !== '') {
+          if (!(Number(opts.size) >= 1 && Number(opts.size) <= 300)) return { ok: false, reason: '글자 크기는 1~300pt 범위로 입력하세요.' };
+          const [ox, oy, sc] = origin(), k = Number(opts.size) / (item.size * sc);
+          if (Math.abs(k - 1) > 1e-3) P.FPDFPageObj_Transform(o, k, 0, 0, k, ox * (1 - k), oy * (1 - k));
+        }
+        // 첨자: 먼저 옛 첨자를 되돌리고(이동 → 배율) 새 첨자를 건다(배율 → 이동)
+        if (opts.script !== undefined && (opts.script || null) !== ({ sup: 'super', sub: 'sub' }[st.sc] || null)) {
+          if (st.sc) {
+            const k = Number(st.k) || 0.65, sy = Number(st.sy) || 0;
+            P.FPDFPageObj_Transform(o, 1, 0, 0, 1, 0, -sy);
+            const [ox, oy] = origin();
+            P.FPDFPageObj_Transform(o, 1 / k, 0, 0, 1 / k, ox * (1 - 1 / k), oy * (1 - 1 / k));
+            st.sc = st.k = st.sy = null;
+          }
+          if (opts.script === 'super' || opts.script === 'sub') {
+            const [ox, oy, sc] = origin(), base = item.size * sc, k = 0.65;
+            const sy = (opts.script === 'super' ? 0.33 : -0.33) * base;
+            P.FPDFPageObj_Transform(o, k, 0, 0, k, ox * (1 - k), oy * (1 - k));
+            P.FPDFPageObj_Transform(o, 1, 0, 0, 1, 0, sy);
+            Object.assign(st, { sc: opts.script === 'super' ? 'sup' : 'sub', k: String(k), sy: sy.toFixed(3) });
+          }
+        }
+        // 굵게 흉내: 채움+외곽선, 선 굵기는 지금 보이는 크기의 0.03em
+        // 이미 렌더 모드 2(Word의 굵게 흉내)였으면 원래 선 굵기를 지킨다 — 색만 바꿀 때 굵기가 달라지지 않게
+        if (fakeBold) {
+          if (item.renderMode !== 2 || (opts.size != null && opts.size !== '') || face) {
+            P.FPDFTextObj_SetTextRenderMode(o, 2);
+            P.FPDFPageObj_SetStrokeWidth(o, Math.max(0.1, 0.03 * item.size * origin()[2]));
+          }
+          P.FPDFPageObj_SetStrokeColor(o, color[0], color[1], color[2], color[3]);
+        } else if (P.FPDFTextObj_GetTextRenderMode(o) === 2) P.FPDFTextObj_SetTextRenderMode(o, 0);
+        st.fb = fakeBold ? '1' : null;
+        st.fi = fakeItalic ? '1' : null;
+        if (opts.underline !== undefined) st.u = opts.underline ? '1' : null;
+        if (opts.strike !== undefined) st.s = opts.strike ? '1' : null;
+        setStyleMark(o, st);
+        regen(p);
+        return { ok: true, idx, face: face ? face.label : null, fakeBold, fakeItalic, skipped };
+      });
+    },
+    // 밑줄·취소선 선을 쪽 전체에서 다시 그린다: 옛 선(RetextPdfDeco)을 모두 지우고, RetextPdfStyle u·s가 있는 글자마다
+    // 공백을 뺀 잉크 폭만큼 얇은 채움 사각형(글자색). 같은 줄·같은 색·같은 크기로 0.6em 안에 이어진 선은 하나로 잇는다(낱말 사이 공백 포함).
+    // 지운 옛 선의 인덱스(오름차순)를 돌려준다 — 호출한 쪽이 다른 객체 인덱스를 고친다(새 선은 맨 뒤라 앞 인덱스를 밀지 않는다)
+    syncDeco(i) {
+      return api.batch(() => {
+        const p = page(i), removed = [];
+        for (let k = P.FPDFPage_CountObjects(p) - 1; k >= 0; k--) {
+          const o = P.FPDFPage_GetObject(p, k);
+          if (o && findMark(o, MARK_DECO) && P.FPDFPage_RemoveObject(p, o)) { P.FPDFPageObj_Destroy(o); removed.push(k); }
+        }
+        if (removed.length) regen(p);
+        removed.reverse();
+        const segs = [];
+        for (const it of api.objects(i)) {
+          if (it.type !== 'text' || !it.style || !(it.style.u || it.style.s) || it.hidden || !it.matrix || Math.abs(it.matrix[1]) > 1e-3) continue;
+          const g = it.glyphs || [], t = it.text || '';
+          if (!g.length || g.length !== t.length) continue;
+          let a = 0, b = g.length - 1;
+          while (a <= b && /\s/.test(t[a])) a++;
+          while (b >= a && /\s/.test(t[b])) b--;
+          if (a > b) continue;
+          const em = it.scaledSize || it.size || 10;
+          for (const kind of ['u', 's']) if (it.style[kind]) segs.push({ kind, x0: g[a][0], x1: g[b][0] + g[b][2], y: it.matrix[5], em, color: it.color || [0, 0, 0, 255] });
+        }
+        segs.sort((s1, s2) => s1.kind.localeCompare(s2.kind) || s2.y - s1.y || s1.x0 - s2.x0);
+        const merged = [];
+        for (const s of segs) {
+          const L = merged[merged.length - 1];
+          if (L && L.kind === s.kind && Math.abs(L.y - s.y) < 0.05 * s.em && Math.abs(L.em - s.em) < 0.05 * s.em && L.color.slice(0, 3).join() === s.color.slice(0, 3).join() && s.x0 - L.x1 < 0.6 * s.em) { L.x1 = Math.max(L.x1, s.x1); continue; }
+          merged.push({ ...s });
+        }
+        for (const s of merged) {
+          const th = Math.max(0.4, 0.055 * s.em), cy = s.kind === 'u' ? s.y - 0.12 * s.em : s.y + 0.3 * s.em;
+          const r = P.FPDFPageObj_CreateNewRect(s.x0, cy - th / 2, s.x1 - s.x0, th);
+          if (!r) continue;
+          P.FPDFPageObj_SetFillColor(r, s.color[0], s.color[1], s.color[2], s.color[3] ?? 255);
+          P.FPDFPath_SetDrawMode(r, 1, false);
+          P.FPDFPageObj_AddMark(r, MARK_DECO);
+          P.FPDFPage_InsertObject(p, r);
+        }
+        if (merged.length) regen(p);
+        return { ok: true, removed, added: merged.length };
+      });
     },
 
     // ── H: 글자 상자 / 이동 / 사각형 / 마스킹 ──────────────────────────────
@@ -1689,6 +1860,7 @@ async function open(buffer, password) {
               P.FPDFTextObj_SetTextRenderMode(neo, P.FPDFTextObj_GetTextRenderMode(obj));
               const gid = groupOf(obj); if (gid) tagGroup(neo, gid);
               const fm = findMark(obj, 'RetextPdfFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
+              copyStyleMark(obj, neo);
               let k = at;
               if (!P.FPDFPage_InsertObjectAtIndex(p, neo, at)) { P.FPDFPage_InsertObject(p, neo); k = P.FPDFPage_CountObjects(p) - 1; }
               if (j === idx) inserted = k;
