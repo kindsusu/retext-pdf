@@ -24,7 +24,8 @@
     --backdrop:rgba(42,40,36,.38);--scroll:#cfc8bb;--scrollHover:#b9b1a2;
     --info:#2f74c0;--warn:#b7791f;--bad:#c0392b;--badText:#b42318;
     --bannerBg:#fdf1d8;--bannerFg:#6b4300;--bannerLine:#efd7a4;
-    --overlay:rgba(251,249,244,.88);--tabBar:#f0ece4}
+    --overlay:rgba(251,249,244,.88);--tabBar:#f0ece4;
+    --linkBg:rgba(47,116,192,.08);--diffDel:rgba(229,57,53,.32);--diffIns:rgba(46,160,67,.32);--diffChg:rgba(240,190,30,.42)}
   /* v6 Wave C 어두운 테마(⚙ 설정 → 어둡게 · 시스템 따라가기): 창 틀은 따뜻한 짙은 회색, 문서 뒤 바탕은 짙은 회색, 쪽은 그대로 흰 종이.
      글자 토큰은 밝은 테마와 같이 대비 4.5:1 이상(ui-wiring.test.js가 두 테마 모두 잰다) */
   :root[data-theme="dark"]{color-scheme:dark;
@@ -35,7 +36,8 @@
     --backdrop:rgba(0,0,0,.55);--scroll:#4f4c46;--scrollHover:#635f58;
     --info:#6aa8ea;--warn:#e3ac4f;--bad:#e5604f;--badText:#ff8f80;
     --bannerBg:#3b2f17;--bannerFg:#f2d69a;--bannerLine:#5e4b23;
-    --overlay:rgba(30,29,27,.9);--tabBar:#1a1917}
+    --overlay:rgba(30,29,27,.9);--tabBar:#1a1917;
+    --linkBg:rgba(106,168,234,.12);--diffDel:rgba(229,57,53,.4);--diffIns:rgba(46,160,67,.4);--diffChg:rgba(240,190,30,.45)}
   *{box-sizing:border-box}
   /* 스크롤 막대: 밝은 바탕에 맞춘 옅은 막대(문서 영역 .pdf는 세로 막대를 늘 두어 맞춤 계산이 흔들리지 않게 한다) */
   ::-webkit-scrollbar{width:12px;height:12px}
@@ -515,6 +517,60 @@
   .ctList{margin:6px 0 10px;padding:8px 10px 8px 28px;max-height:220px;overflow:auto;background:var(--panel2);border:1px solid var(--line);border-radius:8px}
   .ctList li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   dialog.panel button.danger{color:var(--badText)}
+  /* ---- v6 Wave D: 끌기 도구(자르기·링크·스냅샷) · 링크 상자 · 첨부 목록 · 비교 보기 · 일괄 처리 ---- */
+  .pdf.toolDrag,.pdf.toolDrag .pdfBox{cursor:crosshair}
+  .wdBox{position:absolute;z-index:6;border:1.5px dashed var(--acc);background:var(--accBg);pointer-events:none}
+  .wdBox.crop{box-shadow:0 0 0 9999px var(--overlay);background:transparent}
+  .linkHit{position:absolute;z-index:4;border:1.5px dashed var(--info);border-radius:2px;background:var(--linkBg);display:none}
+  .pdf.toolLink .linkHit{display:block;cursor:pointer}
+  .pdf.toolLink .linkHit:hover,.linkHit.sel{background:var(--accBg);border-color:var(--acc)}
+  .linkPop{position:fixed;z-index:40;width:340px;background:var(--panel);color:var(--fg);border:1px solid var(--line2);border-radius:10px;box-shadow:var(--shadow);padding:10px 12px}
+  .linkPop .row{display:flex;gap:6px;align-items:center;margin:4px 0}.linkPop .row .sp{flex:1}
+  .linkPop input[type=text]{flex:1;min-width:0;background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font:inherit}
+  .linkPop input[type=number]{background:var(--input);color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:3px 6px;font:inherit}
+  .linkPop .bad{color:var(--badText);font-size:12px}
+  .attachList{display:flex;flex-direction:column;gap:2px;padding:4px 6px;overflow:auto}
+  .attachRow{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px}
+  .attachRow:hover{background:var(--hover)}
+  .attachRow .an{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attachRow .as{color:var(--mut);font-size:11px;white-space:nowrap}
+  .attachEmpty{color:var(--mut);padding:10px 8px;font-size:12px}
+  .cropGrid{display:grid;grid-template-columns:repeat(4,auto);gap:6px 12px;margin:4px 0 8px 22px;justify-content:start}
+  .cropGrid input{width:64px}
+  .batesPreview{font-family:Consolas,monospace;color:var(--accText)}
+  .batchFiles{max-height:22vh;overflow:auto;margin:6px 0;padding:4px 6px 4px 30px;border:1px solid var(--line2);border-radius:8px;background:var(--input);min-height:44px}
+  .batchFiles li{padding:2px 0}.batchFiles li .bf{display:flex;gap:6px;align-items:center}.batchFiles li .bn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .batchFiles li button{padding:0 6px;min-width:0;line-height:1.4}
+  .batchOpts>div{display:none;align-items:center;gap:6px;flex-wrap:wrap;margin:6px 0}.batchOpts>div.on{display:flex}
+  .batchSummary table,.linksTable{width:100%;border-collapse:collapse;font-size:12px}
+  .batchSummary td,.batchSummary th,.linksTable td,.linksTable th{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left}
+  .batchSummary .ok{color:var(--accText)}
+  dialog.panel.cmpView .cmpCard{width:96vw;height:92vh;max-width:none;display:flex;flex-direction:column;padding:12px 16px}
+  .cmpHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.cmpHead h2{margin:0}.cmpHead .sp{flex:1}
+  .cmpStats{font-size:12px;color:var(--mut)}
+  .cmpBody{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr 280px;gap:10px;margin-top:8px}
+  .cmpSide{display:flex;flex-direction:column;min-height:0;min-width:0}
+  .cmpName{font-size:12px;color:var(--mut);padding:0 2px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmpPane{flex:1;overflow:auto;background:var(--docBg);border-radius:8px;padding:10px;position:relative}
+  .cmpPage{position:relative;margin:0 auto 10px;background:var(--paper);box-shadow:var(--shadow)}
+  .cmpPage img.pg{display:block;width:100%;height:100%}
+  .cmpPage img.heat{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;opacity:.85}
+  .cmpPage .pgNo{position:absolute;right:4px;bottom:2px;font-size:10px;color:var(--mut)}
+  .cmpPage .heatPct{position:absolute;left:4px;top:2px;font-size:10px;background:var(--panel);color:var(--badText);padding:0 4px;border-radius:4px}
+  .cmpHl{position:absolute;border-radius:2px;pointer-events:none}
+  .cmpHl.del{background:var(--diffDel)}.cmpHl.ins{background:var(--diffIns)}.cmpHl.chg{background:var(--diffChg)}
+  .cmpHl.anchor{border-left:2px solid var(--acc);background:transparent}
+  .cmpHl.flash{outline:2px solid var(--acc);outline-offset:1px}
+  .cmpListWrap{display:flex;flex-direction:column;min-height:0}
+  .cmpLegend{display:flex;gap:6px;padding:0 0 6px;font-size:12px}
+  .cmpKey{padding:0 6px;border-radius:4px}.cmpKey.del{background:var(--diffDel)}.cmpKey.ins{background:var(--diffIns)}.cmpKey.chg{background:var(--diffChg)}
+  .cmpList{flex:1;overflow:auto;border:1px solid var(--line2);border-radius:8px;background:var(--input)}
+  .cmpItem{padding:6px 8px;border-bottom:1px solid var(--line);cursor:pointer;font-size:12px;line-height:1.45}
+  .cmpItem:hover{background:var(--hover)}.cmpItem.on{background:var(--sel)}
+  .cmpItem .k{display:inline-block;padding:0 5px;border-radius:4px;margin-right:4px}
+  .cmpItem .k.del{background:var(--diffDel)}.cmpItem .k.ins{background:var(--diffIns)}.cmpItem .k.chg{background:var(--diffChg)}
+  .cmpItem .t{display:block;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cmpItem .t s{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -579,6 +635,7 @@
     <button type="button" class="tb" id="toolStamp" data-icon="toolStamp" data-tool="stamp" aria-pressed="false" data-tip="도장: 도장·서명 그림을 찍습니다"><span class="tl">도장</span></button>
     <button type="button" class="tb" id="menuInsertImage" data-icon="insertImage" data-electron data-tip="그림 넣기: 현재 쪽에 PNG·JPEG 그림을 넣습니다"><span class="tl">그림</span></button>
     <button type="button" class="tb" id="rectTool" data-icon="redact" data-tool="redact" aria-pressed="false" data-tip="가리기: 끌어서 감싼 곳의 글자·그림을 지우고 덮습니다"><span class="tl">가리기</span></button>
+    <button type="button" class="tb" id="snapTool" data-icon="snapshot" data-tool="snapshot" aria-pressed="false" data-tip="영역 스냅샷: 끌어 감싼 곳을 그림으로 클립보드에 복사합니다(PNG로 저장도)"><span class="tl">스냅샷</span></button>
   </div>
   <div class="tsp"></div>
   <div class="tgroup" id="groupView" role="group" aria-label="보기">
@@ -605,6 +662,10 @@
     <button type="button" class="tb" id="annotListBtn" data-icon="annotList" data-tip="주석 목록: 왼쪽 패널에 이 문서의 주석을 모아 봅니다"><span class="tl">주석 목록</span></button>
     <button type="button" class="tb" id="annotFlattenBtn" data-icon="flatten" data-tip="모두 고정: 주석을 쪽 내용으로 굳혀 더는 고치거나 지울 수 없게 합니다"><span class="tl">모두 고정</span></button>
   </div>
+  <div class="tgroup" id="groupLink" data-modes="pdf" role="group" aria-label="링크">
+    <button type="button" class="tb" id="linkTool" data-icon="link" data-tool="link" aria-pressed="false" data-tip="링크: 끌어 감싼 곳에 웹 주소나 이 문서의 쪽으로 가는 링크를 겁니다"><span class="tl">링크</span></button>
+    <button type="button" class="tb" id="linkListBtn" data-icon="linkList" data-tip="링크 목록: 이 문서의 링크를 모아 보고 고치거나 지웁니다"><span class="tl">링크 목록</span></button>
+  </div>
  </div>
  <div class="rpanel" id="rpanel-page" data-rtab="page" role="tabpanel" aria-labelledby="rtab-page" hidden>
   <div class="tgroup" id="groupPage" data-modes="pdf" role="group" aria-label="쪽 돌리기">
@@ -620,6 +681,12 @@
     <button type="button" class="tb" id="pageNumbers" data-icon="pageNumbers" data-tip="모든 쪽에 쪽 번호 넣기"><span class="tl">쪽 번호</span></button>
     <button type="button" class="tb" id="headerFooterBtn" data-icon="headerFooter" data-tip="머리말·꼬리말: 쪽 위·아래에 글(쪽 번호·날짜·파일 이름)을 넣습니다"><span class="tl">머리말·꼬리말</span></button>
     <button type="button" class="tb" id="watermarkBtn" data-icon="watermark" data-tip="워터마크: 쪽마다 글자나 그림을 옅게 겹쳐 넣습니다"><span class="tl">워터마크</span></button>
+    <button type="button" class="tb" id="batesBtn" data-icon="bates" data-tip="베이츠 번호: 쪽마다 접두어와 일련번호(ABC-000001)를 넣습니다 — 여러 파일에 이어서도"><span class="tl">베이츠 번호</span></button>
+  </div>
+  <div class="tgroup" id="groupCrop" data-modes="pdf" role="group" aria-label="자르기·쪽 크기">
+    <button type="button" class="tb" id="cropTool" data-icon="crop" data-tool="crop" aria-pressed="false" data-tip="쪽 자르기: 남길 곳을 끌어 감싸면 그 바깥을 잘라 냅니다(여러 쪽에 한꺼번에)"><span class="tl">자르기</span></button>
+    <button type="button" class="tb" id="cropBtn" data-icon="cropSet" data-tip="여백 자르기: 여백을 숫자로 주거나 내용에 맞춰 자동으로 자르고, 자른 것을 풉니다"><span class="tl">여백 자르기…</span></button>
+    <button type="button" class="tb" id="pageSizeBtn" data-icon="pageSize" data-tip="쪽 크기: A4·Letter·A5 같은 크기로 바꿉니다(내용을 맞추거나 가운데로)"><span class="tl">쪽 크기…</span></button>
   </div>
   <div class="tgroup" id="groupOutline" data-modes="pdf" role="group" aria-label="목차">
     <button type="button" class="tb" id="outlineBtn" data-icon="outline" data-tip="목차: 왼쪽 패널에서 목차(책갈피)를 보고 고칩니다"><span class="tl">목차</span></button>
@@ -636,6 +703,12 @@
   <div class="tgroup" id="groupDocInfo" data-modes="pdf" role="group" aria-label="문서 정보">
     <button type="button" class="tb" id="docInfoBtn" data-icon="docInfo" data-tip="문서 정보: 제목·작성자·주제·키워드를 보고 고칩니다"><span class="tl">문서 정보</span></button>
     <button type="button" class="tb" id="rasterizeBtn" data-icon="rasterize" data-tip="이미지 PDF로 저장: 쪽을 그림으로 바꾼 새 PDF를 저장합니다(숨은 글자·주석·메타데이터가 모두 빠집니다)"><span class="tl">이미지 PDF</span></button>
+    <button type="button" class="tb" id="attachBtn" data-icon="attach" data-tip="첨부 파일: 문서에 든 파일을 보고 꺼내거나 넣고 지웁니다(왼쪽 패널)"><span class="tl">첨부 파일</span></button>
+  </div>
+  <div class="tgroup" id="groupConvert" data-modes="empty pdf" role="group" aria-label="변환·비교">
+    <button type="button" class="tb" id="mdExportBtn" data-icon="markdown" data-modes="pdf" data-tip="Markdown·텍스트로 내보내기: 제목·목록·표·굵게를 살려 .md(.txt)로 저장하고 Markdown 탭으로 엽니다"><span class="tl">Markdown</span></button>
+    <button type="button" class="tb" id="compareBtn" data-icon="compare" data-modes="pdf" data-tip="두 문서 비교: 다른 PDF와 글을 견주어 넣은·지운·바뀐 곳을 나란히 보여 줍니다"><span class="tl">비교</span></button>
+    <button type="button" class="tb" id="batchBtn" data-icon="batch" data-tip="일괄 처리: 여러 PDF에 워터마크·쪽 번호·암호·개인정보 가리기 같은 작업을 한꺼번에 합니다"><span class="tl">일괄 처리…</span></button>
   </div>
  </div>
  <div class="rpanel" id="rpanel-security" data-rtab="security" role="tabpanel" aria-labelledby="rtab-security" hidden>
@@ -687,6 +760,7 @@
     <button type="button" class="tabBtn" data-tab="page" role="tab" aria-selected="false">쪽</button>
     <button type="button" class="tabBtn" data-tab="annot" data-modes="pdf" role="tab" aria-selected="false">주석</button>
     <button type="button" class="tabBtn" data-tab="outline" data-modes="pdf" role="tab" aria-selected="false">목차</button>
+    <button type="button" class="tabBtn" data-tab="attach" data-modes="pdf" role="tab" aria-selected="false">첨부</button>
   </div>
   <div class="tab-panel" id="fileTab" role="tabpanel">
     <div class="fileBtns"><button id="openFiles" hidden>파일 열기</button><button id="openFolder" hidden>폴더 열기</button></div>
@@ -722,6 +796,11 @@
     </div>
     <div id="olAddRow" class="olAdd" hidden><input id="olAddInput" type="text" aria-label="새 목차 제목" spellcheck="false"><button type="button" id="olAddOk" class="miniBtn pri">넣기</button></div>
     <div id="olTree" class="olTree" role="tree" aria-label="목차" tabindex="0"></div>
+  </div>
+  <!-- v6 Wave D 첨부 파일: /api/pdf/attachments 목록. [꺼내기]는 저장 대화상자로, [지우기]는 실행 취소할 수 있다(저장해야 파일에 반영) -->
+  <div class="tab-panel" id="attachTab" role="tabpanel" hidden>
+    <div class="sideTools"><button type="button" id="attachAdd" class="miniBtn pri" title="파일을 골라 이 PDF에 넣습니다">+ 파일 넣기</button></div>
+    <div id="attachList" class="attachList"></div>
   </div>
 </aside>
 <main>
@@ -917,6 +996,156 @@
   <div class="row"><span id="jobPct" class="hint2"></span><span class="sp"></span><span id="jobMessage" class="hint2"></span></div>
   <div class="row"><span class="sp"></span><button id="jobCancel">취소</button></div>
 </div></dialog>
+
+<!-- ==== v6 Wave D 대화상자 ==== -->
+<!-- Markdown·텍스트 내보내기: /api/pdf/export-markdown(긴 작업). 고른 값은 기억한다(retextpdf.mdExport) -->
+<dialog id="mdDialog" class="panel" aria-labelledby="mdTitle"><div class="card" style="width:520px">
+  <h2 id="mdTitle">Markdown·텍스트로 내보내기</h2>
+  <p class="hint2">큰 글자는 제목(#), 글머리·번호는 목록, 굵게·기울임은 **·_, 칸이 맞는 줄은 표로 바꿉니다. 지금 고친 내용 그대로 내보냅니다.</p>
+  <div class="row"><span class="pnLbl">형식</span>
+    <label><input type="radio" name="mdFormat" value="md" checked> Markdown (.md)</label>
+    <label><input type="radio" name="mdFormat" value="txt"> 텍스트 (.txt)</label></div>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="mdRange" data-default="all"></span></div>
+  <div class="checks col">
+    <label><input type="checkbox" id="mdStripHf" checked>머리말·꼬리말·쪽 번호 빼기 <span class="hint2">— 여러 쪽 위·아래에 되풀이되는 줄</span></label>
+    <label><input type="checkbox" id="mdPageBreaks">쪽 사이에 구분선(---) 넣기</label>
+    <label id="mdImagesRow">그림 <select id="mdImages"><option value="omit">빼기</option><option value="files">PNG로 .md 옆에 저장</option></select></label>
+    <label id="mdOpenRow"><input type="checkbox" id="mdOpenTab" checked>내보낸 뒤 Markdown 탭으로 열기</label>
+  </div>
+  <div class="row" style="min-height:20px;margin:0"><span id="mdError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><span class="sp"></span><button id="mdRun" class="pri" type="button">내보내기…</button><button id="mdCancel" type="button">취소</button></div>
+</div></dialog>
+
+<!-- 쪽 자르기: 끈 사각형 · 여백(pt) · 내용에 맞춰 자동 · 풀기 → /api/pdf/crop(실행 취소 한 번) -->
+<dialog id="cropDialog" class="panel" aria-labelledby="cropTitle"><div class="card" style="width:500px">
+  <h2 id="cropTitle">쪽 자르기</h2>
+  <p class="hint2">보이는 곳만 남기고 바깥을 가립니다(CropBox). 잘린 내용은 파일에 남아 있어 [자르기 풀기]로 되돌릴 수 있습니다.</p>
+  <div class="checks col">
+    <label id="cropRectRow"><input type="radio" name="cropMode" value="rect"> 끌어 감싼 사각형으로 <span id="cropRectInfo" class="hint2"></span></label>
+    <label><input type="radio" name="cropMode" value="margins" checked> 여백을 숫자로(pt, 보이는 방향)</label>
+  </div>
+  <div class="cropGrid" id="cropMargins">
+    <label>위 <input id="cropTop" type="number" min="0" step="1" value="0"></label>
+    <label>아래 <input id="cropBottom" type="number" min="0" step="1" value="0"></label>
+    <label>왼쪽 <input id="cropLeft" type="number" min="0" step="1" value="0"></label>
+    <label>오른쪽 <input id="cropRight" type="number" min="0" step="1" value="0"></label>
+  </div>
+  <div class="checks col">
+    <label><input type="radio" name="cropMode" value="auto"> 여백 자동 자르기 — 쪽마다 내용에 맞춰, 여유 <input id="cropPad" type="number" min="0" max="200" step="1" value="6" style="width:56px"> pt</label>
+  </div>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="cropRange" data-default="all"></span></div>
+  <div class="row" style="min-height:20px;margin:0"><span id="cropError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><button id="cropReset" type="button">자르기 풀기</button><span class="sp"></span><button id="cropOk" class="pri" type="button">자르기</button><button id="cropCancel" type="button">취소</button></div>
+</div></dialog>
+
+<!-- 쪽 크기: A4·Letter… · 세로/가로 · 맞추기/가운데 → /api/pdf/page-size -->
+<dialog id="psDialog" class="panel" aria-labelledby="psTitle"><div class="card" style="width:480px">
+  <h2 id="psTitle">쪽 크기 바꾸기</h2>
+  <div class="row"><span class="pnLbl">크기</span><select id="psPreset">
+    <option value="A4">A4 (210 × 297mm)</option><option value="A3">A3 (297 × 420mm)</option><option value="A5">A5 (148 × 210mm)</option><option value="B5">B5 (182 × 257mm)</option>
+    <option value="Letter">Letter (8.5 × 11in)</option><option value="Legal">Legal (8.5 × 14in)</option><option value="custom">직접 입력</option></select>
+    <span id="psCustom" hidden><input id="psW" type="number" min="13" max="5080" step="1" value="210" style="width:64px"> × <input id="psH" type="number" min="13" max="5080" step="1" value="297" style="width:64px"> mm</span></div>
+  <div class="row"><span class="pnLbl">방향</span>
+    <label><input type="radio" name="psOrient" value="auto" checked> 쪽마다 원래 방향</label><label><input type="radio" name="psOrient" value="portrait"> 세로</label><label><input type="radio" name="psOrient" value="landscape"> 가로</label></div>
+  <div class="row"><span class="pnLbl">내용</span>
+    <label><input type="radio" name="psMode" value="fit" checked> 새 크기에 맞춰 키우거나 줄이기</label><label><input type="radio" name="psMode" value="center"> 크기 그대로 가운데</label></div>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="psRange" data-default="all"></span></div>
+  <div class="row" style="min-height:20px;margin:0"><span id="psError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><span class="hint2">Ctrl+Z로 되돌릴 수 있습니다</span><span class="sp"></span><button id="psOk" class="pri" type="button">바꾸기</button><button id="psCancel" type="button">취소</button></div>
+</div></dialog>
+
+<!-- 베이츠 번호: 접두어 + 0을 채운 번호 + 접미어 → /api/pdf/bates. [여러 파일에 이어서…]는 일괄 처리(bates)로 -->
+<dialog id="batesDialog" class="panel" aria-labelledby="batesTitle"><div class="card" style="width:520px">
+  <h2 id="batesTitle">베이츠 번호</h2>
+  <p class="hint2">쪽마다 고유 번호를 찍습니다. 다시 넣으면 이전 베이츠 번호를 새것으로 바꿉니다.</p>
+  <div class="row"><span class="pnLbl">접두어</span><input id="batesPrefix" type="text" value="ABC-" spellcheck="false" style="width:110px">
+    <span class="pnLbl" style="min-width:0;margin-left:8px">자릿수</span><input id="batesDigits" type="number" min="1" max="12" value="6" style="width:56px">
+    <span class="pnLbl" style="min-width:0;margin-left:8px">접미어</span><input id="batesSuffix" type="text" value="" spellcheck="false" style="width:80px"></div>
+  <div class="row"><span class="pnLbl">시작 번호</span><input id="batesStart" type="number" min="0" step="1" value="1" style="width:100px">
+    <span class="pnLbl" style="min-width:0;margin-left:8px">미리 보기</span><b id="batesPreview" class="batesPreview"></b></div>
+  <div class="row"><span class="pnLbl">자리</span><select id="batesPos">
+    <option value="bottom-right">아래 오른쪽</option><option value="bottom-center">아래 가운데</option><option value="bottom-left">아래 왼쪽</option>
+    <option value="top-right">위 오른쪽</option><option value="top-center">위 가운데</option><option value="top-left">위 왼쪽</option></select>
+    <span class="pnLbl" style="min-width:0;margin-left:8px">크기</span><input id="batesSize" type="number" min="4" max="72" value="9" style="width:56px"> pt
+    <span class="pnLbl" style="min-width:0;margin-left:8px">여백</span><input id="batesMargin" type="number" min="0" max="300" value="24" style="width:56px"> pt</div>
+  <div class="row"><span class="pnLbl">쪽</span><span class="rangePick" id="batesRange" data-default="all"></span></div>
+  <div class="row" style="min-height:20px;margin:0"><span id="batesError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><button id="batesRemove" type="button">지우기</button><button id="batesMulti" type="button">여러 파일에 이어서…</button><span class="sp"></span><button id="batesOk" class="pri" type="button">넣기</button><button id="batesCancel" type="button">취소</button></div>
+</div></dialog>
+
+<!-- 두 문서 비교: 고르기(열린 탭 · 다른 파일) → 나란히 보기(#cmpView) -->
+<dialog id="cmpPick" class="panel" aria-labelledby="cmpPickTitle"><div class="card" style="width:520px">
+  <h2 id="cmpPickTitle">두 문서 비교</h2>
+  <p class="hint2"><b id="cmpPickCur"></b>(왼쪽)와 견줄 문서(오른쪽)를 고르세요. 문서는 바뀌지 않습니다.</p>
+  <div id="cmpPickTabs" class="checks col"></div>
+  <div class="row"><button id="cmpPickFile" type="button" data-electron>다른 PDF 파일…</button><span id="cmpPickFileName" class="hint2"></span></div>
+  <div class="row"><span class="pnLbl">단위</span><select id="cmpUnit"><option value="word">낱말</option><option value="line">줄</option><option value="paragraph">문단</option></select></div>
+  <div class="row" style="min-height:20px;margin:0"><span id="cmpPickError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><span class="sp"></span><button id="cmpPickOk" class="pri" type="button">비교</button><button id="cmpPickCancel" type="button">취소</button></div>
+</div></dialog>
+<dialog id="cmpView" class="panel cmpView" aria-labelledby="cmpTitle"><div class="card cmpCard">
+  <div class="cmpHead">
+    <h2 id="cmpTitle">두 문서 비교</h2>
+    <span id="cmpStats" class="cmpStats"></span>
+    <span class="sp"></span>
+    <label>단위 <select id="cmpUnit2"><option value="word">낱말</option><option value="line">줄</option><option value="paragraph">문단</option></select></label>
+    <label title="쪽 그림을 겹쳐 달라진 픽셀을 빨갛게 칠합니다(배치·그림 차이)"><input type="checkbox" id="cmpPixels"> 이미지 비교(픽셀)</label>
+    <label title="한쪽을 움직이면 다른 쪽도 같은 쪽으로"><input type="checkbox" id="cmpSync" checked> 함께 스크롤</label>
+    <button id="cmpReport" type="button">보고서 저장…</button>
+    <button id="cmpClose" type="button" class="pri">닫기</button>
+  </div>
+  <div class="cmpBody">
+    <div class="cmpSide"><div class="cmpName" id="cmpNameA"></div><div class="cmpPane" id="cmpPaneA"></div></div>
+    <div class="cmpSide"><div class="cmpName" id="cmpNameB"></div><div class="cmpPane" id="cmpPaneB"></div></div>
+    <div class="cmpListWrap"><div class="cmpLegend"><span class="cmpKey del">지움</span><span class="cmpKey ins">넣음</span><span class="cmpKey chg">바뀜</span></div><div class="cmpList" id="cmpList" role="listbox" aria-label="차이 목록"></div></div>
+  </div>
+</div></dialog>
+
+<!-- 일괄 처리: 파일 여러 개 + 동작 하나 → /api/pdf/batch(파일마다 진행·취소, 실패해도 다음 파일로) -->
+<dialog id="batchDialog" class="panel" aria-labelledby="batchTitle"><div class="card" style="width:720px">
+  <h2 id="batchTitle">일괄 처리</h2>
+  <p class="hint2">원본은 그대로 두고 결과를 새 파일로 저장합니다. 열어서 고치던 문서는 저장된 파일 내용으로 처리합니다.</p>
+  <div class="row"><button id="batchAdd" type="button" data-electron>PDF 추가…</button><button id="batchClear" type="button">목록 비우기</button><span id="batchCount" class="hint2"></span></div>
+  <ol id="batchFiles" class="batchFiles" aria-label="처리할 파일(이 순서로)"></ol>
+  <div class="row"><span class="pnLbl">작업</span><select id="batchAction">
+    <option value="watermark">워터마크</option><option value="headerFooter">머리말·꼬리말</option><option value="pageNumbers">쪽 번호</option><option value="bates">베이츠 번호(이어서)</option>
+    <option value="sanitize">숨은 데이터 제거</option><option value="pii">개인정보 찾아 가리기</option><option value="protect">암호 걸기</option>
+    <option value="rasterize">이미지 PDF로</option><option value="downsample">용량 줄이기</option><option value="markdown">Markdown 내보내기</option></select></div>
+  <div class="batchOpts" id="batchOpts">
+    <div data-act="watermark"><span class="pnLbl">글자</span><input id="bwText" type="text" value="대외비" style="width:140px"> 크기 <input id="bwSize" type="number" min="6" max="400" value="60" style="width:60px"> pt 불투명도 <input id="bwOpacity" type="number" min="5" max="100" value="25" style="width:56px">% 색 <input id="bwColor" type="color" value="#c0392b"></div>
+    <div data-act="headerFooter"><span class="pnLbl">위 가운데</span><input id="bhTop" type="text" value="{file}" style="width:150px"> 아래 가운데 <input id="bhBottom" type="text" value="{page} / {pages}" style="width:150px"> <span class="hint2">{page} {pages} {date} {file} {title}</span></div>
+    <div data-act="pageNumbers"><span class="pnLbl">모양</span><select id="bnFormat"><option value="n">1</option><option value="n/N">1 / N</option><option value="dash">- 1 -</option><option value="ko">1쪽</option></select> 자리 <select id="bnPos"><option value="bottom-center">아래 가운데</option><option value="bottom-right">아래 오른쪽</option><option value="bottom-left">아래 왼쪽</option><option value="top-center">위 가운데</option><option value="top-right">위 오른쪽</option></select></div>
+    <div data-act="bates"><span class="pnLbl">번호</span>접두어 <input id="bbPrefix" type="text" value="ABC-" style="width:80px"> 자릿수 <input id="bbDigits" type="number" min="1" max="12" value="6" style="width:50px"> 시작 <input id="bbStart" type="number" min="0" value="1" style="width:80px"> 접미어 <input id="bbSuffix" type="text" style="width:60px"> 자리 <select id="bbPos"><option value="bottom-right">아래 오른쪽</option><option value="bottom-center">아래 가운데</option><option value="bottom-left">아래 왼쪽</option><option value="top-right">위 오른쪽</option></select> <span class="hint2">목록 순서대로 이어 매깁니다</span></div>
+    <div data-act="sanitize"><span class="hint2">문서 정보·XMP·첨부 파일·JavaScript를 지웁니다(주석·목차는 남김).</span></div>
+    <div data-act="pii"><span class="pnLbl">찾을 것</span><label><input type="checkbox" class="bpKind" value="email" checked>이메일</label><label><input type="checkbox" class="bpKind" value="phone" checked>전화번호</label><label><input type="checkbox" class="bpKind" value="rrn" checked>주민등록번호</label><label><input type="checkbox" class="bpKind" value="brn">사업자등록번호</label><label><input type="checkbox" class="bpKind" value="card">카드번호</label></div>
+    <div data-act="protect"><span class="pnLbl">여는 암호</span><input id="bpwUser" type="password" autocomplete="new-password" style="width:150px"> 한 번 더 <input id="bpwUser2" type="password" autocomplete="new-password" style="width:150px"></div>
+    <div data-act="rasterize"><span class="pnLbl">해상도</span><input id="brDpi" type="number" min="36" max="600" value="150" style="width:70px"> dpi <span class="hint2">글자·숨은 데이터가 모두 빠진 그림 PDF</span></div>
+    <div data-act="downsample"><span class="pnLbl">최대 dpi</span><input id="bdDpi" type="number" min="30" max="600" value="150" style="width:70px"> 품질 <input id="bdQuality" type="number" min="1" max="100" value="75" style="width:60px"></div>
+    <div data-act="markdown"><span class="pnLbl">형식</span><select id="bmFormat"><option value="md">Markdown (.md)</option><option value="txt">텍스트 (.txt)</option></select> <label><input type="checkbox" id="bmImages"> 그림을 PNG로</label></div>
+  </div>
+  <div class="row"><span class="pnLbl">저장 폴더</span><button id="batchDir" type="button" data-electron>폴더…</button><span id="batchDirName" class="hint2">원본과 같은 폴더</span>
+    <span class="pnLbl" style="min-width:0;margin-left:10px">이름 뒤에</span><input id="batchSuffix" type="text" value="-처리" spellcheck="false" style="width:110px"></div>
+  <div class="row" style="min-height:20px;margin:0"><span id="batchError" class="bad" role="alert" hidden></span></div>
+  <div id="batchSummary" class="batchSummary" hidden>
+    <div id="batchSumLine" class="row"></div>
+    <div style="max-height:26vh;overflow:auto"><table><thead><tr><th>파일</th><th>결과</th></tr></thead><tbody id="batchBody"></tbody></table></div>
+  </div>
+  <div class="row"><span class="sp"></span><button id="batchRun" class="pri" type="button">실행</button><button id="batchClose" type="button">닫기</button></div>
+</div></dialog>
+
+<!-- 링크 목록: 쪽·대상 · [가기] [지우기] -->
+<dialog id="linksDialog" class="panel" aria-labelledby="linksTitle"><div class="card" style="width:600px">
+  <h2 id="linksTitle">링크 목록</h2>
+  <div style="max-height:52vh;overflow:auto"><table class="linksTable"><thead><tr><th>쪽</th><th>대상</th><th></th></tr></thead><tbody id="linksBody"></tbody></table></div>
+  <div class="row"><span class="hint2">새 링크는 [링크] 도구로 끌어 감싸 만듭니다 · 쪽 위에서 Ctrl+클릭하면 따라갑니다</span><span class="sp"></span><button id="linksClose" type="button" class="pri">닫기</button></div>
+</div></dialog>
+<!-- 링크 상자(쪽 위에 뜬다): 새로 만들기 / 고치기·지우기·따라가기 -->
+<div id="linkPop" class="linkPop" role="dialog" aria-label="링크" hidden>
+  <div class="row"><label><input type="radio" name="linkKind" value="uri" checked> 웹 주소</label><input id="linkUri" type="text" placeholder="https://" spellcheck="false"></div>
+  <div class="row"><label><input type="radio" name="linkKind" value="page"> 이 문서의</label><input id="linkPage" type="number" min="1" value="1" style="width:64px"> 쪽</div>
+  <div class="row" style="min-height:18px"><span id="linkError" class="bad" role="alert" hidden></span></div>
+  <div class="row"><button id="linkDel" type="button" hidden>지우기</button><button id="linkGo" type="button" hidden>따라가기</button><span class="sp"></span><button id="linkOk" class="pri" type="button">넣기</button><button id="linkCancel" type="button">취소</button></div>
+</div>
 
 <!-- 알림(토스트) 쌓임: toast(text, opts)가 채운다. 실행 취소 버튼(opts.action/onAction)·종류(opts.kind)·시간(opts.ms) -->
 <div id="toasts" aria-live="polite" aria-relevant="additions"></div>
@@ -1517,7 +1746,7 @@ function updateEmptyState() {
   if (!has) renderEmptyRecent();
   // 리본: 지금 탭이 이 모드에서 숨었으면(예: Markdown을 열었는데 [쪽] 탭) 기억한 탭 → 홈 순으로 보이는 탭을 고른다(기억은 바꾸지 않는다)
   showRibbonTab(ribbonTabVisible(loadRibbonTab()) ? loadRibbonTab() : 'home', false);
-  if (mode !== 'pdf' && ['annot', 'outline'].includes(document.querySelector('#asideTabs .tabBtn.on')?.dataset.tab)) showAsideTab('file');
+  if (mode !== 'pdf' && ['annot', 'outline', 'attach'].includes(document.querySelector('#asideTabs .tabBtn.on')?.dataset.tab)) showAsideTab('file');
   updateCtxBar(); fitToolbar();
 }
 async function initFiles() {
@@ -1579,13 +1808,14 @@ $('#files').onclick = (e) => {
 // ---- 왼쪽 패널 탭(파일 | 쪽): PDF를 열면 쪽, Markdown을 열면 파일로 저절로 바뀐다. 그 밖에는 기억하지 않는다 ----
 // P9: 「주석」·「목차」 탭이 더해졌다(PDF일 때만 보인다). 그 탭이 보이게 되면 목록을 서버에서 새로 읽는다
 function showAsideTab(tab) {
-  if ((tab === 'annot' || tab === 'outline') && docMode() !== 'pdf') tab = 'file';
+  if ((tab === 'annot' || tab === 'outline' || tab === 'attach') && docMode() !== 'pdf') tab = 'file';
   document.querySelectorAll('#asideTabs .tabBtn').forEach((b) => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
   $('#fileTab').hidden = tab !== 'file'; $('#pageTab').hidden = tab !== 'page';
-  $('#annotTab').hidden = tab !== 'annot'; $('#outlineTab').hidden = tab !== 'outline';
+  $('#annotTab').hidden = tab !== 'annot'; $('#outlineTab').hidden = tab !== 'outline'; $('#attachTab').hidden = tab !== 'attach';
   if (tab === 'page') observeThumbs(); // 숨겨져 있던 목록이 보이면 화면에 든 축소본부터 그린다
   else if (tab === 'annot') loadAnnotList();
   else if (tab === 'outline') loadOutline();
+  else if (tab === 'attach') loadAttachList();
 }
 $('#asideTabs').onclick = (e) => { const btn = e.target.closest('.tabBtn'); if (btn) showAsideTab(btn.dataset.tab); };
 // ---- 빈 상태 빠른 도구(WP-B1: 병합만 연결, 나머지는 B2) ----
@@ -2035,6 +2265,9 @@ function unrotatedSize(page) {
 }
 function pdfToScreen(page, rect, scale = pdfScale) {
   const { rot, w0, h0 } = unrotatedSize(page);
+  // v6 Wave D: 자른 쪽(CropBox)·원점이 옮겨진 쪽은 보이는 상자 왼쪽 아래(page.ox·oy)를 원점으로 옮겨 계산한다
+  const ox = page.ox || 0, oy = page.oy || 0;
+  if (ox || oy) rect = { x0: rect.x0 - ox, x1: rect.x1 - ox, y0: rect.y0 - oy, y1: rect.y1 - oy };
   let sx0, sy0, sx1, sy1;
   if (rot === 0) { sx0 = rect.x0; sx1 = rect.x1; sy0 = h0 - rect.y1; sy1 = h0 - rect.y0; }
   else if (rot === 1) { sx0 = rect.y0; sx1 = rect.y1; sy0 = rect.x0; sy1 = rect.x1; }
@@ -2052,7 +2285,8 @@ function screenToPdf(page, screenRect, scale = pdfScale) {
   else if (rot === 1) { y0 = sx0; y1 = sx1; x0 = sy0; x1 = sy1; }
   else if (rot === 2) { x0 = w0 - sx1; x1 = w0 - sx0; y0 = sy0; y1 = sy1; }
   else { y0 = h0 - sx1; y1 = h0 - sx0; x0 = w0 - sy1; x1 = w0 - sy0; }
-  return { x0, y0, x1, y1 };
+  const ox = page.ox || 0, oy = page.oy || 0; // v6 Wave D: 보이는 상자 원점
+  return { x0: x0 + ox, y0: y0 + oy, x1: x1 + ox, y1: y1 + oy };
 }
 // 화면 드래그량(px, 아직 나누기 전) → PDF pt 이동량. 두 점(0,0)과 (dxPx,dyPx)을 screenToPdf로 보내 차를 구한다 — 공식은 하나로 통일.
 function screenDeltaToPdf(page, dxPx, dyPx, scale = pdfScale) {
@@ -4341,7 +4575,7 @@ $('#downsampleRun').onclick = async () => {
 $('#downsampleClose').onclick = () => $('#downsampleDialog').close();
 
 // ---- 도구(서로 배타): 글자 고치기(기본) · 글 상자 · 도장 · 가리기 · (P9) 여러 쪽 가리기 · 주석 여덟 가지 ----
-const TOOL_NAMES = { edit: '글자 고치기', text: '글 상자', stamp: '도장', redact: '가리기', redactArea: '여러 쪽 가리기',
+const TOOL_NAMES = { edit: '글자 고치기', text: '글 상자', stamp: '도장', redact: '가리기', redactArea: '여러 쪽 가리기', crop: '쪽 자르기', link: '링크', snapshot: '영역 스냅샷',
   highlight: '형광펜', underline: '밑줄', strikeout: '취소선', note: '메모', square: '사각형', circle: '원', line: '선', ink: '펜' };
 // 주석 도구(P9): 글자를 끌어 고르기(markup) · 눌러 메모(note) · 끌어 그리기(shape) · 손으로 그리기(ink)
 const MARKUP_TOOLS = ['highlight', 'underline', 'strikeout'], SHAPE_TOOLS = ['square', 'circle', 'line'];
@@ -4357,6 +4591,10 @@ const HINTS = {
   mask: '◀▲▼▶로 조금씩 옮기고(Shift: 크게) [삭제]로 지웁니다',
   redact: '가릴 곳을 끌어서 감싸세요 — 그 안의 글자·그림은 파일에서 지워집니다 · 이미 가린 상자를 누르면 옮기거나 지웁니다 · Esc로 끝',
   redactArea: '한 쪽에서 가릴 자리를 끌어 감싸세요 · 놓으면 같은 자리를 덮을 쪽을 묻습니다 · Esc로 끝',
+  // v6 Wave D 끌기 도구(쪽 자르기·링크·영역 스냅샷)
+  crop: '남길 곳을 끌어 감싸세요 · 놓으면 자를 쪽을 묻습니다 · Esc로 끝',
+  link: '링크를 걸 곳을 끌어 감싸세요 · 점선 상자(링크)를 누르면 고치거나 지웁니다 · Ctrl+클릭으로 링크를 따라갑니다 · Esc로 끝',
+  snapshot: '복사할 곳을 끌어 감싸세요 · 놓으면 그림으로 클립보드에 복사합니다 · Esc로 끝',
   // 글 상자·도장은 한 번 넣으면 글자 고치기로 돌아간다(넣은 것을 바로 옮기거나 고칠 수 있게)
   text: '글을 넣을 곳을 클릭하세요 · 하나 넣으면 글자 고치기로 돌아갑니다 · Esc로 끝',
   textTyping: 'Enter로 줄 바꿈 · Ctrl+Enter 또는 바깥을 누르면 넣습니다 · Esc로 취소',
@@ -4386,8 +4624,10 @@ function setTool(name) {
   const pdf = $('#pdf');
   pdf.classList.toggle('toolRedact', rectMode); pdf.classList.toggle('toolText', name === 'text'); pdf.classList.toggle('toolStamp', name === 'stamp');
   pdf.classList.toggle('toolAnnot', isAnnotTool(name)); pdf.classList.toggle('toolMarkup', MARKUP_TOOLS.includes(name));
+  pdf.classList.toggle('toolDrag', WD_DRAG_TOOLS.includes(name)); pdf.classList.toggle('toolLink', name === 'link'); // v6 Wave D
   pdf.classList.toggle('toolShape', SHAPE_TOOLS.includes(name)); pdf.classList.toggle('toolNote', name === 'note'); pdf.classList.toggle('toolInk', name === 'ink');
   if (isAnnotTool(name)) annotToolOn(name);
+  wdToolChanged(name); // v6 Wave D: 링크 도구면 링크 자리를 그린다
   revealToolButton(name); // 단축키로 켠 도구의 버튼이 다른 탭에 있으면 그 탭을 보인다
   updateCtxBar();
 }
@@ -4557,6 +4797,18 @@ const ICONS = {
   layoutTwo: '<rect x="2.5" y="4" width="8.5" height="16" rx="1.2"/><rect x="13" y="4" width="8.5" height="16" rx="1.2"/>',
   layoutCover: '<rect x="2.5" y="4" width="8.5" height="16" rx="1.2" stroke-dasharray="2 2.2"/><rect x="13" y="4" width="8.5" height="16" rx="1.2"/>',
   reading: '<path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2z"/><path d="M22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z"/>',
+  // v6 Wave D
+  snapshot: '<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8"/><path d="M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8"/><path d="M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16"/><path d="M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16"/><circle cx="12" cy="12" r="3"/>',
+  link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/>',
+  linkList: '<path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>',
+  crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
+  cropSet: '<rect x="4" y="4" width="16" height="16" rx="1.5"/><rect x="8" y="8" width="8" height="8" stroke-dasharray="2 2"/>',
+  pageSize: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="m9 15 6-6"/><path d="M9 11v4h4"/>',
+  bates: '<path d="M5 3h10l4 4v14H5z"/><path d="M8 16h8"/><path d="M8 12h3"/><path d="M14 12h2"/>',
+  markdown: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 15V9l2.5 3L11 9v6"/><path d="M16.5 9v6"/><path d="m14.5 13 2 2 2-2"/>',
+  compare: '<rect x="3" y="4" width="7.5" height="16" rx="1"/><rect x="13.5" y="4" width="7.5" height="16" rx="1"/><path d="M5.5 9h2.5"/><path d="M16 9h2.5"/><path d="M5.5 13h2.5"/><path d="M16 14h2.5"/>',
+  batch: '<path d="M8 3h9l3 3v11"/><path d="M5 6h9l3 3v12H5z"/><path d="m8.5 15 2 2 3.5-4"/>',
+  attach: '<path d="m20 11.5-8.2 8.2a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>',
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICONS[name] || ''}</svg>`;
 
@@ -5024,7 +5276,8 @@ async function placeStamp(i, pt) {
   const page = pdfPages[i], { w0, h0 } = unrotatedSize(page);
   let w = Math.min(page.w * 0.25, s.width * 72 / 150), h = w * s.height / s.width;
   if (h > page.h * 0.4) { h = page.h * 0.4; w = h * s.width / s.height; }
-  const x = Math.max(0, Math.min(w0 - w, pt.x - w / 2)), y = Math.max(0, Math.min(h0 - h, pt.y - h / 2)); // 누른 자리가 가운데, 쪽 밖으로는 안 나가게
+  const ox = page.ox || 0, oy = page.oy || 0; // v6 Wave D: 자른 쪽의 보이는 상자 원점
+  const x = Math.max(ox, Math.min(ox + w0 - w, pt.x - w / 2)), y = Math.max(oy, Math.min(oy + h0 - h, pt.y - h / 2)); // 누른 자리가 가운데, 쪽 밖으로는 안 나가게
   const name = cur;
   stampBusy = true;
   let r;
@@ -6394,6 +6647,7 @@ function p9AfterRender(name) {
   if (isAnnotTool(tool)) scheduleAnnotHits();
   if (!$('#annotTab').hidden) loadAnnotList();
   if (!$('#outlineTab').hidden) loadOutline();
+  wdAfterRender(name); // v6 Wave D: 링크 자리·첨부 목록
 }
 // 한 쪽을 다시 그린 뒤(refreshPage): 그 쪽 캐시를 비우고 주석 자리·개인정보 표시를 다시, 주석·목차 목록도 다시 읽는다(실행 취소로 바뀌었을 수 있다)
 function p9AfterRefresh(i, wrap) {
@@ -6403,9 +6657,11 @@ function p9AfterRefresh(i, wrap) {
   if (piiDoc === cur) drawPiiHits();
   scheduleAnnotList();
   if (!$('#outlineTab').hidden) loadOutline();
+  wdAfterRefresh(i); // v6 Wave D: 그 쪽 링크 자리
 }
 // 확대·축소 뒤: 화면 px로 그린 것들을 새 배율로
 function p9AfterZoom() {
+  wdAfterZoom(); // v6 Wave D
   $('#pdf').querySelectorAll('.annHit, .annSel').forEach((el) => el.remove());
   if (annotPress) cancelAnnotPress();
   if (isAnnotTool(tool)) scheduleAnnotHits();
@@ -6574,6 +6830,10 @@ const CMD_ALIASES = {
   watermarkBtn: ['배경 글자', '투명 글자'], outlineBtn: ['책갈피', '북마크', 'bookmark'],
   menuMerge: ['합치기', '결합', 'merge'], menuSplit: ['나누기', '자르기', 'split'], menuExportImages: ['png', 'jpg', '그림으로 저장'], menuDownsample: ['압축', '용량', '크기 줄이기', 'compress'],
   docInfoBtn: ['속성', '메타데이터', '제목', '작성자'], rasterizeBtn: ['래스터', '그림 PDF'],
+  snapTool: ['캡처', '화면 복사', '영역 복사', '그림 복사', 'snapshot'], linkTool: ['하이퍼링크', 'url', 'link', '바로가기'], linkListBtn: ['링크 보기', '하이퍼링크 목록'],
+  cropTool: ['크롭', '잘라내기', 'crop', '쪽 잘라내기'], cropBtn: ['여백 자동', '자르기 풀기', '크롭 설정', '여백 없애기'], pageSizeBtn: ['용지 크기', '페이지 크기', 'a4', 'letter', '크기 바꾸기'],
+  batesBtn: ['bates', '일련번호', '증거 번호', '문서 번호'], mdExportBtn: ['마크다운', 'md', '텍스트로', 'txt', '변환', '내보내기'], compareBtn: ['diff', '차이', '문서 비교', '대조', '버전 비교'],
+  batchBtn: ['배치', '일괄', '여러 파일', 'batch', '한꺼번에'], attachBtn: ['첨부', '파일 첨부', 'attachment', '포함된 파일'],
   protectBtn: ['암호 걸기', '비밀번호', '잠금', '보호', 'password'], piiBtn: ['개인정보 가리기', '주민등록번호', '전화번호', '이메일'], areaRedactTool: ['영역 가리기'], sanitizeBtn: ['메타데이터 지우기', '숨은 정보'],
 };
 const PDF_ONLY = '문서(PDF)를 열면 쓸 수 있습니다';
@@ -6687,6 +6947,662 @@ $('#startRaster').onclick = () => openThen(openRasterDialog);
 $('#startOrganize').onclick = () => openThen(openExtractDialog);
 $('#startProtect').onclick = () => openThen(openProtectDialog);
 updateLayoutButton(); syncHandUi();
+
+// ==== v6 Wave D: Markdown·텍스트 내보내기 · 쪽 자르기·크기 · 두 문서 비교 · 일괄 처리 · 링크 · 첨부 파일 · 영역 스냅샷 · 베이츠 번호 ====
+// 서버 길: /api/pdf/export-markdown · crop · boxes · page-size · compare(+/pixels) · batch · links · link/* · attachments · attachment/* · snapshot(+/save) · bates(+/remove)
+const WD_DRAG_TOOLS = ['crop', 'link', 'snapshot']; // 끌어 사각형을 받는 도구(가리기 끌기와 따로 다룬다)
+const wdState = { links: [], linksDoc: null, linkSeq: 0, drag: null, cropRect: null, cropBox: null, linkEdit: null };
+const wdStem = (p) => basename(p || '').replace(/\.[^.]+$/, '');
+const wdDir = (p) => { const k = Math.max(String(p || '').lastIndexOf('\\'), String(p || '').lastIndexOf('/')); return k < 0 ? '' : p.slice(0, k); };
+const wdJoin = (dir, name) => (dir ? dir + (dir.includes('\\') ? '\\' : '/') + name : name);
+const wdSize = (n) => (n == null ? '' : n < 1024 ? `${n}B` : n < 1048576 ? `${(n / 1024).toFixed(1)}KB` : `${(n / 1048576).toFixed(1)}MB`);
+// 저장 대화상자(앱) — 브라우저 화면이면 문서 옆 기본 이름 그대로
+async function wdSavePath(def, filters) { return window.retextPdf?.saveFile ? window.retextPdf.saveFile(def, filters) : def; }
+const wdRadio = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
+const wdPageWrap = (i) => $('#pdf').children[i];
+
+// ---- 렌더·새로 고침·확대·도구 바뀜 고리(p9After*·setTool이 부른다) ----
+function wdAfterRender(name) {
+  wdState.links = []; wdState.linksDoc = null; hideLinkPop();
+  if (cur === name && pdfOpen()) wdLoadLinks();
+  if (!$('#attachTab').hidden) loadAttachList();
+}
+function wdAfterRefresh() { if (pdfOpen()) wdLoadLinks(); }
+function wdAfterZoom() { wdDrawLinks(); hideLinkPop(); $('#pdf').querySelectorAll('.wdBox').forEach((el) => el.remove()); }
+function wdToolChanged(name) {
+  if (name !== 'link') hideLinkPop();
+  if (name === 'link') wdLoadLinks();
+  $('#pdf').querySelectorAll('.wdBox').forEach((el) => el.remove());
+}
+// 링크 자리: 문서 전체 링크를 한 번 읽어(/api/pdf/links) 쪽 위에 점선 상자로(링크 도구일 때만 보인다). Ctrl+클릭 따라가기도 이 목록을 쓴다
+async function wdLoadLinks() {
+  const name = cur, seq = ++wdState.linkSeq;
+  if (!pdfOpen()) return;
+  let list; try { list = await apiGet(`/api/pdf/links?${qs({ name })}`); } catch { return; }
+  if (cur !== name || seq !== wdState.linkSeq) return;
+  wdState.links = Array.isArray(list) ? list : []; wdState.linksDoc = name;
+  wdDrawLinks();
+}
+function wdDrawLinks() {
+  $('#pdf').querySelectorAll('.linkHit').forEach((el) => el.remove());
+  if (wdState.linksDoc !== cur) return;
+  wdState.links.forEach((l, k) => {
+    const wrap = wdPageWrap(l.i), pg = pdfPages[l.i];
+    if (!wrap || !pg || !l.rect) return;
+    const s = pdfToScreen(pg, { x0: l.rect[0], y0: l.rect[1], x1: l.rect[2], y1: l.rect[3] });
+    const el = document.createElement('div');
+    el.className = 'linkHit'; el.dataset.k = k;
+    Object.assign(el.style, { left: s.left + 'px', top: s.top + 'px', width: s.width + 'px', height: s.height + 'px' });
+    el.title = l.kind === 'uri' ? l.uri : l.kind === 'page' ? `${l.page + 1}쪽으로` : '읽을 수 없는 링크';
+    wrap.appendChild(el);
+  });
+}
+// 쪽 위 점(화면 px) → 그 자리의 링크
+function wdLinkAt(i, x, y) {
+  const [px, py] = screenPtToPdf(pdfPages[i], x, y);
+  return wdState.links.find((l) => l.i === i && l.rect && px >= l.rect[0] && px <= l.rect[2] && py >= l.rect[1] && py <= l.rect[3]);
+}
+// 링크 따라가기: 쪽은 바로 가고, 웹 주소는 앱(main.js openLink)이 주소를 보여 주고 물은 뒤에만 연다(문서 속 링크가 몰래 열리지 않게)
+async function wdFollowLink(l) {
+  if (!l) return;
+  if (l.kind === 'page') { goToPage(l.page); flash(`${l.page + 1}쪽으로 갔습니다`); return; }
+  if (l.kind !== 'uri' || !l.uri) return flash('⚠ 이 링크는 따라갈 수 없습니다(다른 파일·프로그램을 여는 링크)', 4000);
+  if (window.retextPdf?.openLink) { const r = await window.retextPdf.openLink(l.uri); if (r?.error) flash('⚠ ' + r.error, 4000); return; }
+  if (confirm(`이 주소를 새 창으로 열까요?\n${l.uri}`)) window.open(l.uri, '_blank', 'noopener');
+}
+// Ctrl+클릭 = 링크 따라가기(어느 도구에서든, 쪽 위에서 바로 고치는 중이 아니면). 링크가 아닌 곳의 Ctrl+클릭(문단 고르기)은 그대로 둔다
+$('#pdf').addEventListener('mousedown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.button !== 0 || inplace || !pdfOpen()) return;
+  const wrap = e.target.closest('.pdfPage'); if (!wrap) return;
+  const i = Array.from($('#pdf').children).indexOf(wrap), r = wrap.getBoundingClientRect();
+  const l = wdLinkAt(i, e.clientX - r.left, e.clientY - r.top);
+  if (!l) return;
+  e.preventDefault(); e.stopPropagation();
+  wdFollowLink(l);
+}, true);
+
+// ---- 끌기 도구: 쪽 자르기 · 링크 · 영역 스냅샷 ----
+$('#pdf').addEventListener('mousedown', (e) => {
+  if (!WD_DRAG_TOOLS.includes(tool) || e.button !== 0 || e.ctrlKey || e.metaKey) return;
+  const wrap = e.target.closest('.pdfPage'); if (!wrap || e.target.closest('.pdfEditor')) return;
+  const i = Array.from($('#pdf').children).indexOf(wrap), r = wrap.getBoundingClientRect();
+  if (tool === 'link' && e.target.closest('.linkHit')) { e.preventDefault(); openLinkPop({ edit: wdState.links[+e.target.closest('.linkHit').dataset.k] }, e.target.closest('.linkHit')); return; }
+  hideLinkPop();
+  wrap.querySelectorAll('.wdBox').forEach((el) => el.remove());
+  const box = document.createElement('div'); box.className = 'wdBox';
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  Object.assign(box.style, { left: x + 'px', top: y + 'px', width: '0px', height: '0px' });
+  wrap.appendChild(box);
+  wdState.drag = { wrap, i, box, x, y };
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  const d = wdState.drag; if (!d) return;
+  const r = d.wrap.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  Object.assign(d.box.style, { left: Math.min(x, d.x) + 'px', top: Math.min(y, d.y) + 'px', width: Math.abs(x - d.x) + 'px', height: Math.abs(y - d.y) + 'px' });
+});
+document.addEventListener('mouseup', (e) => {
+  const d = wdState.drag; if (!d) return;
+  wdState.drag = null;
+  const r = d.wrap.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const l = Math.min(x, d.x), t = Math.min(y, d.y), w = Math.abs(x - d.x), h = Math.abs(y - d.y);
+  if (w < 6 || h < 6) { d.box.remove(); return; }
+  const rect = screenRectToPdfArr(pdfPages[d.i], l, t, l + w, t + h).map((v) => Math.round(v * 100) / 100);
+  if (tool === 'snapshot') { d.box.remove(); wdSnapshot(d.i, rect); }
+  else if (tool === 'crop') { d.box.classList.add('crop'); openCropDialog({ i: d.i, rect, box: d.box }); }
+  else if (tool === 'link') openLinkPop({ create: { i: d.i, rect } }, d.box);
+});
+
+// ---- 영역 스냅샷: 그림을 클립보드에(앱: Electron clipboard) · 토스트 [PNG로 저장…] ----
+async function wdSnapshot(i, rect) {
+  const name = cur, [x0, y0, x1, y1] = rect;
+  let buf;
+  try {
+    const r = await fetch(`/api/pdf/snapshot?${qs({ name, i, x0, y0, x1, y1, scale: 2 })}`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    buf = new Uint8Array(await r.arrayBuffer());
+  } catch (error) { return flash('⚠ 영역을 그리지 못했습니다: ' + error.message, 4000); }
+  let copied = false, size = '';
+  try {
+    if (window.retextPdf?.copyImage) { const c = await window.retextPdf.copyImage(buf); copied = !!c?.ok; if (c?.width) size = ` (${c.width}×${c.height})`; }
+    else if (navigator.clipboard && window.ClipboardItem) { await navigator.clipboard.write([new ClipboardItem({ 'image/png': new Blob([buf], { type: 'image/png' }) })]); copied = true; }
+  } catch {}
+  const save = async () => {
+    const to = await wdSavePath(wdJoin(wdDir(name), `${wdStem(name)}-${i + 1}쪽-스냅샷.png`), [{ name: 'PNG 그림', extensions: ['png'] }]);
+    if (!to) return;
+    try { await apiPost('/api/pdf/snapshot/save', { name, i, rect, scale: 2, to }); flash(`${basename(to)}로 저장했습니다`, 3000); } catch {}
+  };
+  toast(copied ? `영역을 그림으로 복사했습니다${size}` : '클립보드에 복사하지 못했습니다 — PNG로 저장하세요', { kind: copied ? 'info' : 'warning', action: 'PNG로 저장…', onAction: save, ms: 7000 });
+}
+
+// ---- 링크 상자: 만들기(끌어 감싼 자리) · 고치기·지우기·따라가기(점선 상자 누르기) ----
+function openLinkPop(spec, anchorEl) {
+  wdState.linkEdit = spec;
+  const pop = $('#linkPop'), edit = spec.edit;
+  showError('#linkError', '');
+  $('#linkPage').max = String(pdfPages.length);
+  if (edit) {
+    const isPage = edit.kind === 'page';
+    document.querySelector(`input[name="linkKind"][value="${isPage ? 'page' : 'uri'}"]`).checked = true;
+    $('#linkUri').value = (() => { try { return decodeURI(edit.uri || ''); } catch { return edit.uri || ''; } })(); $('#linkPage').value = isPage ? edit.page + 1 : Math.min(pdfPages.length, currentPageIndex() + 1);
+    $('#linkOk').textContent = '바꾸기';
+  } else {
+    $('#linkUri').value = ''; $('#linkPage').value = Math.min(pdfPages.length, currentPageIndex() + 2);
+    document.querySelector('input[name="linkKind"][value="uri"]').checked = true;
+    $('#linkOk').textContent = '넣기';
+  }
+  $('#linkDel').hidden = !edit; $('#linkGo').hidden = !edit;
+  $('#pdf').querySelectorAll('.linkHit.sel').forEach((el) => el.classList.remove('sel'));
+  if (edit && anchorEl) anchorEl.classList.add('sel');
+  pop.hidden = false;
+  const r = anchorEl.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.left)) + 'px';
+  pop.style.top = (r.bottom + ph + 8 < window.innerHeight ? r.bottom + 6 : Math.max(8, r.top - ph - 6)) + 'px';
+  (wdRadio('linkKind') === 'page' ? $('#linkPage') : $('#linkUri')).focus();
+}
+function hideLinkPop() {
+  if ($('#linkPop').hidden) return;
+  $('#linkPop').hidden = true; wdState.linkEdit = null;
+  $('#pdf').querySelectorAll('.wdBox, .linkHit.sel').forEach((el) => (el.classList.contains('wdBox') ? el.remove() : el.classList.remove('sel')));
+}
+$('#linkUri').addEventListener('input', () => { document.querySelector('input[name="linkKind"][value="uri"]').checked = true; });
+$('#linkPage').addEventListener('input', () => { document.querySelector('input[name="linkKind"][value="page"]').checked = true; });
+$('#linkCancel').onclick = hideLinkPop;
+$('#linkPop').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideLinkPop(); }
+  else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); $('#linkOk').click(); }
+});
+$('#linkOk').onclick = async () => {
+  const spec = wdState.linkEdit; if (!spec) return;
+  const kind = wdRadio('linkKind'), uri = $('#linkUri').value.trim(), page = Number($('#linkPage').value) - 1;
+  if (kind === 'uri' && !uri) return showError('#linkError', '웹 주소를 입력하세요 — 예: https://example.com');
+  if (kind === 'page' && !(Number.isInteger(page) && page >= 0 && page < pdfPages.length)) return showError('#linkError', `쪽 번호는 1~${pdfPages.length}로 입력하세요`);
+  const target = kind === 'uri' ? { uri } : { page };
+  const name = cur;
+  try {
+    if (spec.edit) await pdfMutate('/api/pdf/link/update', { name, i: spec.edit.i, index: spec.edit.index, ...target }, { silent: true });
+    else await pdfMutate('/api/pdf/link/create', { name, i: spec.create.i, rect: spec.create.rect, ...target }, { silent: true });
+  } catch (error) { return showError('#linkError', error.message); }
+  hideLinkPop();
+  if (cur !== name) return;
+  await wdLoadLinks();
+  toast(spec.edit ? '링크를 바꿨습니다' : `링크를 걸었습니다 — ${kind === 'uri' ? uri : `${page + 1}쪽`}`, { action: '실행 취소', onAction: undo });
+};
+$('#linkDel').onclick = async () => {
+  const l = wdState.linkEdit?.edit; if (!l) return;
+  const name = cur;
+  try { await pdfMutate('/api/pdf/link/delete', { name, i: l.i, index: l.index }, { silent: true }); } catch (error) { return showError('#linkError', error.message); }
+  hideLinkPop(); await wdLoadLinks();
+  toast('링크를 지웠습니다', { action: '실행 취소', onAction: undo });
+};
+$('#linkGo').onclick = () => { const l = wdState.linkEdit?.edit; hideLinkPop(); wdFollowLink(l); };
+document.addEventListener('mousedown', (e) => { if (!$('#linkPop').hidden && !e.target.closest('#linkPop') && !e.target.closest('.linkHit') && !e.target.closest('.pdfPage')) hideLinkPop(); });
+// 링크 목록
+async function openLinksDialog() {
+  if (!pdfOpen()) return;
+  await wdLoadLinks();
+  const body = $('#linksBody'); body.innerHTML = '';
+  if (!wdState.links.length) body.innerHTML = '<tr><td colspan="3" class="hint2">이 문서에는 링크가 없습니다</td></tr>';
+  wdState.links.forEach((l) => {
+    const tr = document.createElement('tr');
+    const what = l.kind === 'uri' ? l.uri : l.kind === 'page' ? `${l.page + 1}쪽으로` : '(읽을 수 없는 대상)';
+    tr.innerHTML = `<td>${l.i + 1}</td><td title="${escapeHtml(what)}" style="max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(what)}</td><td style="white-space:nowrap"><button type="button" data-a="go">링크 자리</button> <button type="button" data-a="del">지우기</button></td>`;
+    tr.querySelector('[data-a="go"]').onclick = () => { $('#linksDialog').close(); revealPage(l.i); setTool('link'); };
+    tr.querySelector('[data-a="del"]').onclick = async () => {
+      try { await pdfMutate('/api/pdf/link/delete', { name: cur, i: l.i, index: l.index }); } catch { return; }
+      openLinksDialog();
+    };
+    body.appendChild(tr);
+  });
+  if (!$('#linksDialog').open) $('#linksDialog').showModal();
+}
+$('#linkListBtn').onclick = openLinksDialog;
+$('#linksClose').onclick = () => $('#linksDialog').close();
+
+// ---- 첨부 파일(왼쪽 패널 「첨부」) ----
+let attachSeq = 0;
+async function loadAttachList() {
+  const box = $('#attachList'), name = cur, seq = ++attachSeq;
+  if (!pdfOpen()) { box.innerHTML = ''; return; }
+  let list; try { list = await apiGet(`/api/pdf/attachments?${qs({ name })}`); } catch (error) { box.innerHTML = `<div class="attachEmpty">${escapeHtml(error.message)}</div>`; return; }
+  if (cur !== name || seq !== attachSeq) return;
+  box.innerHTML = list.length ? '' : '<div class="attachEmpty">첨부 파일이 없습니다. [+ 파일 넣기]로 넣을 수 있습니다.</div>';
+  for (const a of list) {
+    const row = document.createElement('div'); row.className = 'attachRow';
+    row.innerHTML = `<span class="an" title="${escapeHtml(a.name + (a.desc ? ' — ' + a.desc : ''))}">${escapeHtml(a.name)}</span><span class="as">${wdSize(a.size)}</span>`
+      + '<button type="button" class="miniBtn" data-a="out" title="파일로 꺼내 저장합니다">꺼내기</button><button type="button" class="miniBtn" data-a="del" title="문서에서 지웁니다(실행 취소 가능)">지우기</button>';
+    row.querySelector('[data-a="out"]').onclick = async () => {
+      const to = await wdSavePath(wdJoin(wdDir(name), a.name), [{ name: '모든 파일', extensions: ['*'] }]);
+      if (!to) return;
+      try { await apiPost('/api/pdf/attachment/extract', { name, index: a.index, to }); flash(`${basename(to)}로 꺼냈습니다`, 3000); } catch {}
+    };
+    row.querySelector('[data-a="del"]').onclick = async () => {
+      if (!confirm(`첨부 파일 '${a.name}'을(를) 문서에서 지울까요?\n(저장하기 전에는 Ctrl+Z로 되돌릴 수 있습니다)`)) return;
+      try { await pdfMutate('/api/pdf/attachment/delete', { name, index: a.index }); } catch { return; }
+      toast(`첨부 파일 '${a.name}'을(를) 지웠습니다`, { action: '실행 취소', onAction: undo });
+      loadAttachList();
+    };
+    box.appendChild(row);
+  }
+}
+$('#attachAdd').onclick = async () => {
+  if (!window.retextPdf?.openAnyFile) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const p = await window.retextPdf.openAnyFile();
+  if (!p || !pdfOpen()) return;
+  try { await pdfMutate('/api/pdf/attachment/add', { name: cur, path: p }); } catch { return; }
+  toast(`${basename(p)}을(를) 첨부했습니다 — 저장하면 파일에 들어갑니다`, { action: '실행 취소', onAction: undo });
+  loadAttachList();
+};
+$('#attachBtn').onclick = () => showAsideTab('attach');
+
+// ---- Markdown·텍스트 내보내기 ----
+function openMdDialog() {
+  if (!pdfOpen()) return;
+  const o = loadJson('retextpdf.mdExport', {});
+  document.querySelector(`input[name="mdFormat"][value="${o.format === 'txt' ? 'txt' : 'md'}"]`).checked = true;
+  $('#mdStripHf').checked = o.stripHeaderFooter !== false; $('#mdPageBreaks').checked = !!o.pageBreaks;
+  $('#mdImages').value = o.images === 'files' ? 'files' : 'omit'; $('#mdOpenTab').checked = o.openTab !== false;
+  setRangePick($('#mdRange')); showError('#mdError', ''); mdSyncForm();
+  $('#mdDialog').showModal();
+}
+function mdSyncForm() { const md = wdRadio('mdFormat') === 'md'; $('#mdImagesRow').hidden = !md; $('#mdOpenRow').hidden = !md; }
+document.querySelectorAll('input[name="mdFormat"]').forEach((r) => { r.onchange = mdSyncForm; });
+$('#mdExportBtn').onclick = openMdDialog;
+$('#mdCancel').onclick = () => $('#mdDialog').close();
+$('#mdRun').onclick = async () => {
+  const format = wdRadio('mdFormat'), range = readRangePick($('#mdRange'));
+  if (!range.ok) return showError('#mdError', range.error);
+  const o = { format, stripHeaderFooter: $('#mdStripHf').checked, pageBreaks: $('#mdPageBreaks').checked, images: format === 'md' ? $('#mdImages').value : 'omit', openTab: $('#mdOpenTab').checked };
+  const name = cur, ext = format === 'txt' ? 'txt' : 'md';
+  const to = await wdSavePath(wdJoin(wdDir(name), `${wdStem(name)}.${ext}`), [ext === 'md' ? { name: 'Markdown', extensions: ['md'] } : { name: '텍스트', extensions: ['txt'] }]);
+  if (!to) return;
+  if (!new RegExp(`\\.${ext}$`, 'i').test(to)) return showError('#mdError', `파일 이름은 .${ext}로 끝나야 합니다`);
+  showError('#mdError', ''); $('#mdRun').disabled = true;
+  let r;
+  try { r = await runJob(format === 'txt' ? '텍스트로 내보내기' : 'Markdown으로 내보내기', (jobId) => apiPost('/api/pdf/export-markdown', { name, to, pages: range.idxs.map((k) => k + 1).join(','), format, stripHeaderFooter: o.stripHeaderFooter, pageBreaks: o.pageBreaks, images: o.images, jobId }, { silent: true })); }
+  catch (error) { return showError('#mdError', error.message); } finally { $('#mdRun').disabled = false; }
+  if (r.cancelled) return flash('내보내기를 취소했습니다');
+  saveJson('retextpdf.mdExport', o);
+  $('#mdDialog').close();
+  const st = r.stats || {}, bits = [st.headings && `제목 ${st.headings}`, st.lists && `목록 ${st.lists}`, st.tables && `표 ${st.tables}`, r.images?.length && `그림 ${r.images.length}`, st.removed && `머리말·꼬리말 ${st.removed}줄 뺌`].filter(Boolean);
+  toast(`${basename(r.path)}로 내보냈습니다${bits.length ? ' — ' + bits.join(' · ') : ''}`, { ms: 6000 });
+  if (format === 'md' && o.openTab) await open(r.path);
+};
+
+// ---- 쪽 자르기 ----
+async function openCropDialog(drag = null) {
+  if (!pdfOpen()) return;
+  wdState.cropRect = drag ? drag.rect : null;
+  if (wdState.cropBox && wdState.cropBox !== drag?.box) wdState.cropBox.remove();
+  wdState.cropBox = drag ? drag.box : null;
+  $('#cropRectRow').hidden = !drag;
+  if (drag) {
+    const [l, b, r, t] = drag.rect;
+    $('#cropRectInfo').textContent = `(${drag.i + 1}쪽에서 ${Math.round(r - l)} × ${Math.round(t - b)}pt)`;
+    document.querySelector('input[name="cropMode"][value="rect"]').checked = true;
+    setRangePick($('#cropRange'), 'custom', String(drag.i + 1));
+  } else {
+    document.querySelector('input[name="cropMode"][value="margins"]').checked = true;
+    setRangePick($('#cropRange'));
+  }
+  for (const id of ['#cropTop', '#cropBottom', '#cropLeft', '#cropRight']) $(id).value = 0;
+  showError('#cropError', '');
+  $('#cropDialog').showModal();
+  // 지금 쪽의 자른 여백을 채운다(회전하지 않은 쪽만 — 회전 쪽은 0에서 시작)
+  try {
+    const i = drag ? drag.i : currentPageIndex(), bx = await apiGet(`/api/pdf/boxes?${qs({ name: cur, i })}`);
+    if (bx.crop && !bx.rotation && !drag) {
+      const [ml, mb, mr, mt] = bx.media, [cl, cb, cr, ct] = bx.crop, r1 = (v) => Math.max(0, Math.round(v * 10) / 10);
+      $('#cropTop').value = r1(mt - ct); $('#cropBottom').value = r1(cb - mb); $('#cropLeft').value = r1(cl - ml); $('#cropRight').value = r1(mr - cr);
+    }
+  } catch {}
+}
+$('#cropMargins').addEventListener('input', () => { document.querySelector('input[name="cropMode"][value="margins"]').checked = true; });
+$('#cropPad').addEventListener('input', () => { document.querySelector('input[name="cropMode"][value="auto"]').checked = true; });
+$('#cropDialog').addEventListener('close', () => { if (wdState.cropBox) { wdState.cropBox.remove(); wdState.cropBox = null; } });
+$('#cropBtn').onclick = () => openCropDialog();
+$('#cropCancel').onclick = () => $('#cropDialog').close();
+async function wdCrop(spec, label) {
+  const range = readRangePick($('#cropRange'));
+  if (!range.ok) return showError('#cropError', range.error);
+  const name = cur;
+  let r;
+  try { r = await pdfMutate('/api/pdf/crop', { name, pages: range.idxs.map((k) => k + 1).join(','), ...spec }, { silent: true }); }
+  catch (error) { return showError('#cropError', error.message); }
+  if (r.ok === false) return showError('#cropError', r.skipped?.length ? `자를 수 없습니다 — ${r.skipped[0].i + 1}쪽: ${r.skipped[0].reason}` : '자를 쪽이 없습니다');
+  $('#cropDialog').close();
+  if (tool === 'crop') setTool('edit');
+  await afterDocChange(name, `${label}${r.skipped?.length ? ` (${r.skipped.length}쪽은 건너뜀)` : ''}`);
+}
+$('#cropOk').onclick = () => {
+  const mode = wdRadio('cropMode');
+  if (mode === 'rect' && wdState.cropRect) return wdCrop({ rect: wdState.cropRect }, '쪽을 잘랐습니다');
+  if (mode === 'auto') { const pad = Number($('#cropPad').value); if (!(pad >= 0 && pad <= 200)) return showError('#cropError', '여유는 0~200pt로 입력하세요'); return wdCrop({ auto: true, pad }, '여백을 자동으로 잘랐습니다'); }
+  const m = { top: +$('#cropTop').value || 0, bottom: +$('#cropBottom').value || 0, left: +$('#cropLeft').value || 0, right: +$('#cropRight').value || 0 };
+  if (Object.values(m).some((v) => v < 0)) return showError('#cropError', '여백은 0 이상으로 입력하세요');
+  return wdCrop({ margins: m }, '여백을 잘랐습니다');
+};
+$('#cropReset').onclick = () => wdCrop({ reset: true }, '자르기를 풀었습니다');
+
+// ---- 쪽 크기 ----
+const PAGE_SIZES = { A4: [595.28, 841.89], A3: [841.89, 1190.55], A5: [419.53, 595.28], B5: [515.91, 728.5], Letter: [612, 792], Legal: [612, 1008] };
+function openPageSizeDialog() {
+  if (!pdfOpen()) return;
+  const o = loadJson('retextpdf.pageSize', {});
+  $('#psPreset').value = PAGE_SIZES[o.preset] || o.preset === 'custom' ? o.preset : 'A4';
+  if (o.w) $('#psW').value = o.w; if (o.h) $('#psH').value = o.h;
+  $('#psCustom').hidden = $('#psPreset').value !== 'custom';
+  setRangePick($('#psRange')); showError('#psError', '');
+  $('#psDialog').showModal();
+}
+$('#psPreset').onchange = () => { $('#psCustom').hidden = $('#psPreset').value !== 'custom'; };
+$('#pageSizeBtn').onclick = openPageSizeDialog;
+$('#psCancel').onclick = () => $('#psDialog').close();
+$('#psOk').onclick = async () => {
+  const preset = $('#psPreset').value, range = readRangePick($('#psRange'));
+  let [w, h] = PAGE_SIZES[preset] || [+$('#psW').value * 72 / 25.4, +$('#psH').value * 72 / 25.4];
+  if (!(w >= 36 && h >= 36 && w <= 14400 && h <= 14400)) return showError('#psError', '크기는 13~5080mm로 입력하세요');
+  if (!range.ok) return showError('#psError', range.error);
+  const orient = wdRadio('psOrient');
+  if (orient === 'landscape' ? w < h : orient === 'portrait' ? w > h : false) [w, h] = [h, w];
+  const name = cur;
+  try { await pdfMutate('/api/pdf/page-size', { name, pages: range.idxs.map((k) => k + 1).join(','), width: Math.round(w * 100) / 100, height: Math.round(h * 100) / 100, mode: wdRadio('psMode'), keepOrientation: orient === 'auto' }, { silent: true }); }
+  catch (error) { return showError('#psError', error.message); }
+  saveJson('retextpdf.pageSize', { preset, w: +$('#psW').value, h: +$('#psH').value });
+  $('#psDialog').close();
+  await afterDocChange(name, `쪽 크기를 ${preset === 'custom' ? `${$('#psW').value}×${$('#psH').value}mm` : preset}(으)로 바꿨습니다`);
+};
+
+// ---- 베이츠 번호 ----
+function batesForm() {
+  return { prefix: $('#batesPrefix').value, suffix: $('#batesSuffix').value, digits: Math.round(+$('#batesDigits').value), start: Math.round(+$('#batesStart').value),
+    position: $('#batesPos').value, size: +$('#batesSize').value, margin: +$('#batesMargin').value };
+}
+function batesPreview() {
+  const o = batesForm(), ok = o.digits >= 1 && o.digits <= 12 && o.start >= 0;
+  $('#batesPreview').textContent = ok ? `${o.prefix}${String(o.start).padStart(o.digits, '0')}${o.suffix}` : '—';
+}
+function openBatesDialog() {
+  if (!pdfOpen()) return;
+  const o = loadJson('retextpdf.bates', {});
+  for (const [id, k] of [['#batesPrefix', 'prefix'], ['#batesSuffix', 'suffix'], ['#batesDigits', 'digits'], ['#batesStart', 'start'], ['#batesPos', 'position'], ['#batesSize', 'size'], ['#batesMargin', 'margin']]) if (o[k] != null) $(id).value = o[k];
+  setRangePick($('#batesRange')); showError('#batesError', ''); batesPreview();
+  $('#batesDialog').showModal();
+}
+$('#batesDialog').addEventListener('input', batesPreview);
+$('#batesBtn').onclick = openBatesDialog;
+$('#batesCancel').onclick = () => $('#batesDialog').close();
+$('#batesOk').onclick = async () => {
+  const o = batesForm(), range = readRangePick($('#batesRange'));
+  if (!(o.digits >= 1 && o.digits <= 12)) return showError('#batesError', '자릿수는 1~12로 입력하세요');
+  if (!(o.start >= 0)) return showError('#batesError', '시작 번호는 0 이상으로 입력하세요');
+  if (!range.ok) return showError('#batesError', range.error);
+  const name = cur;
+  let r;
+  try { r = await pdfMutate('/api/pdf/bates', { name, ...o, pages: range.all ? '' : range.idxs.map((k) => k + 1).join(',') }, { silent: true }); }
+  catch (error) { return showError('#batesError', error.message); }
+  saveJson('retextpdf.bates', o);
+  $('#batesDialog').close();
+  await afterDocChange(name, `베이츠 번호를 넣었습니다 (${r.first} ~ ${r.last})`);
+};
+$('#batesRemove').onclick = async () => {
+  const name = cur;
+  let r; try { r = await pdfMutate('/api/pdf/bates/remove', { name }, { silent: true }); } catch (error) { return showError('#batesError', error.message); }
+  if (r.ok === false) return showError('#batesError', '지울 베이츠 번호가 없습니다 — 이 앱으로 넣은 것만 지울 수 있습니다');
+  $('#batesDialog').close();
+  await afterDocChange(name, '베이츠 번호를 지웠습니다');
+};
+$('#batesMulti').onclick = () => {
+  const o = batesForm();
+  saveJson('retextpdf.bates', o);
+  $('#batesDialog').close();
+  openBatchDialog({ action: 'bates', bates: o });
+};
+
+// ---- 일괄 처리 ----
+let batchPaths = [], batchOutDir = null, batchSuffixTouched = false;
+const BATCH_SUFFIX = { watermark: '-워터마크', headerFooter: '-머리말', pageNumbers: '-쪽번호', bates: '-베이츠', sanitize: '-정리', pii: '-가림', protect: '-암호', rasterize: '-이미지', downsample: '-축소', markdown: '' };
+function renderBatchFiles() {
+  const ol = $('#batchFiles'); ol.innerHTML = '';
+  batchPaths.forEach((p, k) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="bf"><span class="bn" title="${escapeHtml(p)}">${escapeHtml(basename(p))}</span><button type="button" data-a="up" title="위로" ${k ? '' : 'disabled'}>▲</button><button type="button" data-a="down" title="아래로" ${k < batchPaths.length - 1 ? '' : 'disabled'}>▼</button><button type="button" data-a="del" title="목록에서 빼기">✕</button></span>`;
+    li.querySelector('[data-a="up"]').onclick = () => { [batchPaths[k - 1], batchPaths[k]] = [batchPaths[k], batchPaths[k - 1]]; renderBatchFiles(); };
+    li.querySelector('[data-a="down"]').onclick = () => { [batchPaths[k + 1], batchPaths[k]] = [batchPaths[k], batchPaths[k + 1]]; renderBatchFiles(); };
+    li.querySelector('[data-a="del"]').onclick = () => { batchPaths.splice(k, 1); renderBatchFiles(); };
+    ol.appendChild(li);
+  });
+  $('#batchCount').textContent = batchPaths.length ? `${batchPaths.length}개 파일 — 이 순서로 처리합니다` : 'PDF를 추가하세요';
+}
+function batchSyncAction() {
+  const a = $('#batchAction').value;
+  document.querySelectorAll('#batchOpts > div').forEach((d) => d.classList.toggle('on', d.dataset.act === a));
+  if (!batchSuffixTouched) $('#batchSuffix').value = BATCH_SUFFIX[a] ?? '-처리';
+}
+function openBatchDialog(preset = {}) {
+  batchPaths = [];
+  if (pdfOpen() && !dirty() && /^([a-z]:[\\/]|[\\/])/i.test(cur)) batchPaths.push(cur); // 지금 문서(저장된 상태)를 먼저 넣어 둔다
+  batchSuffixTouched = false;
+  if (preset.action) $('#batchAction').value = preset.action;
+  if (preset.bates) { const b = preset.bates; $('#bbPrefix').value = b.prefix; $('#bbDigits').value = b.digits; $('#bbStart').value = b.start; $('#bbSuffix').value = b.suffix; if ([...$('#bbPos').options].some((o) => o.value === b.position)) $('#bbPos').value = b.position; }
+  batchSyncAction(); renderBatchFiles();
+  $('#batchSummary').hidden = true; showError('#batchError', '');
+  $('#batchDirName').textContent = batchOutDir || '원본과 같은 폴더';
+  $('#batchDialog').showModal();
+}
+$('#batchAction').onchange = batchSyncAction;
+$('#batchSuffix').addEventListener('input', () => { batchSuffixTouched = true; });
+$('#batchBtn').onclick = () => openBatchDialog();
+$('#batchClose').onclick = () => $('#batchDialog').close();
+$('#batchClear').onclick = () => { batchPaths = []; renderBatchFiles(); };
+$('#batchAdd').onclick = async () => {
+  if (!window.retextPdf) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const paths = await window.retextPdf.openPdfFiles();
+  for (const p of paths || []) if (!batchPaths.includes(p)) batchPaths.push(p);
+  renderBatchFiles();
+};
+$('#batchDir').onclick = async () => {
+  const d = await window.retextPdf?.openFolder(); if (!d) return;
+  batchOutDir = d; $('#batchDirName').textContent = d;
+};
+function batchOptions(action) {
+  switch (action) {
+    case 'watermark': return { text: $('#bwText').value, size: +$('#bwSize').value, opacity: (+$('#bwOpacity').value || 25) / 100, color: $('#bwColor').value };
+    case 'headerFooter': return { slots: { tc: $('#bhTop').value, bc: $('#bhBottom').value } };
+    case 'pageNumbers': return { format: $('#bnFormat').value, position: $('#bnPos').value };
+    case 'bates': return { prefix: $('#bbPrefix').value, digits: +$('#bbDigits').value, start: +$('#bbStart').value, suffix: $('#bbSuffix').value, position: $('#bbPos').value };
+    case 'pii': return { kinds: [...document.querySelectorAll('.bpKind:checked')].map((c) => c.value) };
+    case 'protect': return { userPassword: $('#bpwUser').value };
+    case 'rasterize': return { dpi: +$('#brDpi').value };
+    case 'downsample': return { maxDpi: +$('#bdDpi').value, quality: +$('#bdQuality').value };
+    case 'markdown': return { format: $('#bmFormat').value, images: $('#bmImages').checked ? 'files' : 'omit' };
+    default: return {};
+  }
+}
+$('#batchRun').onclick = async () => {
+  const action = $('#batchAction').value, options = batchOptions(action), nameSuffix = $('#batchSuffix').value;
+  if (!batchPaths.length) return showError('#batchError', '처리할 PDF를 추가하세요');
+  if (action === 'protect' && (!options.userPassword || options.userPassword !== $('#bpwUser2').value)) return showError('#batchError', '여는 암호를 두 번 똑같이 입력하세요');
+  if (action === 'pii' && !options.kinds.length) return showError('#batchError', '찾을 개인정보 종류를 하나 이상 고르세요');
+  if (action === 'watermark' && !options.text.trim()) return showError('#batchError', '워터마크 글자를 입력하세요');
+  if (action === 'headerFooter' && !options.slots.tc.trim() && !options.slots.bc.trim()) return showError('#batchError', '머리말이나 꼬리말을 입력하세요');
+  if (!nameSuffix && !batchOutDir && action !== 'markdown') return showError('#batchError', '원본과 같은 폴더에 저장하려면 이름 뒤에 붙일 글을 넣으세요(원본을 덮어쓰지 않습니다)');
+  showError('#batchError', ''); $('#batchRun').disabled = true;
+  let r;
+  try { r = await runJob(`일괄 처리 — ${$('#batchAction').selectedOptions[0].textContent}`, (jobId) => apiPost('/api/pdf/batch', { paths: batchPaths, action, options, outDir: batchOutDir, nameSuffix, jobId }, { silent: true })); }
+  catch (error) { return showError('#batchError', error.message); } finally { $('#batchRun').disabled = false; }
+  const results = r.results || [], failed = results.filter((x) => x.error).length;
+  $('#batchSummary').hidden = false;
+  $('#batchSumLine').innerHTML = r.cancelled ? `<span class="bad">취소했습니다 — ${results.length}개까지 처리</span>`
+    : `<span class="ok">성공 ${results.length - failed}개</span>${failed ? ` · <span class="bad">실패 ${failed}개</span>` : ''}${r.next != null ? ` · 다음 베이츠 번호 ${r.next}` : ''}`;
+  $('#batchBody').innerHTML = '';
+  for (const x of results) {
+    const tr = document.createElement('tr');
+    const extra = x.first ? ` (${x.first} ~ ${x.last})` : x.redacted != null ? ` (가림 ${x.redacted})` : x.after ? ` (${wdSize(x.before)} → ${wdSize(x.after)})` : '';
+    tr.innerHTML = `<td title="${escapeHtml(x.path)}">${escapeHtml(basename(x.path))}</td>` + (x.error ? `<td class="bad">${escapeHtml(x.error)}</td>` : `<td class="ok" title="${escapeHtml(x.out)}">→ ${escapeHtml(basename(x.out))}${escapeHtml(extra)}</td>`);
+    $('#batchBody').appendChild(tr);
+  }
+  flash(r.cancelled ? '일괄 처리를 취소했습니다' : `일괄 처리: ${results.length - failed}개 성공${failed ? ` · ${failed}개 실패` : ''}`, 4000);
+};
+
+// ---- 두 문서 비교 ----
+const cmpState = { a: null, b: null, res: null, unit: 'word', syncing: false, sel: -1, heatSeq: 0, opened: false };
+let cmpPickPath = null;
+function openComparePick() {
+  if (!pdfOpen()) return;
+  cmpPickPath = null; $('#cmpPickFileName').textContent = ''; showError('#cmpPickError', '');
+  $('#cmpPickCur').textContent = basename(cur);
+  const box = $('#cmpPickTabs'); box.innerHTML = '';
+  const others = tabs.filter((p) => p !== cur && /\.pdf$/i.test(p));
+  others.forEach((p, k) => { const l = document.createElement('label'); l.innerHTML = `<input type="radio" name="cmpOther" value="${k}"${k ? '' : ' checked'}> ${escapeHtml(basename(p))} <span class="hint2">(열린 탭)</span>`; l.querySelector('input').dataset.path = p; box.appendChild(l); });
+  if (!others.length) box.innerHTML = '<span class="hint2">열린 다른 PDF 탭이 없습니다 — [다른 PDF 파일…]로 고르세요</span>';
+  $('#cmpUnit').value = cmpState.unit;
+  $('#cmpPick').showModal();
+}
+$('#compareBtn').onclick = openComparePick;
+$('#cmpPickCancel').onclick = () => $('#cmpPick').close();
+$('#cmpPickFile').onclick = async () => {
+  const paths = await window.retextPdf?.openPdfFiles(); const p = (paths || [])[0];
+  if (!p) return;
+  cmpPickPath = p; $('#cmpPickFileName').textContent = basename(p);
+  document.querySelectorAll('input[name="cmpOther"]').forEach((r) => { r.checked = false; });
+};
+$('#cmpPickOk').onclick = async () => {
+  const sel = document.querySelector('input[name="cmpOther"]:checked');
+  const other = sel ? sel.dataset.path : cmpPickPath;
+  if (!other) return showError('#cmpPickError', '견줄 문서를 고르세요');
+  $('#cmpPick').close();
+  await runCompare(cur, other, $('#cmpUnit').value);
+};
+async function runCompare(a, b, unit) {
+  let r;
+  try { r = await runJob('두 문서 비교', (jobId) => apiPost('/api/pdf/compare', { name: a, other: b, unit, jobId }, { silent: true })); }
+  catch (error) { return flash('⚠ 비교하지 못했습니다: ' + (error.data?.needPassword ? '암호가 걸린 PDF입니다 — 그 문서를 탭으로 열어 암호를 푼 뒤 비교하세요' : error.message), 6000); }
+  if (r.cancelled) return flash('비교를 취소했습니다');
+  Object.assign(cmpState, { a, b, res: r, unit, sel: -1 });
+  renderCompare();
+}
+function cmpScaleFor(pane, pages) { const w = Math.max(...pages.map((p) => p.w), 1); return Math.max(0.2, Math.min(2, (pane.clientWidth - 24) / w)); }
+function renderCompare() {
+  const { a, b, res } = cmpState;
+  if (!$('#cmpView').open) $('#cmpView').showModal();
+  $('#cmpNameA').textContent = `왼쪽(원본): ${basename(a)}`; $('#cmpNameB').textContent = `오른쪽(비교): ${basename(b)}`;
+  $('#cmpNameA').title = a; $('#cmpNameB').title = b;
+  $('#cmpUnit2').value = cmpState.unit;
+  const st = res.stats;
+  $('#cmpStats').textContent = res.diffs.length ? `지움 ${st.delete} · 넣음 ${st.insert} · 바뀜 ${st.change}${res.truncated ? ' (처음 2,000개만)' : ''}` : '글이 같습니다';
+  for (const [side, pane, pages, doc] of [['a', $('#cmpPaneA'), res.pagesA, a], ['b', $('#cmpPaneB'), res.pagesB, b]]) {
+    pane.innerHTML = '';
+    const s = cmpScaleFor(pane, pages); cmpState['scale' + side.toUpperCase()] = s;
+    const rs = Math.min(4, Math.round(s * (window.devicePixelRatio || 1) * 100) / 100);
+    pages.forEach((pg, k) => {
+      const el = document.createElement('div'); el.className = 'cmpPage'; el.dataset.i = k;
+      el.style.width = pg.w * s + 'px'; el.style.height = pg.h * s + 'px';
+      el.innerHTML = `<img class="pg" loading="lazy" alt="" src="/api/pdf/page?${qs({ name: doc, i: k, scale: rs })}"><span class="pgNo">${k + 1}</span>`;
+      pane.appendChild(el);
+    });
+  }
+  const mark = (side, d, kind) => {
+    const pane = side === 'a' ? $('#cmpPaneA') : $('#cmpPaneB'), pages = side === 'a' ? res.pagesA : res.pagesB, s = cmpState['scale' + side.toUpperCase()], part = d[side];
+    const list = part.rects.length ? part.rects.map((x) => ({ page: x.page, rect: x.rect, cls: kind })) : part.anchor ? [{ page: part.page, rect: [part.anchor[2], part.anchor[1], part.anchor[2] + 2, part.anchor[3]], cls: 'anchor' }] : [];
+    for (const x of list) {
+      const pageEl = pane.children[x.page], pg = pages[x.page]; if (!pageEl || !pg) continue;
+      const sc = pdfToScreen(pg, { x0: x.rect[0], y0: x.rect[1], x1: x.rect[2], y1: x.rect[3] }, s);
+      const hl = document.createElement('div'); hl.className = `cmpHl ${x.cls}`; hl.dataset.id = d.id;
+      Object.assign(hl.style, { left: sc.left - 1 + 'px', top: sc.top - 1 + 'px', width: sc.width + 2 + 'px', height: sc.height + 2 + 'px' });
+      pageEl.appendChild(hl);
+    }
+  };
+  const list = $('#cmpList'); list.innerHTML = '';
+  const KIND = { delete: ['del', '지움'], insert: ['ins', '넣음'], change: ['chg', '바뀜'] };
+  res.diffs.forEach((d) => {
+    const [cls, label] = KIND[d.kind];
+    mark('a', d, cls); mark('b', d, cls);
+    const it = document.createElement('div'); it.className = 'cmpItem'; it.dataset.id = d.id; it.setAttribute('role', 'option');
+    const where = `왼 ${d.a.page + 1}쪽 · 오 ${d.b.page + 1}쪽`;
+    const text = d.kind === 'change' ? `<s>${escapeHtml(d.a.text)}</s> → ${escapeHtml(d.b.text)}` : escapeHtml(d.kind === 'delete' ? d.a.text : d.b.text);
+    it.innerHTML = `<span class="k ${cls}">${label}</span><span class="hint2">${where}</span><span class="t" title="${escapeHtml(d.a.text || '')}${d.kind === 'change' ? ' → ' : ''}${escapeHtml(d.b.text || '')}">${text}</span>`;
+    it.onclick = () => cmpJump(d.id);
+    list.appendChild(it);
+  });
+  if (!res.diffs.length) list.innerHTML = '<div class="cmpItem">두 문서의 글이 같습니다. 배치·그림 차이는 [이미지 비교(픽셀)]로 보세요.</div>';
+  if ($('#cmpPixels').checked) cmpHeat(true);
+}
+// 차이 하나로 가기: 양쪽 창을 그 자리로 굴리고 깜빡인다
+function cmpJump(id) {
+  cmpState.sel = id;
+  document.querySelectorAll('#cmpList .cmpItem').forEach((el) => el.classList.toggle('on', +el.dataset.id === id));
+  cmpState.syncing = true;
+  for (const pane of [$('#cmpPaneA'), $('#cmpPaneB')]) {
+    pane.querySelectorAll('.cmpHl.flash').forEach((el) => el.classList.remove('flash'));
+    const hls = pane.querySelectorAll(`.cmpHl[data-id="${id}"]`);
+    hls.forEach((el) => el.classList.add('flash'));
+    const el = hls[0]; if (!el) continue;
+    pane.scrollTop = Math.max(0, el.parentElement.offsetTop + el.offsetTop - pane.clientHeight / 3);
+  }
+  requestAnimationFrame(() => requestAnimationFrame(() => { cmpState.syncing = false; }));
+}
+// 함께 스크롤: 한쪽의 쪽 번호와 쪽 안 비율을 다른 쪽에 맞춘다
+function cmpSync(from, to) {
+  if (cmpState.syncing || !$('#cmpSync').checked) return;
+  const pages = [...from.children], k = Math.max(0, pages.findIndex((p, j) => p.offsetTop + p.offsetHeight > from.scrollTop || j === pages.length - 1));
+  const p = pages[k]; if (!p) return;
+  const frac = (from.scrollTop - p.offsetTop) / Math.max(1, p.offsetHeight), q = to.children[Math.min(k, to.children.length - 1)];
+  if (!q) return;
+  cmpState.syncing = true;
+  to.scrollTop = q.offsetTop + frac * q.offsetHeight;
+  requestAnimationFrame(() => { cmpState.syncing = false; });
+}
+$('#cmpPaneA').addEventListener('scroll', () => cmpSync($('#cmpPaneA'), $('#cmpPaneB')));
+$('#cmpPaneB').addEventListener('scroll', () => cmpSync($('#cmpPaneB'), $('#cmpPaneA')));
+// 이미지 비교(픽셀): 쪽마다 달라진 픽셀을 빨갛게 칠한 그림을 왼쪽 쪽 위에 겹친다(/api/pdf/compare/pixels)
+async function cmpHeat(on) {
+  const seq = ++cmpState.heatSeq, { a, b, res } = cmpState;
+  document.querySelectorAll('#cmpPaneA img.heat, #cmpPaneA .heatPct').forEach((el) => el.remove());
+  if (!on || !res) return;
+  const s = Math.min(1, cmpState.scaleA || 1);
+  for (let k = 0; k < res.pagesA.length; k++) {
+    let r; try { r = await fetch(`/api/pdf/compare/pixels?${qs({ name: a, other: b, i: k, scale: s })}`); } catch { return; }
+    if (seq !== cmpState.heatSeq || !$('#cmpView').open) return;
+    if (!r.ok) continue;
+    const changed = Number(r.headers.get('X-Changed')) || 0, url = URL.createObjectURL(await r.blob());
+    const pageEl = $('#cmpPaneA').children[k]; if (!pageEl) continue;
+    const img = document.createElement('img'); img.className = 'heat'; img.alt = ''; img.src = url; img.onload = () => URL.revokeObjectURL(url);
+    pageEl.appendChild(img);
+    const pct = document.createElement('span'); pct.className = 'heatPct'; pct.textContent = changed ? `${(changed * 100).toFixed(changed < 0.001 ? 3 : 1)}% 다름` : '같음';
+    pageEl.appendChild(pct);
+  }
+}
+$('#cmpPixels').onchange = () => cmpHeat($('#cmpPixels').checked);
+$('#cmpUnit2').onchange = () => runCompare(cmpState.a, cmpState.b, $('#cmpUnit2').value);
+$('#cmpClose').onclick = () => $('#cmpView').close();
+$('#cmpView').addEventListener('close', () => {
+  cmpState.heatSeq++;
+  const other = cmpState.b;
+  if (other && !tabs.includes(other)) apiPost('/api/pdf/close', { name: other }, { silent: true }).catch(() => {}); // 탭이 아닌 비교 문서는 서버 캐시에서 닫는다
+  $('#cmpPaneA').innerHTML = ''; $('#cmpPaneB').innerHTML = '';
+});
+// 보고서(Markdown): 차이 목록 표
+$('#cmpReport').onclick = async () => {
+  const { a, b, res } = cmpState; if (!res) return;
+  const to = await wdSavePath(wdJoin(wdDir(a), `${wdStem(a)}-비교.md`), [{ name: 'Markdown', extensions: ['md'] }]);
+  if (!to) return;
+  const cell = (s) => String(s || '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
+  const KIND = { delete: '지움', insert: '넣음', change: '바뀜' }, st = res.stats;
+  const lines = [`# 두 문서 비교 보고서`, '', `- 원본(왼쪽): ${basename(a)}`, `- 비교(오른쪽): ${basename(b)}`, `- 단위: ${{ word: '낱말', line: '줄', paragraph: '문단' }[cmpState.unit]}`,
+    `- 차이: 지움 ${st.delete} · 넣음 ${st.insert} · 바뀜 ${st.change}${res.truncated ? ' (처음 2,000개만)' : ''}`, '',
+    '| # | 종류 | 원본 쪽 | 원본 | 비교 쪽 | 비교 |', '| --- | --- | --- | --- | --- | --- |',
+    ...res.diffs.map((d, k) => `| ${k + 1} | ${KIND[d.kind]} | ${d.a.page + 1} | ${cell(d.a.text)} | ${d.b.page + 1} | ${cell(d.b.text)} |`), ''];
+  try {
+    const r = await fetch('/api/file?' + qs({ name: to }), { method: 'PUT', body: lines.join('\n') });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+    flash(`${basename(to)}로 저장했습니다`, 3000);
+  } catch (error) { flash('⚠ 보고서를 저장하지 못했습니다: ' + error.message, 5000); }
+};
+
+// 시험·화면 찍기용 손잡이(문서를 바꾸지 않는다)
+window.retextPdfD = { openMdDialog, openCropDialog, openPageSizeDialog, openBatesDialog, openBatchDialog, openComparePick, runCompare, openLinksDialog, openLinkPop, loadAttachList, wdLoadLinks,
+  get links() { return wdState.links.slice(); }, get compare() { return cmpState.res; }, set batchPaths(v) { batchPaths = v.slice(); renderBatchFiles(); }, set batchOutDir(v) { batchOutDir = v; $('#batchDirName').textContent = v || '원본과 같은 폴더'; } };
 
 // 테스트·화면 찍기용 손잡이(개발 도구에서 상태를 볼 수 있게) — 문서를 바꾸지 않는다
 window.retextPdfP9 = { showRibbonTab, pickPages, checkPageRange, get tool() { return tool; } };

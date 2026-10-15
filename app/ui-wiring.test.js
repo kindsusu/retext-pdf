@@ -1120,5 +1120,74 @@ console.log('OK — 앱 이름 변경(Retext PDF 5.1.0) 단언 통과');
   assert.ok(classic.includes('ui-model.js') && classic.includes('find-replace.js'), '일반 스크립트 목록');
   console.log('OK — v6 Wave C 문서 탭·명령 검색·테마·시작 화면·쪽 보기 방식·손 도구·읽기 모드 단언 통과');
 }
+// ── v6 Wave D: Markdown 내보내기 · 쪽 자르기·크기 · 두 문서 비교 · 일괄 처리 · 링크 · 첨부 파일 · 영역 스냅샷 · 베이츠 번호 ─────────────
+{
+  const UM = require('./ui-model');
+  const s = script.replace(/\r\n/g, '\n');
+  const mainSrc = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+  const fnSrc = (name) => s.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0];
+  const btn = (id) => html.match(new RegExp(`<button type="button" class="tb" id="${id}" data-icon="(\\w+)"[^>]*data-tip="([^"]+)"[^>]*><span class="tl">([^<]+)</span></button>`));
+  // A. 리본: 버튼마다 아이콘·설명·짧은 이름, 아이콘은 ICONS에 있고, 탭·묶음이 맞다
+  const where = { snapTool: 'rpanel-home', linkTool: 'rpanel-annot', linkListBtn: 'rpanel-annot', cropTool: 'rpanel-page', cropBtn: 'rpanel-page', pageSizeBtn: 'rpanel-page', batesBtn: 'rpanel-page',
+    mdExportBtn: 'rpanel-doc', compareBtn: 'rpanel-doc', batchBtn: 'rpanel-doc', attachBtn: 'rpanel-doc' };
+  const panelOf = (id) => { const k = html.indexOf(`id="${id}"`), p = html.lastIndexOf('<div class="rpanel" id="', k); return html.slice(p + 24, html.indexOf('"', p + 24)); };
+  for (const [id, panel] of Object.entries(where)) {
+    const m = btn(id);
+    assert.ok(m, `#${id}: 아이콘 + 설명 + 짧은 이름`);
+    assert.ok(new RegExp(`\\n  ${m[1]}: '<`).test(s), `#${id} 아이콘 ${m[1]}이 ICONS에 있다`);
+    assert.strictEqual(panelOf(id), panel, `#${id}는 ${panel}에`);
+  }
+  for (const [id, t] of [['snapTool', 'snapshot'], ['linkTool', 'link'], ['cropTool', 'crop']]) assert.match(html, new RegExp(`id="${id}" data-icon="\\w+" data-tool="${t}" aria-pressed="false"`), `#${id}는 도구(${t})`);
+  assert.match(html, /id="groupConvert" data-modes="empty pdf"/, '[일괄 처리]는 문서 없이도'); assert.match(html, /id="mdExportBtn" data-icon="markdown" data-modes="pdf"/);
+  assert.match(html, /<button type="button" class="tabBtn" data-tab="attach" data-modes="pdf" role="tab"/, '왼쪽 패널 「첨부」 탭');
+  // B. 명령 검색: 새 버튼이 이름·별칭·초성으로 찾아진다
+  const aliases = new Function(`return ${s.slice(s.indexOf('const CMD_ALIASES = ') + 'const CMD_ALIASES = '.length, s.indexOf('};', s.indexOf('const CMD_ALIASES = ')) + 1)}`)();
+  const cmds = Object.keys(where).map((id) => { const m = btn(id); return { id, label: m[2].split(':')[0].trim(), aliases: [m[3], ...(aliases[id] || [])], tip: m[2], group: '' }; });
+  for (const [q, id] of [['마크다운', 'mdExportBtn'], ['md', 'mdExportBtn'], ['비교', 'compareBtn'], ['diff', 'compareBtn'], ['일괄', 'batchBtn'], ['ㅇㄱ ㅊㄹ', 'batchBtn'], ['링크', 'linkTool'], ['url', 'linkTool'],
+    ['첨부', 'attachBtn'], ['스냅샷', 'snapTool'], ['캡처', 'snapTool'], ['자르기', 'cropTool'], ['크롭', 'cropTool'], ['a4', 'pageSizeBtn'], ['쪽 크기', 'pageSizeBtn'], ['베이츠', 'batesBtn'], ['bates', 'batesBtn'], ['ㅂㅇㅊ', 'batesBtn']]) {
+    assert.strictEqual(UM.searchCommands(q, cmds, 3)[0]?.id, id, `명령 검색 "${q}" → ${id}`);
+  }
+  // C. 대화상자·패널
+  for (const id of ['mdDialog', 'cropDialog', 'psDialog', 'batesDialog', 'cmpPick', 'cmpView', 'batchDialog', 'linksDialog']) assert.match(html, new RegExp(`<dialog id="${id}" class="panel`), `#${id}`);
+  for (const id of ['linkPop', 'attachTab', 'attachList', 'cmpPaneA', 'cmpPaneB', 'cmpList', 'cmpPixels', 'batchFiles', 'batchSummary']) assert.ok(html.includes(`id="${id}"`), `#${id}`);
+  for (const id of ['mdRange', 'cropRange', 'psRange', 'batesRange']) assert.match(html, new RegExp(`class="rangePick" id="${id}"`), `${id}: 쪽 범위 고르기`);
+  const acts = [...html.matchAll(/<option value="(\w+)">/g)].map((m) => m[1]);
+  for (const a of ['watermark', 'headerFooter', 'pageNumbers', 'bates', 'sanitize', 'pii', 'protect', 'rasterize', 'downsample', 'markdown']) {
+    assert.ok(acts.includes(a) && html.includes(`<div data-act="${a}">`), `일괄 처리 동작 ${a}와 그 옵션 칸`);
+    assert.ok(serverSource.includes(`case '${a}':`), `서버 batchOne이 ${a}를 처리한다`);
+  }
+  // D. 화면 → 서버 길(이 길들이 서버에 있다)
+  for (const route of ['/api/pdf/export-markdown', '/api/pdf/crop', '/api/pdf/boxes', '/api/pdf/page-size', '/api/pdf/compare', '/api/pdf/compare/pixels', '/api/pdf/batch', '/api/pdf/links', '/api/pdf/link/create', '/api/pdf/link/update', '/api/pdf/link/delete',
+    '/api/pdf/attachments', '/api/pdf/attachment/extract', '/api/pdf/attachment/add', '/api/pdf/attachment/delete', '/api/pdf/snapshot', '/api/pdf/snapshot/save', '/api/pdf/bates', '/api/pdf/bates/remove']) {
+    assert.ok(s.includes(route), `화면이 ${route}를 부른다`);
+    assert.ok(serverSource.includes(`'${route}'`), `서버에 ${route}`);
+  }
+  assert.match(fnBodyOf(s, "$('#mdRun').onclick = async () =>"), /runJob\([^)]*\(jobId\) => apiPost\('\/api\/pdf\/export-markdown'[\s\S]*if \(format === 'md' && o\.openTab\) await open\(r\.path\);/, '내보낸 .md를 Markdown 탭으로 연다');
+  assert.match(fnBodyOf(s, "$('#batchRun').onclick = async () =>"), /runJob\([\s\S]*'\/api\/pdf\/batch'[\s\S]*batchSumLine/, '일괄 처리는 진행 창(취소) + 요약');
+  assert.match(fnBodyOf(s, 'async function runCompare('), /runJob\('두 문서 비교'/, '비교도 진행 창');
+  assert.match(s, /\$\('#cmpPaneA'\)\.addEventListener\('scroll', \(\) => cmpSync\(\$\('#cmpPaneA'\), \$\('#cmpPaneB'\)\)\);/, '함께 스크롤');
+  // E. 링크: Ctrl+클릭은 잡기 단계에서 링크 위만 가로채고, 웹 주소는 main.js가 묻고 연다(자동으로 열지 않는다)
+  assert.match(s, /if \(!\(e\.ctrlKey \|\| e\.metaKey\) \|\| e\.button !== 0 \|\| inplace \|\| !pdfOpen\(\)\) return;[\s\S]{0,300}if \(!l\) return;\s*e\.preventDefault\(\); e\.stopPropagation\(\);\s*wdFollowLink\(l\);\s*\}, true\);/, 'Ctrl+클릭 링크 따라가기');
+  assert.match(fnBodyOf(s, 'async function wdFollowLink('), /window\.retextPdf\.openLink\(l\.uri\)/);
+  assert.match(mainSrc, /ipcMain\.handle\('openLink'[\s\S]{0,300}\^\(https\?:\\\/\\\/\|mailto:\)[\s\S]{0,300}dialog\.showMessageBox[\s\S]{0,200}if \(r\.response !== 0\) return/, 'main.js: http(s)·mailto만, 묻고 나서 연다');
+  assert.match(mainSrc, /ipcMain\.handle\('copyImage'[\s\S]{0,200}clipboard\.writeImage\(img\)/, '스냅샷: Electron 클립보드');
+  for (const k of ['openAnyFile', 'saveFile', 'copyImage', 'openLink']) assert.match(preloadSource, new RegExp(`${k}: \\(`), `프리로드 ${k}`);
+  // F. 좌표: 자른 쪽(원점 ox·oy)도 화면 ↔ PDF가 서로 되돌아온다
+  const P = new Function(`let pdfScale = 1;\n${fnSrc('unrotatedSize')}\n${fnSrc('pdfToScreen')}\n${fnSrc('screenToPdf')}\nreturn { pdfToScreen, screenToPdf };`)();
+  for (const rot of [0, 1, 2, 3]) {
+    const page = { w: rot % 2 ? 250 : 350, h: rot % 2 ? 350 : 250, rotation: rot, ox: 20, oy: 40 };
+    const r = { x0: 60, y0: 70, x1: 90, y1: 100 }, sc = P.pdfToScreen(page, r, 2), back = P.screenToPdf(page, sc, 2);
+    for (const k of ['x0', 'y0', 'x1', 'y1']) assert.ok(Math.abs(back[k] - r[k]) < 1e-9, `회전 ${rot}: ${k} 되돌아옴`);
+  }
+  const p0 = { w: 350, h: 250, rotation: 0, ox: 20, oy: 40 };
+  assert.deepStrictEqual(P.pdfToScreen(p0, { x0: 20, y0: 40, x1: 20, y1: 40 }, 1), { left: 0, top: 250, width: 0, height: 0 }, '보이는 상자 왼쪽 아래 = 화면 (0, 높이)');
+  assert.deepStrictEqual(P.pdfToScreen({ w: 100, h: 100, rotation: 0 }, { x0: 10, y0: 10, x1: 20, y1: 20 }, 1), { left: 10, top: 80, width: 10, height: 10 }, '원점이 없으면 예전 그대로');
+  // G. 도구: 끌기 도구는 TOOL_NAMES·HINTS에 있고 setTool이 고리를 부른다
+  for (const t of ['crop', 'link', 'snapshot']) { assert.match(s, new RegExp(`const TOOL_NAMES = \\{[^}]*${t}: '`), `TOOL_NAMES.${t}`); assert.match(s, new RegExp(`\\n  ${t}: '[^']+Esc로 끝'`), `HINTS.${t}`); }
+  assert.match(fnBodyOf(s, 'function setTool('), /wdToolChanged\(name\);/);
+  assert.match(fnBodyOf(s, 'function p9AfterRender('), /wdAfterRender\(name\);/, '다시 그린 뒤 링크·첨부 목록');
+  assert.match(fnBodyOf(s, 'function showAsideTab('), /else if \(tab === 'attach'\) loadAttachList\(\);/);
+  console.log('OK — v6 Wave D 리본·명령 검색·대화상자·서버 길·링크 따라가기·자른 쪽 좌표 단언 통과');
+}
 function SH(src) { const a = src.indexOf('const SHORTCUTS = ['); return new Function(`return ${src.slice(a + 'const SHORTCUTS = '.length, src.indexOf('];', a) + 1)};`)(); }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }

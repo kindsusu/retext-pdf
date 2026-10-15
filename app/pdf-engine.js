@@ -11,6 +11,7 @@ const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 const MARK_PAGENUM = 'RetextPdfPageNum'; // 쪽 번호 글자. 다시 매기면 이 마크가 달린 객체를 지우고 새로 넣는다
 const MARK_HF = 'RetextPdfHeaderFooter'; // 머리말·꼬리말 글자(다시 넣으면 교체)
 const MARK_WM = 'RetextPdfWatermark';    // 워터마크 글자·그림(다시 넣으면 모든 쪽에서 교체)
+const MARK_BATES = 'RetextPdfBates';      // v6 Wave D: 베이츠 번호(접두어 + 0을 채운 번호 + 접미어). 다시 넣으면 모든 쪽에서 교체
 const MARK_STYLE = 'RetextPdfStyle';     // v6: 고른 글자에 준 모양(밑줄·취소선·가짜 굵게·가짜 기울임·첨자) — 글을 고쳐 써도 따라간다
 const MARK_DECO = 'RetextPdfDeco';       // v6: 밑줄·취소선 선(얇은 채움 사각형). syncDeco가 RetextPdfStyle에서 다시 그린다
 // v6 Wave B: 원래 글꼴에 없는 글자 때문에 다른 글꼴로 다시 그린 글자 조각. orig(원래 글꼴 이름)·used(쓴 글꼴)·kind('family' 같은 집안 설치 폰트 |
@@ -226,6 +227,20 @@ function encodeJpeg(data, width, height, quality) {
   }
   return Buffer.from(jpeg.encode({ data: px, width, height }, q).data);
 }
+
+// v6 Wave D 링크 주소: http(s)·mailto만 받는다(javascript:·file: 등은 400). 한글 등 ASCII 밖 글자는 퍼센트 인코딩(URL 표준)
+function normalizeLinkUri(raw) {
+  const s = String(raw ?? '').trim();
+  const fail = (m) => Object.assign(new Error(m), { status: 400 });
+  if (!s || s.length > 2000) throw fail('링크 주소는 1~2000자로 입력하세요.');
+  if (/^mailto:/i.test(s)) return encodeURI(decodeSafe(s));
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[^:/]+\.[^:/]+:\d/.test(s) ? s : 'https://' + s; // 'example.com/a'처럼 스킴이 없으면 https
+  let u;
+  try { u = new URL(withScheme); } catch { throw fail('링크 주소를 읽을 수 없습니다. https://로 시작하는 주소를 입력하세요.'); }
+  if (!['http:', 'https:'].includes(u.protocol)) throw fail('링크 주소는 http(s):// 또는 mailto: 만 넣을 수 있습니다.');
+  return u.href;
+}
+function decodeSafe(s) { try { return decodeURI(s); } catch { return s; } }
 
 // password: 여는 암호(사용자 암호). 없으면 빈 암호로 연다 — 소유자 암호만 걸린(권한 제한) 문서는 PDFium이 빈 암호로 연다
 async function open(buffer, password) {
@@ -1062,9 +1077,18 @@ async function open(buffer, password) {
     // 렌더 비트맵도 842×595 로 나오므로 pageSize·render는 서로 맞는다.
     // rotation(0..3, ×90°)을 함께 돌려준다 — objects()·charBoxes()·find()의 좌표는 회전 전 페이지 좌표계라
     // 화면 겹침 상자를 그리려면 호출자가 이 값으로 변환해야 한다(아래 rotatePages 주석 참고).
+    // v6 Wave D: 보이는 상자(CropBox ∩ MediaBox)의 왼쪽 아래가 (0,0)이 아니면 ox·oy(회전 전 쪽 좌표)를 싣는다 — 화면 좌표 변환(pdfToScreen)이 원점을 뺀다.
+    //   자르기(CropBox)를 한 쪽·원점이 옮겨진 쪽에서 상자가 어긋나지 않게. 원점이 (0,0)이면 예전 모양 그대로
     pageSize(i) {
-      const p = page(i);
-      return { w: P.FPDF_GetPageWidthF(p), h: P.FPDF_GetPageHeightF(p), rotation: P.FPDFPage_GetRotation(p) };
+      const p = page(i), out = { w: P.FPDF_GetPageWidthF(p), h: P.FPDF_GetPageHeightF(p), rotation: P.FPDFPage_GetRotation(p) };
+      const b = mal(16);
+      try {
+        if (P.FPDF_GetPageBoundingBox(p, b)) { // FS_RECTF { left, top, right, bottom }
+          const ox = Math.min(f32(b), f32(b + 8)), oy = Math.min(f32(b + 4), f32(b + 12));
+          if (Math.abs(ox) > 0.001 || Math.abs(oy) > 0.001) { out.ox = ox; out.oy = oy; }
+        }
+      } finally { free(b); }
+      return out;
     },
 
     async render(i, scale = 1) {
@@ -1196,6 +1220,7 @@ async function open(buffer, password) {
           if (findMark(o, MARK_PAGENUM)) item.pageNum = true; // 쪽 번호 글자(다시 매기기·지우기 대상)
           if (findMark(o, MARK_HF)) item.headerFooter = true; // 머리말·꼬리말 글자
           if (findMark(o, MARK_WM)) item.watermark = true;    // 워터마크 글자·그림
+          if (findMark(o, MARK_BATES)) item.bates = true;     // v6 Wave D: 베이츠 번호 글자
           if (findMark(o, MARK_DECO)) item.deco = true;       // v6 밑줄·취소선 선(syncDeco가 다시 그린다)
           const st = t === OBJ_TEXT ? styleOf(o) : null;
           if (st) item.style = st;                            // v6 글자 모양 표시(밑줄·취소선·가짜 굵게/기울임·첨자)
@@ -3007,6 +3032,301 @@ async function open(buffer, password) {
       };
     },
 
+    // ── v6 Wave D: 쪽 자르기(CropBox) · 쪽 크기 바꾸기 · 영역 그림 · 링크 · 첨부 파일 · 베이츠 번호 ─────────────
+    // 쪽 상자: 모두 회전 전 쪽 좌표 [왼, 아래, 오른, 위]. media = MediaBox, crop = CropBox(없으면 null), view = 보이는 상자(CropBox ∩ MediaBox — PDFium과 같다)
+    pageBoxes(i) {
+      const p = page(i), b = mal(16);
+      try {
+        const norm = (l, bt, r, t) => [Math.min(l, r), Math.min(bt, t), Math.max(l, r), Math.max(bt, t)];
+        const get = (fn) => (fn.call(P, p, b, b + 4, b + 8, b + 12) ? norm(f32(b), f32(b + 4), f32(b + 8), f32(b + 12)) : null);
+        const crop = get(P.FPDFPage_GetCropBox);
+        let media = get(P.FPDFPage_GetMediaBox), view = null;
+        if (P.FPDF_GetPageBoundingBox(p, b)) view = norm(f32(b), f32(b + 12), f32(b + 8), f32(b + 4)); // FS_RECTF { left, top, right, bottom }
+        if (!media) media = view || [0, 0, P.FPDF_GetPageWidthF(p), P.FPDF_GetPageHeightF(p)]; // 부모(Pages)에서 물려받은 MediaBox
+        return { media, crop, view: view || crop || media, rotation: ((P.FPDFPage_GetRotation(p) % 4) + 4) % 4 };
+      } finally { free(b); }
+    },
+    // 보이는 방향의 여백 { top, right, bottom, left }(pt, MediaBox 가장자리에서) → 회전 전 쪽 좌표 사각형. 회전된 쪽도 사용자가 보는 위·아래·왼·오른쪽 그대로
+    marginsToRect(i, m = {}) {
+      const { media, rotation: rot } = api.pageBoxes(i);
+      const [x0, y0, x1, y1] = media, W = x1 - x0, H = y1 - y0;
+      const map = [ // visualFrame과 같은 대응(보이는 왼쪽 아래가 원점, 위가 +y)
+        (vx, vy) => [x0 + vx, y0 + vy], (vx, vy) => [x0 + W - vy, y0 + vx],
+        (vx, vy) => [x1 - vx, y1 - vy], (vx, vy) => [x0 + vy, y1 - vx],
+      ][rot];
+      const VW = rot % 2 ? H : W, VH = rot % 2 ? W : H;
+      const n = (v) => { const x = v == null || v === '' ? 0 : Number(v); if (!Number.isFinite(x) || x < 0) throw bad('여백은 0 이상의 숫자(pt)로 입력하세요.'); return x; };
+      const left = n(m.left), right = n(m.right), top = n(m.top), bottom = n(m.bottom);
+      const [ax, ay] = map(left, bottom), [bx, by] = map(VW - right, VH - top);
+      return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+    },
+    // 내용이 그려진 곳의 외곽 상자(회전 전 쪽 좌표 [l,b,r,t]) — 쪽을 그려 흰색이 아닌 픽셀을 찾는다. 빈 쪽이면 null
+    contentBox(i, { scale = 1.5, threshold = 245 } = {}) {
+      const raw = api._renderRaw(i, scale);
+      let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+      for (let y = 0; y < raw.h; y++) {
+        const row = y * raw.stride;
+        for (let x = 0; x < raw.w; x++) {
+          const q = row + x * 4;
+          if (raw.data[q] >= threshold && raw.data[q + 1] >= threshold && raw.data[q + 2] >= threshold) continue;
+          if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+      if (x1 < 0) return null;
+      const out = mal(16), p = page(i);
+      try {
+        const pt = (dx, dy) => { P.FPDF_DeviceToPage(p, 0, 0, raw.w, raw.h, 0, dx, dy, out, out + 8); return [f64(out), f64(out + 8)]; };
+        const [ax, ay] = pt(x0, y0), [bx, by] = pt(x1 + 1, y1 + 1);
+        return [Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx), Math.max(ay, by)];
+      } finally { free(out); }
+    },
+    // 쪽 자르기: spec 하나를 고른 쪽들에 건다(CropBox). 화면은 보이는 상자만 그리고, 잘린 바깥 내용은 파일에 남는다(다시 풀 수 있다).
+    //   { rect:[l,b,r,t] } 모든 쪽에 같은 사각형(쪽마다 MediaBox 안으로 자른다) · { margins:{top,right,bottom,left} } 보이는 방향 여백(MediaBox에서)
+    //   · { auto:true, pad } 쪽마다 내용 외곽 + pad(pt, 기본 6) · { reset:true } 자르기 풀기(CropBox = MediaBox)
+    // 반환 { ok, pages:[{ i, crop }], skipped:[{ i, reason }] }. 18pt보다 작아지는 쪽은 건너뛴다
+    cropPages(pages, spec = {}) {
+      const list = pageList(pages);
+      const MIN = 18, out = [], skipped = [];
+      let rect = null;
+      if (spec.rect != null) {
+        const r = spec.rect;
+        if (!Array.isArray(r) || r.length !== 4 || !r.every((v) => Number.isFinite(Number(v)))) throw bad('자를 사각형은 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다.');
+        rect = [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])].map(Number);
+      } else if (!spec.margins && !spec.auto && !spec.reset) throw bad('자를 방법(rect·margins·auto·reset)을 고르세요.');
+      const pad = spec.pad == null ? 6 : Number(spec.pad);
+      if (!(pad >= 0 && pad <= 200)) throw bad('자동 자르기 여유는 0~200pt로 지정하세요.');
+      for (const i of list) {
+        const { media } = api.pageBoxes(i);
+        let box;
+        if (spec.reset) box = media.slice();
+        else if (rect) box = rect.slice();
+        else if (spec.margins) box = api.marginsToRect(i, spec.margins);
+        else {
+          const c = api.contentBox(i);
+          if (!c) { skipped.push({ i, reason: '빈 쪽' }); continue; }
+          box = [c[0] - pad, c[1] - pad, c[2] + pad, c[3] + pad];
+        }
+        box = [Math.max(box[0], media[0]), Math.max(box[1], media[1]), Math.min(box[2], media[2]), Math.min(box[3], media[3])];
+        if (box[2] - box[0] < MIN || box[3] - box[1] < MIN) { skipped.push({ i, reason: '너무 작습니다' }); continue; }
+        P.FPDFPage_SetCropBox(page(i), box[0], box[1], box[2], box[3]);
+        out.push({ i, crop: box.map((v) => Math.round(v * 100) / 100) });
+      }
+      return { ok: out.length > 0, pages: out, skipped };
+    },
+    // 쪽 크기 바꾸기: 보이는 방향의 새 크기 width×height(pt). mode 'fit' = 보이는 내용을 비율을 지켜 맞춰 키우거나 줄이고 가운데로,
+    //   'center' = 크기는 그대로 가운데로(새 쪽보다 크면 가장자리가 잘린다).
+    //   새 쪽에 XObject로 옮기지 않고 쪽의 객체·주석을 직접 옮긴다(FPDFPageObj_Transform + 자르기 경로 + FPDFPage_TransformAnnots) — 글자를 계속 고칠 수 있다.
+    //   MediaBox·CropBox를 새 크기로 바꾼다. 회전된 쪽은 회전 전 좌표에서 가로·세로를 바꿔 계산한다
+    //   keepOrientation: 쪽마다 원래 방향(가로 쪽은 가로로 — width·height를 바꿔 쓴다)
+    resizePages(pages, { width, height, mode = 'fit', keepOrientation = false } = {}) {
+      const list = pageList(pages);
+      const W = Number(width), H = Number(height);
+      if (!(W >= 36 && W <= 14400 && H >= 36 && H <= 14400)) throw bad('쪽 크기는 36~14400pt(약 1.3cm~5m)로 지정하세요.');
+      if (!['fit', 'center'].includes(mode)) throw bad(`알 수 없는 맞춤 방식입니다: ${mode} (fit·center)`);
+      const done = [];
+      for (const i of list) {
+        const p = page(i), { view, rotation: rot } = api.pageBoxes(i);
+        const landscape = (rot % 2 ? view[3] - view[1] : view[2] - view[0]) > (rot % 2 ? view[2] - view[0] : view[3] - view[1]);
+        const [VW, VH] = keepOrientation && landscape !== (W > H) ? [H, W] : [W, H];
+        const TW = rot % 2 ? VH : VW, TH = rot % 2 ? VW : VH;
+        const vw = view[2] - view[0], vh = view[3] - view[1];
+        const s = mode === 'fit' ? Math.min(TW / vw, TH / vh) : 1;
+        const tx = (TW - vw * s) / 2 - view[0] * s, ty = (TH - vh * s) / 2 - view[1] * s;
+        for (let k = 0, n = P.FPDFPage_CountObjects(p); k < n; k++) {
+          const o = P.FPDFPage_GetObject(p, k);
+          if (!o) continue;
+          P.FPDFPageObj_Transform(o, s, 0, 0, s, tx, ty);
+          P.FPDFPageObj_TransformClipPath(o, s, 0, 0, s, tx, ty);
+        }
+        P.FPDFPage_TransformAnnots(p, s, 0, 0, s, tx, ty);
+        P.FPDFPage_SetMediaBox(p, 0, 0, TW, TH);
+        P.FPDFPage_SetCropBox(p, 0, 0, TW, TH);
+        regen(p);
+        done.push({ i, scale: Math.round(s * 10000) / 10000 });
+      }
+      return { ok: done.length > 0, pages: done };
+    },
+    // 영역 그림(PNG): rect {x0,y0,x1,y1}(회전 전 쪽 좌표) 안을 scale 배율로. 보이는 방향 그대로(회전·CropBox 반영). 영역 스냅샷·Markdown 그림 저장이 쓴다
+    renderArea(i, rect, scale = 2) {
+      if (!rect || ![rect.x0, rect.y0, rect.x1, rect.y1].every(Number.isFinite)) throw bad('그릴 영역이 잘못됐습니다.');
+      const s0 = Math.max(0.25, Math.min(8, Number(scale) || 2));
+      const area = Math.abs((rect.x1 - rect.x0) * (rect.y1 - rect.y0));
+      const s = Math.min(s0, Math.sqrt(24e6 / Math.max(1, area))); // 2,400만 화소까지(약 96MB)
+      const size = api.pageSize(i), PW = Math.max(1, Math.round(size.w * s)), PH = Math.max(1, Math.round(size.h * s));
+      const [ax, ay] = toDevice(i, rect.x0, rect.y0, s), [bx, by] = toDevice(i, rect.x1, rect.y1, s);
+      const dx0 = Math.max(0, Math.min(ax, bx)), dx1 = Math.min(PW, Math.max(ax, bx)), dy0 = Math.max(0, Math.min(ay, by)), dy1 = Math.min(PH, Math.max(ay, by));
+      const pw = dx1 - dx0, ph = dy1 - dy0;
+      if (!(pw >= 1 && ph >= 1)) throw bad('영역이 쪽 밖에 있습니다.');
+      const bmp = P.FPDFBitmap_Create(pw, ph, 0), outPP = mal(4);
+      if (!bmp) { free(outPP); throw new Error('그림을 만들지 못했습니다(메모리 부족).'); }
+      try {
+        P.FPDFBitmap_FillRect(bmp, 0, 0, pw, ph, 0xffffffff);
+        P.FPDF_RenderPageBitmap(bmp, page(i), -dx0, -dy0, PW, PH, 0, RENDER_FLAGS);
+        const len = P.EPDF_PNG_EncodeRGBA(P.FPDFBitmap_GetBuffer(bmp), pw, ph, P.FPDFBitmap_GetStride(bmp), 6, outPP);
+        const ptr = i32(outPP);
+        if (!len || !ptr) throw new Error('PNG를 만들지 못했습니다.');
+        try { return Buffer.from(heap().subarray(ptr, ptr + len)); } finally { free(ptr); }
+      } finally { free(outPP); P.FPDFBitmap_Destroy(bmp); }
+    },
+
+    // ── 링크(/Link 주석) ───────────────────────────────────────────────────
+    // 읽기: [{ index(그 쪽 /Annots 안 위치), rect:[l,b,r,t], kind:'uri'|'page'|'file'|'other', uri?, page?(0 기준) }]
+    links(i) {
+      const p = page(i), out = [];
+      for (let k = 0, n = P.FPDFPage_GetAnnotCount(p); k < n; k++) {
+        const a = P.FPDFPage_GetAnnot(p, k);
+        if (!a) continue;
+        try {
+          if (P.FPDFAnnot_GetSubtype(a) !== 2) continue;
+          const item = { index: k, rect: annotRect(a), kind: 'other' };
+          const link = P.FPDFAnnot_GetLink(a);
+          const act = link ? P.FPDFLink_GetAction(link) : 0;
+          const type = act ? P.FPDFAction_GetType(act) : 0;
+          let dest = 0;
+          if (type === 3) { // URI
+            const n2 = P.FPDFAction_GetURIPath(doc, act, 0, 0);
+            if (n2 > 1) { const sb = mal(n2); try { P.FPDFAction_GetURIPath(doc, act, sb, n2); item.uri = M.UTF8ToString(sb); } finally { free(sb); } }
+            item.kind = 'uri';
+          } else if (type === 1) dest = P.FPDFAction_GetDest(doc, act);
+          else if (type === 2 || type === 4) item.kind = 'file';
+          else if (link) dest = P.FPDFLink_GetDest(doc, link);
+          if (dest) { const pi = P.FPDFDest_GetDestPageIndex(doc, dest); if (pi >= 0) { item.kind = 'page'; item.page = pi; } }
+          out.push(item);
+        } finally { P.FPDFPage_CloseAnnot(a); }
+      }
+      return out;
+    },
+    // 링크 만들기: rect [l,b,r,t] + 대상 { uri } 또는 { page(0 기준) }. 테두리 없음(/Border [0 0 0]), 인쇄 표시. 반환 { ok, index, link }
+    addLink(i, rect, target = {}) {
+      const r = rect;
+      if (!Array.isArray(r) || r.length !== 4 || !r.every((v) => Number.isFinite(Number(v)))) throw bad('링크 자리는 [왼쪽, 아래, 오른쪽, 위] 숫자 4개여야 합니다.');
+      const box = [Math.min(r[0], r[2]), Math.min(r[1], r[3]), Math.max(r[0], r[2]), Math.max(r[1], r[3])].map(Number);
+      if (box[2] - box[0] < 2 || box[3] - box[1] < 2) throw bad('링크 자리가 너무 작습니다.');
+      const p = page(i);
+      let action;
+      if (target.uri != null) {
+        const uri = normalizeLinkUri(target.uri);
+        action = P.EPDFAction_CreateURI(doc, uri);
+      } else if (target.page != null) {
+        const pi = Number(target.page);
+        if (!Number.isInteger(pi) || pi < 0 || pi >= P.FPDF_GetPageCount(doc)) throw bad(`쪽 번호가 범위를 벗어났습니다 (1~${P.FPDF_GetPageCount(doc)}쪽).`);
+        const f = visualFrame(pi), [x, y] = f.map(0, f.height); // 보이는 쪽의 왼쪽 위(목차와 같다)
+        const dest = P.EPDFDest_CreateXYZ(page(pi), true, x, true, y, false, 0);
+        action = dest ? P.EPDFAction_CreateGoTo(doc, dest) : 0;
+      } else throw bad('링크 대상(주소 또는 쪽)을 고르세요.');
+      if (!action) throw new Error('링크 동작을 만들지 못했습니다.');
+      const a = P.EPDFPage_CreateAnnot(p, 2);
+      if (!a) throw new Error('링크를 만들지 못했습니다.');
+      try {
+        const ok = setAnnotRect(a, box) && P.EPDFAnnot_SetAction(a, action) && P.FPDFAnnot_SetBorder(a, 0, 0, 0) && P.FPDFAnnot_SetFlags(a, ANNOT_FLAG_PRINT)
+          && setAnnotStr(a, 'NM', 'retext-link-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+        const index = P.FPDFPage_GetAnnotIndex(p, a);
+        if (!ok || index < 0) { if (index >= 0) P.FPDFPage_RemoveAnnot(p, index); throw new Error('링크 속성을 쓰지 못했습니다.'); }
+        return { ok: true, index, link: api.links(i).find((l) => l.index === index) };
+      } finally { P.FPDFPage_CloseAnnot(a); }
+    },
+    // 링크 고치기: 대상(uri·page)이나 자리(rect)를 바꾼다. 같은 자리에 새 링크를 만들고 옛 것을 지운다(/Dest와 /A가 함께 남지 않게) → 새 index
+    updateLink(i, index, patch = {}) {
+      const old = api.links(i).find((l) => l.index === Number(index));
+      if (!old) throw Object.assign(new Error('링크를 찾을 수 없습니다. 목록을 새로 고친 뒤 다시 고르세요.'), { status: 404 });
+      const target = patch.uri != null ? { uri: patch.uri } : patch.page != null ? { page: patch.page }
+        : old.kind === 'uri' ? { uri: old.uri } : old.kind === 'page' ? { page: old.page } : null;
+      if (!target) throw bad('이 링크는 대상을 읽을 수 없어 고칠 수 없습니다. 지우고 새로 만드세요.');
+      const made = api.addLink(i, patch.rect || old.rect, target);
+      removeAnnots(page(i), [old.index]);
+      const now = api.links(i), link = now.find((l) => l.rect && made.link && l.rect.every((v, k) => Math.abs(v - made.link.rect[k]) < 0.01) && l.kind === made.link.kind && l.uri === made.link.uri && l.page === made.link.page);
+      return { ok: true, index: link ? link.index : now.length - 1, link: link || now[now.length - 1] };
+    },
+    deleteLink(i, index) {
+      if (!api.links(i).some((l) => l.index === Number(index))) throw Object.assign(new Error('링크를 찾을 수 없습니다.'), { status: 404 });
+      const removed = removeAnnots(page(i), [Number(index)]);
+      return { ok: removed > 0, removed };
+    },
+
+    // ── 첨부 파일(문서 /EmbeddedFiles) ────────────────────────────────────
+    attachments() {
+      const out = [];
+      for (let k = 0, n = P.FPDFDoc_GetAttachmentCount(doc); k < n; k++) {
+        const at = P.FPDFDoc_GetAttachment(doc, k);
+        if (!at) continue;
+        const item = { index: k, name: '', size: null, desc: '' };
+        const nl = P.FPDFAttachment_GetName(at, 0, 0);
+        if (nl > 2) { const b = mal(nl); try { P.FPDFAttachment_GetName(at, b, nl); item.name = M.UTF16ToString(b); } finally { free(b); } }
+        const sz = mal(4);
+        try { if (P.FPDFAttachment_GetFile(at, 0, 0, sz)) item.size = M.getValue(sz, 'i32') >>> 0; } finally { free(sz); }
+        const dl = P.EPDFAttachment_GetDescription ? P.EPDFAttachment_GetDescription(at, 0, 0) : 0;
+        if (dl > 2) { const b = mal(dl); try { P.EPDFAttachment_GetDescription(at, b, dl); item.desc = M.UTF16ToString(b); } finally { free(b); } }
+        out.push(item);
+      }
+      return out;
+    },
+    attachmentData(index) {
+      const k = Number(index);
+      if (!Number.isInteger(k) || k < 0 || k >= P.FPDFDoc_GetAttachmentCount(doc)) throw Object.assign(new Error('첨부 파일을 찾을 수 없습니다.'), { status: 404 });
+      const at = P.FPDFDoc_GetAttachment(doc, k), sz = mal(4);
+      try {
+        if (!at || !P.FPDFAttachment_GetFile(at, 0, 0, sz)) throw new Error('첨부 파일 내용을 읽지 못했습니다.');
+        const n = M.getValue(sz, 'i32') >>> 0, b = mal(Math.max(1, n));
+        try { if (!P.FPDFAttachment_GetFile(at, b, n, sz)) throw new Error('첨부 파일 내용을 읽지 못했습니다.'); return Buffer.from(heap().subarray(b, b + n)); } finally { free(b); }
+      } finally { free(sz); }
+    },
+    // 첨부 넣기: 이름(경로 빼고 파일 이름만) + 바이트. 같은 이름이 있으면 400. 반환 { ok, index, name, size }
+    addAttachment(name, bytes, desc) {
+      const nm = String(name ?? '').split(/[\\/]/).pop().trim();
+      if (!nm || nm.length > 255) throw bad('첨부 파일 이름은 1~255자여야 합니다.');
+      const data = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes || []);
+      if (data.length > 256 * 1024 * 1024) throw bad('첨부 파일은 256MB까지 넣을 수 있습니다.');
+      if (api.attachments().some((a) => a.name.toLowerCase() === nm.toLowerCase())) throw bad(`같은 이름의 첨부 파일이 이미 있습니다: ${nm}`);
+      const u = utf16(nm);
+      let at;
+      try { at = P.FPDFDoc_AddAttachment(doc, u); } finally { free(u); }
+      if (!at) throw new Error('첨부 파일을 넣지 못했습니다.');
+      const ptr = mal(Math.max(1, data.length));
+      try {
+        heap().set(data, ptr);
+        if (!P.FPDFAttachment_SetFile(at, doc, ptr, data.length)) throw new Error('첨부 파일 내용을 쓰지 못했습니다.');
+      } finally { free(ptr); }
+      if (desc && P.EPDFAttachment_SetDescription) { const d = utf16(String(desc).slice(0, 500)); try { P.EPDFAttachment_SetDescription(at, d); } finally { free(d); } }
+      const index = P.FPDFDoc_GetAttachmentCount(doc) - 1;
+      const found = api.attachments().find((a) => a.name === nm);
+      return { ok: true, index: found ? found.index : index, name: nm, size: data.length };
+    },
+    // 첨부 지우기: 이름표(EmbeddedFiles)에서 뺀다. 내용 스트림이 고아로 남지 않게 서버가 다시 쓰기(compactDoc)를 한다
+    deleteAttachment(index) {
+      const k = Number(index);
+      if (!Number.isInteger(k) || k < 0 || k >= P.FPDFDoc_GetAttachmentCount(doc)) throw Object.assign(new Error('첨부 파일을 찾을 수 없습니다.'), { status: 404 });
+      return { ok: !!P.FPDFDoc_DeleteAttachment(doc, k) };
+    },
+
+    // ── 베이츠 번호(법률·감사 문서의 쪽 일련번호) ─────────────────────────────
+    // opts: { prefix, suffix, digits(1~12, 기본 6), start(기본 1), position(쪽 번호와 같은 다섯 자리 + 'bottom-right' 기본), size(기본 9), margin(기본 24),
+    //         color, fontId, pages(0 기준 배열, 생략 = 전체) } → 고른 쪽에 차례로 prefix + 0을 채운 번호 + suffix.
+    //   RetextPdfBates 마크 — 다시 넣으면 옛 번호를 모두 지우고 새로 넣는다. 반환 { ok, placed, first, last, next(다음 파일이 이어 쓸 번호), removed }
+    addBates(opts = {}) {
+      const pos = opts.position || 'bottom-right';
+      if (!['bottom-center', 'bottom-right', 'bottom-left', 'top-center', 'top-right', 'top-left'].includes(pos)) throw bad(`알 수 없는 위치입니다: ${pos}`);
+      const prefix = String(opts.prefix ?? ''), suffix = String(opts.suffix ?? '');
+      if (prefix.length > 40 || suffix.length > 40 || /[\r\n]/.test(prefix + suffix)) throw bad('접두어·접미어는 40자 이하의 한 줄로 입력하세요.');
+      const digits = opts.digits == null ? 6 : Number(opts.digits);
+      if (!Number.isInteger(digits) || digits < 1 || digits > 12) throw bad('자릿수는 1~12로 지정하세요.');
+      const start = opts.start == null ? 1 : Number(opts.start);
+      if (!Number.isInteger(start) || start < 0 || start > 999999999999) throw bad('시작 번호는 0 이상의 정수로 지정하세요.');
+      const size = opts.size == null ? 9 : Number(opts.size), margin = opts.margin == null ? 24 : Number(opts.margin);
+      if (!(size >= 4 && size <= 72)) throw bad('글자 크기는 4~72pt 범위로 지정하세요.');
+      if (!(margin >= 0 && margin <= 300)) throw bad('여백은 0~300pt 범위로 지정하세요.');
+      const color = parseColor(opts.color);
+      const list = pageList(opts.pages);
+      const labels = list.map((_, k) => prefix + String(start + k).padStart(digits, '0') + suffix);
+      const { font } = newTextFont(opts.fontId, labels.join('') || '0', size);
+      const at = { h: pos.endsWith('center') ? 'center' : pos.endsWith('right') ? 'right' : 'left', v: pos.startsWith('bottom') ? 'bottom' : 'top' };
+      return api.batch(() => {
+        const removed = removeMarked(MARK_BATES);
+        list.forEach((i, k) => placeText(i, { font, size, text: labels[k], color, at, margin, mark: MARK_BATES }));
+        return { ok: true, placed: list.length, first: labels[0], last: labels[labels.length - 1], next: start + list.length, removed };
+      });
+    },
+    removeBates() { const removed = api.batch(() => removeMarked(MARK_BATES)); return { ok: removed > 0, removed }; },
+
     save() { flush(); return saveDoc(P, doc); },
 
     close() {
@@ -3022,4 +3342,4 @@ async function open(buffer, password) {
   return api;
 }
 
-module.exports = { open, merge, _subsetTTF: subsetTTF }; // _subsetTTF: 시험 픽스처(고정폭 서브셋 글꼴 PDF)용
+module.exports = { open, merge, normalizeLinkUri, _subsetTTF: subsetTTF }; // _subsetTTF: 시험 픽스처(고정폭 서브셋 글꼴 PDF)용

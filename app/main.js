@@ -1,5 +1,5 @@
 // Electron 셸: 서버를 같은 프로세스에서 띄우고 창을 연다
-const { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell, nativeTheme, clipboard, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -133,6 +133,36 @@ function main() {
       }
       const r = await dialog.showSaveDialog(win, { defaultPath, filters, title: '다른 이름으로 저장' });
       return r.canceled ? null : r.filePath;
+    });
+
+    // v6 Wave D: 아무 파일 하나(첨부 파일 넣기)
+    ipcMain.handle('openAnyFile', async () => {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile'], title: '넣을 파일 선택' });
+      return r.canceled ? null : r.filePaths[0];
+    });
+    // v6 Wave D: 확장자를 고른 저장 대화상자(Markdown·텍스트·PNG·첨부 꺼내기). filters: [{ name, extensions }] — 없으면 모든 파일
+    ipcMain.handle('saveFile', async (_e, defaultPath, filters) => {
+      const list = Array.isArray(filters) && filters.length ? filters.filter((f) => f && Array.isArray(f.extensions)).map((f) => ({ name: String(f.name || ''), extensions: f.extensions.map(String) })) : [{ name: '모든 파일', extensions: ['*'] }];
+      const r = await dialog.showSaveDialog(win, { defaultPath: defaultPath || undefined, filters: list, title: '저장' });
+      return r.canceled ? null : r.filePath;
+    });
+    // v6 Wave D 영역 스냅샷: PNG 바이트 → 클립보드 그림
+    ipcMain.handle('copyImage', (_e, bytes) => {
+      try {
+        const img = nativeImage.createFromBuffer(Buffer.from(bytes || []));
+        if (img.isEmpty()) return { error: '그림을 읽지 못했습니다' };
+        clipboard.writeImage(img);
+        const { width, height } = img.getSize();
+        return { ok: true, width, height };
+      } catch (e) { return { error: e.message }; }
+    });
+    // v6 Wave D 링크 따라가기: http(s)·mailto만, 열기 전에 주소를 보여 주고 묻는다(문서 속 링크가 몰래 열리지 않게). 자동으로 열지 않는다
+    ipcMain.handle('openLink', async (_e, url) => {
+      const u = String(url || '');
+      if (!/^(https?:\/\/|mailto:)/i.test(u) || u.length > 2000) return { error: '열 수 없는 주소입니다 (http·https·mailto만)' };
+      const r = await dialog.showMessageBox(win, { type: 'question', message: '이 주소를 기본 브라우저(메일 프로그램)로 열까요?', detail: u, buttons: ['열기', '취소'], defaultId: 1, cancelId: 1, noLink: true });
+      if (r.response !== 0) return { ok: false, cancelled: true };
+      try { await shell.openExternal(u); return { ok: true }; } catch (e) { return { error: e.message }; }
     });
 
     // P7 인쇄: { name, pages?:[0 기준 쪽 번호] } → { ok:true } | { ok:false, cancelled:true } | { error, needPassword? }

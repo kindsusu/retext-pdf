@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld('retextPdf', {
   openFont: () => ipcRenderer.invoke('openFont'),
   openImage: () => ipcRenderer.invoke('openImage'), // P4 WP-B2: 페이지에 삽입할 PNG/JPEG 한 장
   saveAs: (defaultPath, opts) => ipcRenderer.invoke('saveAs', defaultPath, opts),
+  // v6 Wave D: 아무 파일 하나 열기(첨부) · 확장자를 고른 저장 대화상자 · 클립보드에 그림(PNG 바이트) · 링크 열기(묻고 나서 기본 브라우저)
+  openAnyFile: () => ipcRenderer.invoke('openAnyFile'),
+  saveFile: (defaultPath, filters) => ipcRenderer.invoke('saveFile', defaultPath, filters),
+  copyImage: (bytes) => ipcRenderer.invoke('copyImage', bytes),
+  openLink: (url) => ipcRenderer.invoke('openLink', url),
   // P7 인쇄: { name, pages?:[0 기준] } → { ok } | { ok:false, cancelled } | { error, needPassword? } (main.js 'print')
   print: (opts) => ipcRenderer.invoke('print', opts),
   // v6 Wave C: 테마('light'|'dark'|'system') → main.js가 nativeTheme·창 바탕색을 맞추고 기억한다

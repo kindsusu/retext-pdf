@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js",
+    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
