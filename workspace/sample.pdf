@@ -12,16 +12,16 @@ endobj
 << /Length 488 >>
 stream
 BT /F1 12 Tf 60 740 Td 16 TL
-(GenOffice-lite prototype - sample PDF) Tj T*
+(Retext PDF engine test - sample file.) Tj T*
 () Tj T*
-(This is a one-page test document rendered by pdf.js.) Tj T*
-(The Claude panel can summarize it or answer questions) Tj T*
-(about it, using pdf.js text extraction as context.) Tj T*
+(This is a one-page test document for the PDF engine.) Tj T*
+(The Reader panel shows lines and boxes for this page.) Tj T*
+(Each line here is one text object in the contents.) Tj T*
 () Tj T*
 (Key points:) Tj T*
-(1. Editing is local; only the AI call leaves the machine.) Tj T*
-(2. Claude is invoked through Claude Code CLI \(subscription\).) Tj T*
-(3. No API key is stored anywhere in this app.) Tj T*
+(1. Editing is local; nothing at all leaves your computer.) Tj T*
+(2. Reader is checked through Reader Code CLI \(engine tests\).) Tj T*
+(3. No user data is kept anywhere in this app.) Tj T*
 ET
 endstream
 endobj

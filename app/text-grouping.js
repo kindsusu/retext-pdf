@@ -10,7 +10,7 @@
 // app/pdf-engine.js의 objects()가 이미 item.matrix/item.origin/item.scaledSize로 노출해 둔다.
 // 기준선으로 묶으면 위 문서 1쪽(텍스트 객체 309개)이 정확히 15개 시각적 줄이 된다.
 //
-// 2026-10-15 개정(tmp/grouping 말뭉치 20건, 개정 전 4건 통과 — ezPDF(Xpdf 계열) 동작을 참고):
+// 2026-10-15 개정(tmp/grouping 말뭉치 20건, 개정 전 4건 통과 — 통계 기반 낱말·줄 판정으로 개정):
 //   · 글자 단위 위치: objects()가 글자마다 [x, y, 진행 폭](item.glyphs)을 준다. 틈은 "앞 조각의 마지막 공백 아닌 글자 끝 → 다음 글자 시작"으로
 //     잰다(진행 폭 기준이라 같은 낱말 안 글자 사이는 0, 낱말 사이는 공백 폭). 공백만 든 조각은 틈을 잇지 않는다
 //     ("이름: 김영희␣×10 날짜" 가 공백 조각을 징검다리 삼아 한 상자가 되던 문제).
@@ -40,7 +40,7 @@ const SIZE_DIFF_MAX = 0.6;
 const SMALLCAPS_ADJ_EM = 0.2, SMALLCAPS_MIN_RATIO = 0.6;
 // 색 차이: 채널마다 이 값 이하면 같은 색(엑셀 "자동" 검정 0.02 = 5/255)
 const COLOR_TOL = 16;
-// 공백 글자가 없는 줄(낱말 사이를 틈으로만 띄우는 PDF)에서 줄을 잇는 틈 상한(em). ezPDF의 줄 잇기 상한과 같다
+// 공백 글자가 없는 줄(낱말 사이를 틈으로만 띄우는 PDF)에서 줄을 잇는 틈 상한(em). 1.5em까지 잇는다
 const LINE_GAP_MAX_EM = 1.5;
 // 공백 글자가 있는 줄에서 공백 없는 틈이 그 줄의 보통 글자 간격(중앙값)보다 이 값(em) 넘게 넓으면 칸 경계(입력 칸·여백으로 띄운 두 번째 칸).
 // 실측: 14d 여백 9px 0.62em → 나눈다, 자간 0.8em(03b)은 보통 간격 자체가 0.8이라 잇는다
@@ -54,8 +54,8 @@ const WS_GAP_FACTOR = 1.5, WS_GAP_MIN_LIMIT_EM = 1.5;
 // 공백 없는 줄은 GUTTER_MIN_EM_NOSPACE 이상), 바로 위·아래 줄(줄 간격 GUTTER_PITCH_EM 이내)에도 같은 자리에 GUTTER_OVERLAP_EM 이상
 // 겹치는 빈 틈이 있으면 잇지 않는다(08b 단 간격 0.4em, 09b 테두리 없는 표 0.45em).
 const GUTTER_MIN_EM = 0.25, GUTTER_MIN_EM_NOSPACE = 1.0, GUTTER_OUTLIER_EM = 0.2, GUTTER_PITCH_EM = 2.5, GUTTER_OVERLAP_EM = 0.2;
-// 낱말 사이 공백 넣기: 공백 글자 없는 틈 g가 T = max(ezPDF 임계, 보통 간격 + SPACE_OVER_LETTER_EM)보다 넓으면 seps에 ' ' 한 칸.
-// ezPDF 임계 = (최소+최대 틈)/2, 틈은 [0, 0.2]로 자르고 1.5 넘는 틈은 빼며 결과를 [0.08, 0.2]로 자른다(기본 0.1).
+// 낱말 사이 공백 넣기: 공백 글자 없는 틈 g가 T = max(줄 통계 임계, 보통 간격 + SPACE_OVER_LETTER_EM)보다 넓으면 seps에 ' ' 한 칸.
+// 줄 통계 임계 = (최소+최대 틈)/2, 틈은 [0, 0.2]로 자르고 1.5 넘는 틈은 빼며 결과를 [0.08, 0.2]로 자른다(기본 0.1).
 // 공백 글자가 있는 줄은 만든 쪽이 공백을 직접 그렸으므로 SPACE_MIN_EXPLICIT_EM 미만의 틈에는 넣지 않는다.
 const SPACE_T_MIN = 0.08, SPACE_T_MAX = 0.2, SPACE_T_DEFAULT = 0.1, SPACE_OVER_LETTER_EM = 0.1, SPACE_MIN_EXPLICIT_EM = 0.2;
 // 가림 상자 다리 놓기의 허용 틈(em) — 가림 상자끼리·글자와의 사이는 이만큼 비어 있어도 이어진 것으로 본다(낱말 사이 공백 폭)
@@ -493,7 +493,7 @@ function rejoinParts(members, seps) {
   return { members: m2, seps: s2 };
 }
 
-// ── 문단(9번 — ezPDF "문장 수정"의 문단 블록) ─────────────────────────────────
+// ── 문단(9번 — 이어진 줄들을 문단 블록으로) ─────────────────────────────────
 // groupLines(…, { mergeStyledRuns: true })의 상자(시각적 줄 하나 = 상자 하나)를 읽기 순서대로 훑어 이어지는 줄을 문단으로 묶는다:
 //   · 글자 크기(줄의 본문 크기) 차 ≤ PARA_SIZE_TOL pt · 아래로 내려감(위로 뛰지 않음)
 //   · 줄 간격(기준선 차): 첫 두 줄은 PARA_PITCH_MIN_EM~PARA_PITCH_MAX_EM × 크기, 그 뒤는 첫 간격의 ±PARA_PITCH_TOL(문단 사이 여백이 있으면 끊긴다)

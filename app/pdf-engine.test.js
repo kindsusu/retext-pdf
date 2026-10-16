@@ -55,7 +55,7 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
   const objs = doc.objects(0);
   const texts = objs.filter((o) => o.type === 'text');
   assert.strictEqual(texts.length, 8, '텍스트 객체 8개');
-  assert.strictEqual(texts[0].text, 'GenOffice-lite prototype - sample PDF');
+  assert.strictEqual(texts[0].text, 'Retext PDF engine test - sample file.');
   assert.strictEqual(texts[0].font, 'Helvetica');
   assert.strictEqual(texts[0].size, 12);
   assert.ok(texts[0].bounds.x1 > texts[0].bounds.x0);
@@ -219,7 +219,7 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
   {
     const d = await open(src);
     const line = d.objects(0)[5].text;
-    assert.strictEqual(line, '1. Editing is local; only the AI call leaves the machine.');
+    assert.strictEqual(line, '1. Editing is local; nothing at all leaves your computer.');
     const from = line.indexOf('local');
     const boxesBefore = d.charBoxes(0, 5);
     const r = d.redact(0, 5, from, from + 5);
@@ -235,11 +235,11 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     const pt = d.pageText(0);
     assert.ok(!pt.includes('local'), '"local"이 페이지 텍스트에 남으면 안 됨');
     assert.ok(pt.includes('1. Editing is '), '앞부분 유지');
-    assert.ok(pt.includes('; only the AI call'), '뒷부분 유지');
+    assert.ok(pt.includes('; nothing at all'), '뒷부분 유지');
 
     const objs = d.objects(0);
     assert.strictEqual(objs[5].text, '1. Editing is ');
-    assert.strictEqual(objs[6].text, '; only the AI call leaves the machine.');
+    assert.strictEqual(objs[6].text, '; nothing at all leaves your computer.');
 
     // 뒷부분이 원래 자리에 남았는지 (상자 기준 이동이라 lsb 차이만큼만 어긋난다)
     const suffixBoxes = d.charBoxes(0, 6);
@@ -272,7 +272,7 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     const d2 = await open(s);
     const pt2 = d2.pageText(0);
     assert.ok(!pt2.includes('local'), '저장본에도 "local"이 없어야 함');
-    assert.ok(pt2.includes('; only the AI call'), '저장본에 뒷부분 유지');
+    assert.ok(pt2.includes('; nothing at all'), '저장본에 뒷부분 유지');
     console.log('저장 후 재열기 OK', s.length, 'bytes');
     d2.close();
   }
@@ -540,7 +540,7 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     const d2 = await open(saved);
     assert.strictEqual(d2.pageSize(0).rotation, 3, '저장·재열기 후에도 회전 유지');
     assert.deepStrictEqual([d2.pageSize(0).w, d2.pageSize(0).h], [h0, w0], '재열기 크기도 회전 반영');
-    assert.ok(d2.pageText(0).startsWith('GenOffice-lite'), '회전해도 텍스트는 그대로');
+    assert.ok(d2.pageText(0).startsWith('Retext PDF engine'), '회전해도 텍스트는 그대로');
     d2.close();
     console.log(`A1 rotatePages OK ${w0}x${h0} → ${s1.w}x${s1.h}, 저장·재열기 rotation 3 유지`);
   }
@@ -603,16 +603,16 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     const d = await open(src);
     assert.deepStrictEqual(d.find(0, ''), [], '빈 질의는 빈 배열 (FindNext가 돌아오지 않으므로 호출 전에 거른다)');
     assert.deepStrictEqual(d.find(0, '없는말없는말'), [], '없는 말은 빈 배열');
-    assert.strictEqual(d.find(0, 'Claude').length, 3, '"Claude" 3건');
-    assert.strictEqual(d.find(0, 'claude').length, 3, '기본은 대소문자 무시');
-    assert.strictEqual(d.find(0, 'claude', { matchCase: true }).length, 0, 'matchCase');
+    assert.strictEqual(d.find(0, 'Reader').length, 3, '"Reader" 3건');
+    assert.strictEqual(d.find(0, 'reader').length, 3, '기본은 대소문자 무시');
+    assert.strictEqual(d.find(0, 'reader', { matchCase: true }).length, 0, 'matchCase');
     assert.strictEqual(d.find(0, 'sam', { wholeWord: true }).length, 0, 'wholeWord');
-    assert.strictEqual(d.find(0, 'PDF', { wholeWord: true }).length, 3, 'wholeWord로도 낱말은 찾는다');
-    assert.strictEqual(d.find(0, 'Claude', { limit: 2 }).length, 2, 'limit');
+    assert.strictEqual(d.find(0, 'PDF', { wholeWord: true }).length, 2, 'wholeWord로도 낱말은 찾는다');
+    assert.strictEqual(d.find(0, 'Reader', { limit: 2 }).length, 2, 'limit');
 
     // 좌표계 확인: find의 rect는 charBoxes와 같은 PDF 좌표계여야 한다 (0번 객체 = 첫 줄)
     const hit = d.find(0, 'sample')[0];
-    assert.deepStrictEqual([hit.start, hit.length], [27, 6]);
+    assert.deepStrictEqual([hit.start, hit.length], [25, 6]);
     assert.strictEqual(hit.rects.length, 1);
     const boxes = d.charBoxes(0, 0).slice(hit.start, hit.start + hit.length);
     assert.strictEqual(boxes.map((b) => b.ch).join(''), 'sample');
@@ -940,7 +940,7 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
   {
     const d = await open(src);
     assert.deepStrictEqual(d.find(0, '\u0000'), [], 'NUL만 있으면 빈 질의');
-    assert.strictEqual(d.find(0, '\u0000Claude').length, 3, 'NUL을 빼고 찾는다');
+    assert.strictEqual(d.find(0, '\u0000Reader').length, 3, 'NUL을 빼고 찾는다');
     d.close();
     console.log('find NUL OK');
   }

@@ -970,7 +970,7 @@
   <span class="sigBadge" id="sigBadge" hidden title="이 문서에는 전자서명이 있습니다. 고쳐서 저장하면 서명이 무효가 되므로 다른 이름으로 저장합니다.">전자서명 있음</span>
   <span id="sbMdInfo" hidden></span>
   <span id="status" role="status"></span>
-  <!-- v6 Wave C 보기 도구(ALPDF처럼 상태줄): 손 도구·선택 도구(Space를 누르고 끌면 잠깐 손) | 쪽 보기 방식(한 쪽·두 쪽·표지 따로·연속/한 쪽씩) | 읽기 모드(F11 전체 화면) -->
+  <!-- v6 Wave C 보기 도구(상태줄): 손 도구·선택 도구(Space를 누르고 끌면 잠깐 손) | 쪽 보기 방식(한 쪽·두 쪽·표지 따로·연속/한 쪽씩) | 읽기 모드(F11 전체 화면) -->
   <div class="viewBox" id="viewBox" data-modes="pdf" role="group" aria-label="보기 도구">
     <button type="button" id="vbSelect" data-icon="pointer" data-tip="선택 도구: 글자를 눌러 고칩니다 · 고치는 중이 아닐 때 빈 곳에서 끌면 글자를 골라 복사합니다(글자 위에서 바로 고르려면 [글자 선택])" aria-pressed="true"></button>
     <button type="button" id="vbHand" data-icon="hand" data-tip="손 도구: 끌어서 문서를 움직입니다 (Space를 누른 채 끌어도 됩니다)" aria-pressed="false"></button>
@@ -3049,7 +3049,7 @@ function selectLine(i, line, wrap, box, initialText, caret, restore) {
   selectedObj = lineSelection(i, line, wrap, box);
   openTextEditor(initialText ?? selectedObj.shown, caret, restore);
 }
-// 문단 선택(9번 — ezPDF "문장 수정"의 문단 블록): 이 줄이 든 문단(window.groupParagraphs — 같은 크기·같은 단·고른 줄 간격으로 이어진 줄들)을
+// 문단 선택(9번 — 문단 블록): 이 줄이 든 문단(window.groupParagraphs — 같은 크기·같은 단·고른 줄 간격으로 이어진 줄들)을
 // 한 편집 창에 줄마다 '\n'으로 보여 주고, 적용하면 서버가 문단 폭에 맞춰 다시 흘린다(/api/pdf/edit-runs paragraph — 조각별 모양 유지, 실행 취소 한 번)
 function paragraphOf(i, line, wrap) {
   const boxes = [...wrap.querySelectorAll('.pdfBox')].filter((b) => b._line);
@@ -3770,7 +3770,7 @@ $('#ppFont').onchange = async () => {
 };
 // ---- v6 Wave B: 속성 창 글꼴 안내 ----
 // ① 이 상자에 이미 다른 글꼴로 그린 조각(RetextPdfSubst) ② 새로 넣은 글자가 원래 글꼴(또는 지정 폰트)에 없으면 적용할 때 무엇으로 그릴지
-// ③ 글꼴 목록에서 고른 폰트에 없는 글자(fontPickWarn — 편집기를 닫거나 다시 고를 때까지). ALPDF의 "선택한 글꼴에 없는 문자" 안내와 같은 자리
+// ③ 글꼴 목록에서 고른 폰트에 없는 글자(fontPickWarn — 편집기를 닫거나 다시 고를 때까지). "선택한 글꼴에 없는 문자" 안내 자리
 let fontNoteTimer = 0, fontNoteSeq = 0, fontPickWarn = null;
 const SUBST_KIND = { family: '같은 글꼴', mono: '고정폭 대체', fallback: '기본 대체' };
 function updateFontNote() { clearTimeout(fontNoteTimer); fontNoteTimer = setTimeout(refreshFontNote, 250); }

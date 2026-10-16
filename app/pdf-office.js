@@ -7,7 +7,7 @@
 //           numbering.xml(글머리·번호) · 그림(word/media) · docProps. 쪽 크기는 첫 쪽, PDF 쪽 사이는 쪽 나눔
 //   · HWPX: OWPML(KS X 6101) 꾸러미 — mimetype(맨 앞·무압축) · version.xml · META-INF(container.xml·manifest.xml·container.rdf) ·
 //           Contents/content.hpf · header.xml(글꼴·글자 모양·문단 모양·스타일) · section0.xml · settings.xml · Preview/PrvText.txt · BinData(그림).
-//           한컴오피스 한글이 쓰는 1.2 형식(교육용 공지 .hwpx 실물의 구조)을 따랐다. 글머리·번호는 글자(•, 1.)와 내어쓰기로 넣는다
+//           한컴오피스 한글이 쓰는 1.2 형식(OWPML, KS X 6101 구조)을 따랐다. 글머리·번호는 글자(•, 1.)와 내어쓰기로 넣는다
 //           (한글의 글머리표 정의가 어긋나면 파일 전체가 열리지 않으므로 — 보이는 모양은 같다)
 const zlib = require('zlib');
 

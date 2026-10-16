@@ -938,7 +938,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 6.0.0) 단언 통과');
   assert.match(serverSource, /if \(entry\.security\?\.signed && !force\)/, '서버가 서명 원본 덮어쓰기를 막는다');
   // D. 속성 창 글꼴 안내(대체 글꼴·없는 글자) — 새로 넣은 글자와 그 글자를 받는 조각(insertedAt)
   assert.match(html, /<div class="ppNote" id="ppFontNote" role="status" hidden><\/div>/);
-  assert.match(s, /선택한 글꼴\(\$\{escapeHtml\(r\.label\)\}\)에 없는 문자/, 'ALPDF처럼 "선택한 글꼴에 없는 문자"');
+  assert.match(s, /선택한 글꼴\(\$\{escapeHtml\(r\.label\)\}\)에 없는 문자/, '"선택한 글꼴에 없는 문자" 안내');
   const lines = [{ objs: [{ idx: 4, text: 'Run ' }, { idx: 7, text: 'npm test' }], seps: [''] }];
   assert.deepStrictEqual(IE.insertedAt(lines, 'Run npm test', 'Run npm testZ'), { idx: 7, chars: ['Z'] }, '넣은 글자는 왼쪽 조각이 받는다');
   assert.deepStrictEqual(IE.insertedAt(lines, 'Run npm test', 'XRun npm test'), { idx: 4, chars: ['X'] }, '줄 첫머리는 첫 조각');
@@ -1326,3 +1326,24 @@ console.log('OK — 앱 이름 변경(Retext PDF 6.0.0) 단언 통과');
 }
 function SH(src) { const a = src.indexOf('const SHORTCUTS = ['); return new Function(`return ${src.slice(a + 'const SHORTCUTS = '.length, src.indexOf('];', a) + 1)};`)(); }
 function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${sig}가 있다`); return src.slice(k, src.indexOf('\n}\n', k)); }
+
+// 다른 PDF 프로그램 이름이 소스·문서·패키지에 남지 않게 한다(2026-10-16 사용자 요청 "다른 프로그램의 이름이나 참조가 없는지").
+// 이름 목록은 이 시험 파일에 글자로 남지 않도록 base64로 둔다. 파일 형식이 요구하는 이름(Adobe 네임스페이스·한컴 HWPX 네임스페이스)과
+// 라이브러리 이름(PDFium·tesseract·Hunspell 등)은 대상이 아니다.
+{
+  const names = Buffer.from('ZXpwZGZ8YWxwZGZ87JWMUERGfOyVjCBQREZ8d2Vub3RlfHdlbml2fHdvbmRlcnNoYXJlfHBkZmVsZW1lbnR8ZXN0c29mdHx1bmlkb2NzfGdlbm9mZmljZXxnZW5zcGFya3zsnbTsiqTtirjshoztlITtirg=', 'base64').toString('utf8');
+  const re = new RegExp(names, 'i');
+  const root = path.join(__dirname, '..');
+  const files = [];
+  const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) { if (!['node_modules', 'tmp', 'dist', '.git', 'vendor'].includes(e.name) && !e.name.startsWith('.')) walk(p); }
+    else if (/\.(js|html|md|json|css|yml|txt)$/i.test(e.name) && p !== __filename && e.name !== 'package-lock.json') files.push(p);
+  } };
+  walk(root);
+  const hits = files.filter((f) => re.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(root, f));
+  assert.deepStrictEqual(hits, [], `다른 PDF 프로그램 이름이 남은 파일: ${hits.join(', ')}`);
+  const sample = fs.readFileSync(path.join(root, 'workspace', 'sample.pdf'), 'latin1');
+  assert.ok(!re.test(sample) && !/claude|codex|chatgpt/i.test(sample), 'sample.pdf 본문에 다른 프로그램 이름이 없다');
+  console.log(`OK — 다른 프로그램 이름 없음(${files.length}개 파일 검사)`);
+}
