@@ -1,6 +1,6 @@
 # Microsoft Store 제출서 문안 (Partner Center에 붙여 넣을 내용)
 
-작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영, 2026-10-14 5.0.0 기능 반영, 2026-10-15 5.1.0 기능 반영, 2026-10-15 6.0.0 기능 반영) · 기준 버전 6.0.0 · 언어: 한국어(ko-KR), 영어(en-US)
+작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영, 2026-10-14 5.0.0 기능 반영, 2026-10-15 5.1.0 기능 반영, 2026-10-15 6.0.0 기능 반영, 2026-10-16 6.1.0 기능 반영) · 기준 버전 6.1.0 · 언어: 한국어(ko-KR), 영어(en-US)
 
 ## 기본 정보
 
@@ -19,7 +19,7 @@
 
 Partner Center가 묻는 "이 기능을 사용하는 이유"에 넣는다. 영어로 쓴다(심사자용).
 
-> Retext PDF is an Electron desktop app. runFullTrust is required to read and write the user's local PDF and Markdown files, to run its built-in local HTTP server bound to 127.0.0.1 that renders and edits PDFs. The app does not send documents or any other data off the user's PC.
+> Retext PDF is an Electron desktop app. runFullTrust is required to read and write the user's local PDF, Markdown, text and image files, to run its built-in local HTTP server bound to 127.0.0.1 that renders and edits PDFs. The app does not send documents or any other data off the user's PC.
 
 ## 연령 등급(IARC 설문) 권장 답
 
@@ -61,7 +61,7 @@ Retext PDF는 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 �
 
 스캔한 문서는 글자 인식(OCR, 한국어·영어)으로 찾고 복사하고 고칠 수 있게 만듭니다. Word(DOCX)·한글(HWPX)·Markdown으로 내보내고, 두 PDF를 나란히 비교하고, 여러 파일을 한꺼번에 처리합니다. 양식 채우기, 주석, 링크, 첨부 파일, 워터마크, 머리말·꼬리말, 쪽 번호와 베이츠 번호, 목차와 문서 정보 고치기, 쪽 자르기와 쪽 크기 바꾸기, 쪽 정리·회전·분할·병합, 이미지로 내보내기, 용량 줄이기, 도장·서명 보관함, 인쇄, 암호(AES-256)를 지원합니다. 긴 작업은 진행 창에서 취소할 수 있고, 거의 모든 편집은 실행 취소할 수 있습니다.
 
-여러 문서를 탭으로 열고, 명령 검색(Ctrl+Q)으로 기능을 바로 찾으며, 어두운 테마도 고를 수 있습니다. Markdown 문서는 왼쪽에서 고치고 오른쪽에서 바로 결과를 봅니다.
+여러 문서를 탭으로 열고, 명령 검색(Ctrl+Q)으로 기능을 바로 찾으며, 어두운 테마도 고를 수 있습니다. Markdown 문서는 왼쪽에서 고치고 오른쪽에서 바로 결과를 봅니다. 텍스트(.txt) 파일은 원래 인코딩과 줄바꿈 그대로 고치고, 그림(PNG·JPG·WebP·GIF·BMP)은 PDF로 열거나 여러 장을 한 PDF로 합칩니다.
 
 문서는 PC 안에서만 처리하며 PC 밖으로 보내지 않습니다. 글자 인식과 맞춤법 검사도 인터넷 없이 PC 안에서 합니다. 계정이나 인터넷 연결 없이 모든 기능을 쓸 수 있고, 개발자는 어떤 데이터도 수집하지 않습니다.
 
@@ -87,15 +87,17 @@ Retext PDF는 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 �
 16. 문서 탭, 명령 검색(Ctrl+Q, 초성으로도), 어두운 테마, 두 쪽 보기와 읽기 모드
 17. 글자 선택·복사, 영역 스냅샷, 글 상자, 도장·서명 보관함, 그림 넣기
 18. 암호 PDF 열기와 암호 걸어 저장(AES-256), 전자서명된 PDF 알림과 사본 저장
-19. Markdown 편집과 실시간 미리보기
+19. Markdown 편집과 실시간 미리보기, 텍스트(.txt) 편집(인코딩 유지), 그림을 PDF로 열기·여러 그림 합치기
 20. 문서는 PC 안에서만 처리, 데이터 수집 없음, 거의 모든 편집 실행 취소
 
-### 이 버전의 새로운 기능 (6.0.0)
+### 이 버전의 새로운 기능 (6.1.0)
 
-쪽 위에서 바로 고치기: 줄을 누르면 그 자리에서 고치고, 글이 다시 흐르며 길어진 문단은 아래 내용을 밀어 내립니다. 오른쪽 속성 창과 꾸밈 막대로 고른 글자만 굵게·기울임·밑줄·첨자·글꼴·크기·색을 바꿉니다.
-새 기능: 글자 모양을 지키는 찾아 바꾸기, 맞춤법 검사(한국어·영어), 글자 인식(OCR, 한국어·영어), 글자 선택과 복사, Word·한글(HWPX)·Markdown으로 내보내기, 두 PDF 비교, 일괄 처리, 양식 채우기, 링크와 첨부 파일, 쪽 자르기와 쪽 크기, 베이츠 번호, 영역 스냅샷. 맞춤법 검사와 글자 인식도 인터넷 없이 PC 안에서 합니다.
-새 화면: 문서 탭, 명령 검색(Ctrl+Q), 어두운 테마, 시작 화면, 두 쪽 보기와 읽기 모드, 손 도구.
-개선: 원래 글꼴에 없는 글자는 같은 집안 글꼴로 그리고 저장 전에 알려 줌, 고치지 않은 부분의 자간 유지, 전자서명된 PDF 알림, 양식 개체 안까지 지우는 가리기, 투명함을 지키는 부분 가리기.
+텍스트 파일 열기: .txt를 미리보기 없는 편집 칸으로 엽니다. 인코딩(UTF-8·UTF-16·한국어 CP949)을 알아보고, 저장할 때 같은 인코딩과 줄바꿈으로 씁니다. .markdown도 .md처럼 엽니다.
+그림을 PDF로 열기: PNG·JPG·WebP·GIF(첫 장면)·BMP를 한 쪽짜리 PDF로 열고, 여러 장을 한 PDF로 합칠 수 있습니다. 그다음 가리기·글자 인식·서명·저장을 그대로 씁니다.
+연결 프로그램: Markdown·텍스트·그림 파일의 "연결 프로그램" 목록에 Retext PDF가 나옵니다. 기본 앱은 바꾸지 않습니다.
+개선: 앱 크기를 줄이고 안정성을 높였습니다.
+한계: 텍스트·Markdown 편집 칸에는 찾아 바꾸기와 맞춤법 검사가 없습니다.
+6.0.0: 쪽 위에서 바로 고치기, 맞춤법 검사, 글자 인식(OCR), Word·한글 내보내기, 두 PDF 비교, 일괄 처리, 양식 채우기, 문서 탭, 어두운 테마.
 5.1.0 보안 안내: 4.0.1~5.0.0에서 사각형 가리기로 가린 파일은 다시 열어 같은 자리를 가려 주세요.
 
 ### 검색어 (최대 7개)
@@ -120,7 +122,7 @@ Redaction does more than draw a black box. It removes the characters from the PD
 
 Offline OCR (Korean and English) makes scanned pages searchable, copyable and editable. Export to Word (DOCX), Hangul (HWPX) or Markdown, compare two PDFs side by side, and process many files in one batch. Fill forms, add annotations, links and attachments, watermarks, headers and footers, page numbers and Bates numbers, edit the outline and document info, crop and resize pages, organize, rotate, split and merge pages, export images, reduce file size, keep a stamp and signature library, print, and protect copies with a password (AES-256). Long operations show progress and can be cancelled, and almost every edit can be undone.
 
-Open several documents in tabs, find any command with command search (Ctrl+Q), and switch to a dark theme. Markdown documents are edited on the left with a live preview on the right.
+Open several documents in tabs, find any command with command search (Ctrl+Q), and switch to a dark theme. Markdown documents are edited on the left with a live preview on the right. Text (.txt) files keep their encoding and line endings, and images (PNG, JPG, WebP, GIF, BMP) open as a PDF or merge into one PDF.
 
 Documents are processed only on your PC and never leave it. OCR and spell check also run offline on your PC. Every feature works without an account or an internet connection, and the developer collects no data.
 
@@ -146,15 +148,17 @@ Free for personal, non-commercial use. Work use by companies or institutions req
 16. Document tabs, command search (Ctrl+Q), dark theme, two-page view and reading mode
 17. Select and copy text, area snapshots, text boxes, a stamp and signature library, and images
 18. Open password-protected PDFs, save copies with an AES-256 password, and get a warning for digitally signed PDFs
-19. Markdown editing with live preview
+19. Markdown editing with live preview, plain-text (.txt) editing that keeps the encoding, and images opened or merged as a PDF
 20. Documents stay on your PC with no data collection, and almost every edit can be undone
 
-### What's new in this version (6.0.0)
+### What's new in this version (6.1.0)
 
-Edit on the page: click a line to edit it in place; text reflows as you type, and a growing paragraph pushes the content below it down. The property panel and a mini toolbar style only the selected characters (bold, italic, underline, superscript, font, size, color).
-New: find and replace that keeps styles, Korean and English spell check, Korean and English OCR, text selection and copy, export to Word, Hangul (HWPX) and Markdown, compare two PDFs, batch processing, form filling, links and attachments, page crop and page size, Bates numbering and area snapshots. Spell check and OCR also run offline on your PC.
-New look: document tabs, command search (Ctrl+Q), dark theme, a start screen, two-page view, reading mode and a hand tool.
-Improved: missing characters use a font of the same family and are listed before saving, unchanged text keeps its kerning, digitally signed PDFs are flagged, redaction also clears content inside form XObjects, and partial redaction keeps transparent images transparent.
+Open text files: .txt opens in a plain editor. The encoding (UTF-8, UTF-16 or Korean CP949) is detected, and saving keeps the same encoding and line endings. .markdown opens like .md.
+Open images as a PDF: PNG, JPG, WebP, GIF (first frame) and BMP open as a one-page PDF, and several images can be merged into one PDF. Then redact, run OCR, sign or save it like any PDF.
+Open with: Retext PDF appears in the Windows "Open with" list for Markdown, text and image files. Your default apps are not changed.
+Improved: a smaller app and better reliability.
+Limits: find and replace and spell check are not available in the text and Markdown editor.
+6.0.0: edit text on the page, spell check, OCR, Word and Hangul export, PDF compare, batch processing, form filling, document tabs and dark theme.
 5.1.0 security note: if you used rectangle redaction in 4.0.1 to 5.0.0, open those files again and redact the same areas.
 
 ### Search terms (up to 7)

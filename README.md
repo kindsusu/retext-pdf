@@ -20,12 +20,22 @@ To download an installer directly, use **[Releases](https://github.com/kindsusu/
 
 | File | Use it when |
 |---|---|
-| `Retext-PDF-<version>-setup.exe` | You want a normal install (per user, no admin rights). Adds Retext PDF to the PDF "Open with" list and a Start-menu shortcut. |
+| `Retext-PDF-<version>-setup.exe` | You want a normal install (per user, no admin rights). Adds Retext PDF to the "Open with" list for PDF, Markdown, text, and image files (your default apps stay as they are) and a Start-menu shortcut. |
 | `Retext-PDF-<version>-portable.exe` | You want to run it from a folder or USB stick without installing. |
 
 Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or internet connection is needed.
 
 **First launch and SmartScreen (Releases installers only).** The Releases builds are not code-signed, so Windows may show "Windows protected your PC". Check that the file came from this repository's Releases page, then choose **More info → Run anyway**. Alternatively, right-click the downloaded file → **Properties** → tick **Unblock** → OK. Do not turn off Microsoft Defender to get past the warning.
+
+## What's new in 6.1
+
+- **Open text files.** `.txt` opens in a plain editor (no preview). The encoding is detected (UTF-8, UTF-8/UTF-16 with BOM, and Korean CP949), and saving keeps the same encoding and line endings; if a character cannot be written in CP949, the app asks before saving as UTF-8. `.markdown` opens like `.md`.
+- **Open images as a PDF.** PNG, JPG, WebP, GIF (first frame), and BMP open as a new one-page PDF; pick several images to merge them into one PDF. Then redact, OCR, sign, or save it like any PDF.
+- **"Open with" for more file types.** The installer and the Store version add Retext PDF to the Windows "Open with" list for `.md`, `.markdown`, `.txt`, and images. Your default apps are not changed.
+- **Smaller package** (test files are no longer shipped) and more reliable tests.
+- Limits: Find & Replace and spell check are not available in the text and Markdown editor; an animated GIF opens as its first frame.
+
+Full notes: [v6.1.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.0).
 
 ## What's new in 6.0
 
@@ -67,7 +77,8 @@ Full notes: [v6.0.0 release](https://github.com/kindsusu/retext-pdf/releases/tag
 - Open PDFs straight from a browser or mail client via the Windows "Open with" association (temp-file downloads show a banner and save with "Save As")
 - Undo/redo for almost every edit; safe editing — every edit is applied, saved, reopened, and checked before it replaces the document, and anything that fails is rolled back
 - A progress dialog with a cancel button for long tools, an undo toast after page changes, and notifications that stack
-- Markdown editing with a sanitized live preview
+- Markdown editing with a sanitized live preview; plain-text (`.txt`) editing that keeps the file's encoding (UTF-8, UTF-16, CP949) and line endings
+- Open images (PNG, JPG, WebP, GIF, BMP) as a one-page PDF, or merge several images into one PDF
 
 | Before | After |
 |---|---|
@@ -159,6 +170,8 @@ Press `Ctrl+/` or `F1` in the app for the full list.
 
 **Why must I "Save As" a signed PDF?** Editing changes the signed content, so the signature becomes invalid. Retext PDF warns you before the first edit and saves the result to a copy, keeping the signed original.
 
+**Which files can I open?** PDF, Markdown (`.md`, `.markdown`), plain text (`.txt`), and images (PNG, JPG, WebP, GIF, BMP). Images open as a new PDF that you save with Save As. Text files keep their encoding (UTF-8, UTF-16, or CP949) and line endings when saved. After installing, right-click a file → **Open with** → Retext PDF; your default apps are not changed.
+
 **Can I open a password-protected PDF?** Yes. Retext PDF asks for the password; PDFs that only restrict printing or editing open directly. The first save goes through Save As, and the saved copy has no password — use **암호** to protect it again.
 
 ## Development
@@ -185,6 +198,7 @@ workspace/              fictional test documents
 - Forms: XFA-only forms are not supported (the app tells you); list boxes with Korean values may look different in other viewers.
 - Redaction: a gradient shading that crosses the redaction box is only covered, not removed (the app reports it).
 - Complex CJK ligatures, vertical text, and unusual fonts may require fallback; characters missing from the original font use a same-family installed font, then Malgun Gothic.
+- The text and Markdown editor has no Find & Replace or spell check (those work on PDFs). An animated GIF opens as its first frame.
 - A stamp placed on a rotated page rotates with the page. Stamps in the library cannot be renamed.
 - Password protection and edits to a signed PDF rewrite the file, so existing digital signatures become invalid (signed originals are saved to a copy).
 - The Releases installers are not code-signed; use the Microsoft Store version to avoid the SmartScreen warning.
