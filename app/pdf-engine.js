@@ -2770,18 +2770,20 @@ function openWith(P, buffer, password) {
     },
 
     // ── 이미지 삽입 / 크기 조절 ───────────────────────────────────────────
-    // image: { kind:'jpeg', data } | { kind:'rgba', data, width, height, quality? }
+    // image: { kind:'jpeg', data } | { kind:'rgba', data, width, height, quality?, lossless? }
+    // lossless(v6.1 그림을 PDF로 열기): 투명이 없어도 JPEG로 바꾸지 않고 무손실 비트맵(BGRx, FlateDecode)으로 넣는다 — PNG·BMP 스크린샷이 흐려지지 않게
     // box: { x, y, w, h } PDF 좌표(pt, 원점 좌하단). 종횡비는 호출자가 맞춘다.
     insertImage(i, image, box) {
       const p = page(i);
       for (const k of ['x', 'y', 'w', 'h']) if (!Number.isFinite(box?.[k])) throw new Error('이미지 위치·크기가 잘못됐습니다.');
       if (!(box.w > 0 && box.h > 0)) throw new Error('이미지 크기는 0보다 커야 합니다.');
       const alpha = transparent(image); // 투명이 있으면 JPEG 대신 비트맵(+SMask)으로
-      const data = alpha ? null : toJpeg(image);
+      const bitmap = alpha || (image?.kind === 'rgba' && image.lossless === true);
+      const data = bitmap ? null : toJpeg(image);
       const io = P.FPDFPageObj_NewImageObj(doc);
       if (!io) throw new Error('이미지 객체를 만들지 못했습니다.');
       try {
-        if (alpha) putBitmap(io, image.data, image.width, image.height); else putJpeg(io, data);
+        if (bitmap) putBitmap(io, image.data, image.width, image.height, [], alpha); else putJpeg(io, data);
         // 이미지는 단위 정사각형(0..1)에 그려진다 → 행렬 [w 0 0 h x y]가 곧 화면 상자
         const m = mal(24);
         try {

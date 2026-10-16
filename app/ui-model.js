@@ -195,7 +195,20 @@
     return { scanned: chars < SCAN_MAX_CHARS && cover >= SCAN_MIN_COVER, chars, imageCover: Math.round(cover * 1000) / 1000 };
   }
 
+  // ---- v6.1 열 수 있는 파일 종류: PDF · Markdown(.md·.markdown) · 텍스트(.txt) · 그림(PDF로 바꿔 연다) ----
+  // 화면(열기·끌어다 놓기·탭 표시)·main.js(실행 인자·열기 대화상자)·server.js(작업 폴더 목록)가 같은 목록을 쓴다
+  const DOC_EXT = { pdf: 'pdf', md: 'md', markdown: 'md', txt: 'txt' };
+  const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'];
+  const OPEN_EXT = [...Object.keys(DOC_EXT), ...IMAGE_EXT];
+  const extOf = (p) => { const m = /\.([^.\\/]+)$/.exec(String(p || '')); return m ? m[1].toLowerCase() : ''; };
+  // 'pdf' | 'md' | 'txt' | 'image' | null(열 수 없는 파일)
+  function fileKind(p) { const e = extOf(p); return DOC_EXT[e] || (IMAGE_EXT.includes(e) ? 'image' : null); }
+  // 탭·최근 파일·시작 화면의 종류 꼬리표
+  const KIND_LABEL = { pdf: 'PDF', md: 'MD', txt: 'TXT', image: 'IMG' };
+  const kindLabel = (p) => KIND_LABEL[fileKind(p)] || 'MD';
+
   const api = {
+    DOC_EXT, IMAGE_EXT, OPEN_EXT, extOf, fileKind, kindLabel,
     scanPageInfo,
     MAX_TABS, tabOpen, tabClose, tabMove, dropIndex, tabsToClose, tabCycle, dirtyOf,
     choseong, norm, commandScore, searchCommands,

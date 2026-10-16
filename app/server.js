@@ -26,7 +26,9 @@ const pdfForms = require('./pdf-forms');       // v6 Wave E: 양식 외형(한�
 const pdfOffice = require('./pdf-office');     // v6 Wave E: Word(.docx)·한글(.hwpx) 내보내기
 const pdfOcr = require('./pdf-ocr');           // v6 Wave E2: 글자 인식(OCR, 앱 안 tesseract — 문서를 PC 밖으로 보내지 않는다)
 const spell = require('./spell-check');        // v6 Wave F: 맞춤법 검사(오프라인 Hunspell, 한국어·영어)
-const uiModel = require('./ui-model');         // 화면과 같이 쓰는 순수 계산(스캔한 쪽 알아보기)
+const uiModel = require('./ui-model');         // 화면과 같이 쓰는 순수 계산(스캔한 쪽 알아보기 · v6.1 열 수 있는 파일 종류)
+const textCodec = require('./text-codec');     // v6.1 텍스트(.txt) 인코딩 알아보기·같은 인코딩으로 저장
+const imagePdf = require('./image-pdf');       // v6.1 그림을 PDF로 열기
 const stamps = require('./stamp-store');
 const { buildPrintHtml } = require('./print-html');
 const APP_VERSION = require('../package.json').version;
@@ -133,7 +135,31 @@ function dropDoc(name) {
   if (!entry) return;
   if (entry.busy) throw httpError(409, '긴 작업이 끝난 뒤 다시 시도하세요.');
   delete pdfDocs[key]; entry.doc.close();
+  dropFresh(entry); // v6.1: 그림으로 만든 새 PDF는 임시 폴더째 지운다(저장하지 않고 닫았다)
 }
+
+// ── v6.1 그림으로 만든 새 PDF(아직 저장 안 함) ─────────────────────────────────
+// 다른 모든 PDF 기능이 그대로 쓰이도록 임시 폴더(os.tmpdir()/retext-pdf-new-*)에 파일을 두고 연다. 처음부터 미저장(dirty)이고
+// entry.fresh = { dir: 그림이 있던 폴더(다른 이름으로 저장 기본 위치), tmp: 임시 폴더 }. 그 자리 저장(/api/pdf/save)은 409 needSaveAs —
+// 임시 파일에 써 봐야 닫으면 사라진다. 다른 이름으로 저장하거나 닫으면 임시 폴더를 지운다. 앱이 끝날 때도 지우고, 하루 넘은 것은 시작할 때 치운다
+const FRESH_PREFIX = 'retext-pdf-new-';
+function dropFresh(entry) {
+  if (!entry?.fresh) return;
+  const tmp = entry.fresh.tmp;
+  delete entry.fresh;
+  if (tmp && path.basename(tmp).startsWith(FRESH_PREFIX) && path.dirname(path.resolve(tmp)) === path.resolve(os.tmpdir())) {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
+}
+process.on('exit', () => { for (const entry of Object.values(pdfDocs)) dropFresh(entry); });
+try { // 지난 실행이 남긴 것(강제 종료 등): 하루 넘은 임시 폴더만
+  const now = Date.now();
+  for (const n of fs.readdirSync(os.tmpdir())) {
+    if (!n.startsWith(FRESH_PREFIX)) continue;
+    const p = path.join(os.tmpdir(), n);
+    try { if (now - fs.statSync(p).mtimeMs > 24 * 3600e3) fs.rmSync(p, { recursive: true, force: true }); } catch {}
+  }
+} catch {}
 
 // ponytail: undo 스택은 문서당 최대 20개(save() 바이트 통짜) — 600KB 문서 기준 12MB, 개인용 데스크톱 앱이라 넉넉함.
 //   더 큰 문서/더 긴 히스토리가 필요해지면 diff 기반으로 바꿔야 함.
@@ -452,6 +478,9 @@ async function compactDoc(entry) {
   try { await swapDoc(entry, pdfRewrite.writePdf(pdfRewrite.parsePdf(entry.doc.save()), { dedupe: 'streams' })); return true; }
   catch (e) { console.error('compact:', e.message); return false; }
 }
+// v6.1: 그림 파일을 화면(브라우저 디코더)에 그대로 넘길 때의 형식 · 너무 큰 글 파일 안내
+const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', bmp: 'image/bmp' };
+const tooLargeText = (p) => `${path.basename(p)}: 글 파일이 너무 큽니다(${(fs.statSync(p).size / 1048576).toFixed(1)}MB) — 편집기로는 ${textCodec.TEXT_MAX_BYTES / 1048576}MB까지 엽니다`;
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 // 요청 본문을 Buffer로 모은다. 조각마다 따로 UTF-8로 풀면 조각 경계에 걸린 한글이 깨진다(U+FFFD) → 다 모아 한 번에 푼다.
 // 상한을 넘으면 413, 연결이 끊기면 거절해 라우트가 멈춰 있지 않게 한다
@@ -747,21 +776,41 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/files') {
       const dir = url.searchParams.get('dir');
-      if (dir) return json(res, 200, fs.readdirSync(dir).filter((f) => /\.(md|pdf)$/i.test(f)).sort().map((f) => path.join(dir, f)));
-      return json(res, 200, fs.readdirSync(WS).filter((f) => /\.(md|pdf)$/i.test(f)).sort());
+      // v6.1: 문서(PDF·Markdown .md/.markdown·텍스트 .txt)만 — 그림은 폴더째 열 때 PDF로 바꾸지 않는다
+      const isDoc = (f) => ['pdf', 'md', 'txt'].includes(uiModel.fileKind(f));
+      if (dir) return json(res, 200, fs.readdirSync(dir).filter(isDoc).sort().map((f) => path.join(dir, f)));
+      return json(res, 200, fs.readdirSync(WS).filter(isDoc).sort());
     }
     if (url.pathname === '/api/file' && req.method === 'GET') {
       const p = safe(url.searchParams.get('name'));
       if (!fs.existsSync(p)) return json(res, 404, { error: '파일 없음' }); // 헤더 전송 후 스트림 오류가 나면 프로세스가 죽는다 → 먼저 확인
+      // v6.1: 편집기로 여는 글 파일은 20MB까지(넘으면 textarea가 멈춘다)
+      const kind = uiModel.fileKind(p);
+      if ((kind === 'md' || kind === 'txt') && fs.statSync(p).size > textCodec.TEXT_MAX_BYTES) return json(res, 413, { error: tooLargeText(p), tooLarge: true });
       // Markdown은 원문 스트림이라 JSON 필드를 못 넣는다 → temp/readOnly는 헤더로 실어 보낸다(렌더러가 fetch 응답 헤더에서 읽음)
       res.writeHead(200, {
-        'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8',
+        'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : kind === 'image' ? IMAGE_MIME[uiModel.extOf(p)] : 'text/plain; charset=utf-8',
         'X-Retext-Pdf-Temp': isTempPath(p) ? '1' : '0',
         'X-Retext-Pdf-Readonly': isReadOnlyPath(p) ? '1' : '0',
       });
       return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { writeAtomic(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
+    // v6.1 텍스트(.txt): 인코딩을 알아보고 글로 풀어 준다 → { text, encoding, lossy, temp, readOnly }. 20MB 넘으면 413
+    if (url.pathname === '/api/text' && req.method === 'GET') {
+      const p = safe(url.searchParams.get('name'));
+      if (!fs.existsSync(p)) return json(res, 404, { error: '파일 없음' });
+      if (fs.statSync(p).size > textCodec.TEXT_MAX_BYTES) return json(res, 413, { error: tooLargeText(p), tooLarge: true });
+      const r = textCodec.decodeText(fs.readFileSync(p));
+      return json(res, 200, { ...r, temp: isTempPath(p), readOnly: isReadOnlyPath(p) });
+    }
+    // 저장: 본문(UTF-8 글)을 encoding(열 때 알아본 것)으로 바꿔 쓴다. CP949로 못 쓰는 글자가 있으면 422 { unencodable } — 화면이 UTF-8로 저장할지 묻는다
+    if (url.pathname === '/api/text' && req.method === 'PUT') {
+      const p = safe(url.searchParams.get('name')), enc = url.searchParams.get('encoding') || 'utf-8';
+      if (!textCodec.ENCODINGS.includes(enc)) return json(res, 400, { error: `알 수 없는 인코딩입니다: ${enc}` });
+      writeAtomic(p, textCodec.encodeText((await body(req)).toString('utf8'), enc));
+      return json(res, 200, { ok: true, encoding: enc });
+    }
     if (url.pathname === '/api/pdf/info' && req.method === 'GET') { // 서버가 문서 상태의 정본: 미저장 여부와 실행취소 스택도 함께 준다(새로고침·재열기 뒤 화면과 어긋나지 않게)
       const name = url.searchParams.get('name');
       const entry = await getPdfDoc(name);
@@ -769,6 +818,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         pages: Array.from({ length: entry.doc.pageCount }, (_, i) => entry.doc.pageSize(i)), dirty: entry.dirty,
         temp: isTempPath(p), readOnly: isReadOnlyPath(p), security: entry.security || PLAIN, ...stacks(entry),
+        ...(entry.fresh ? { fresh: { dir: entry.fresh.dir } } : {}), // v6.1 그림으로 만든 새 PDF: 다른 이름으로 저장의 기본 폴더
       });
     }
     // P7: 여는 암호가 걸린 PDF 열기. 맞으면 보통 열기처럼 캐시에 넣고(암호는 메모리에만) info와 같은 security를 준다.
@@ -1302,6 +1352,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
       const { name, force } = await readJson(req);
       const entry = await getEditableDoc(name);
+      // v6.1: 그림으로 만든 새 PDF는 임시 파일이라 그 자리 저장이 의미 없다 → 다른 이름으로 저장
+      if (entry.fresh) throw Object.assign(httpError(409, '그림으로 만든 새 PDF입니다. 다른 이름으로 저장해 위치를 고르세요.'), { extra: { needSaveAs: true, fresh: true } });
       // P7: 암호·권한이 걸린 원본을 그대로 덮어쓰면 암호가 풀린 파일로 바뀐다 → 처음에는 409로 "다른 이름으로 저장"을 유도하고, force:true면 덮어쓴다
       if (entry.security?.encrypted && !force) {
         throw Object.assign(httpError(409, '암호나 권한 제한이 걸린 원본입니다. 저장하면 암호가 풀린 파일이 되므로 다른 이름으로 저장하세요.'), { extra: { needSaveAs: true } });
@@ -1325,6 +1377,7 @@ const server = http.createServer(async (req, res) => {
       entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
       entry.security = { ...PLAIN }; delete entry.password; // 새 파일은 암호 없는 보통 문서(엔진이 암호를 벗겨 저장한다)
       if (from !== key) { delete pdfDocs[from]; pdfDocs[key] = entry; }
+      dropFresh(entry); // v6.1: 그림으로 만든 새 PDF가 제자리를 찾았다 — 임시 폴더는 지운다
       return json(res, 200, { ok: true, path: to });
     }
     // PDF 암호 걸기: 지금 문서(미저장 편집 포함)를 AES-256(R6)으로 암호화한 사본을 to에 쓴다(pdf-encrypt.js).
@@ -2023,6 +2076,47 @@ const server = http.createServer(async (req, res) => {
       } catch (e) { job.error = e.message; throw e; }
       finally { endJob(job); }
     }
+    // v6.1 그림을 PDF로 열기: { images:[{ path, data?(base64 — 화면이 풀어 보낸 PNG/JPEG) }], merge } → { files:[{ path, pages, scaled }] }.
+    // merge면 한 문서(그림마다 한 쪽), 아니면 그림마다 문서 하나. 여기서 못 푸는 그림(GIF·WebP·인터레이스 PNG·RLE BMP)이 있으면
+    // 422 { needDecode:[번호…] } — 화면이 브라우저 디코더로 풀어 data로 다시 보낸다. 만든 문서는 임시 폴더에 두고 미저장(fresh)으로 연다
+    if (url.pathname === '/api/pdf/from-images' && req.method === 'POST') {
+      const q = await readJson(req);
+      const list = Array.isArray(q.images) ? q.images : [];
+      if (!list.length || list.length > 200) return json(res, 400, { error: '그림을 1~200개 고르세요' });
+      const prepared = [], need = [];
+      for (let k = 0; k < list.length; k++) {
+        const it = list[k] || {};
+        if (typeof it.path !== 'string' || !it.path) return json(res, 400, { error: '그림 경로가 없습니다' });
+        let bytes;
+        if (typeof it.data === 'string' && it.data) bytes = Buffer.from(it.data, 'base64');
+        else {
+          const p = safe(it.path);
+          if (!fs.existsSync(p)) return json(res, 404, { error: `그림 파일이 없습니다: ${path.basename(p)}` });
+          if (fs.statSync(p).size > 300 * 1024 * 1024) return json(res, 413, { error: `그림이 너무 큽니다(300MB 넘음): ${path.basename(p)}` });
+          bytes = fs.readFileSync(p);
+        }
+        try { prepared.push({ ...imagePdf.prepareImage(bytes), name: path.basename(it.path), dir: path.dirname(safe(it.path)) }); }
+        catch (e) { if (e.needDecode && !it.data) { need.push(k); prepared.push(null); } else throw httpError(400, `${path.basename(it.path)}: ${e.message}`); }
+        await tick(); // 큰 그림 여러 장 — 사이사이 다른 요청을 받는다
+      }
+      if (need.length) return json(res, 422, { error: '화면에서 풀어야 하는 그림이 있습니다', needDecode: need });
+      const groups = q.merge ? [prepared] : prepared.map((p) => [p]);
+      const files = [];
+      for (const group of groups) {
+        const stem = group[0].name.replace(/\.[^.]+$/, '') || '그림';
+        const title = (group.length > 1 ? `${stem} 외 ${group.length - 1}장` : stem).replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), FRESH_PREFIX));
+        const out = path.join(tmp, title);
+        try { fs.writeFileSync(out, await imagePdf.imagesToPdf(group)); }
+        catch (e) { fs.rmSync(tmp, { recursive: true, force: true }); throw e; }
+        const entry = await getPdfDoc(out);
+        entry.dirty = true; // 아직 어디에도 저장하지 않은 문서
+        entry.fresh = { dir: group[0].dir, tmp };
+        files.push({ path: out, pages: group.length, scaled: group.filter((g) => g.scaled).map((g) => ({ name: g.name, from: g.scaled.from, to: [g.width, g.height] })) });
+        await tick();
+      }
+      return json(res, 200, { ok: true, files });
+    }
     if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
       const { name } = await readJson(req);
       dropDoc(name);
@@ -2034,6 +2128,11 @@ const server = http.createServer(async (req, res) => {
     json(res, e.status || 500, { error: e.message, ...(e.extra || {}) }); // extra: 암호(needPassword·wrong)·저장 확인(needSaveAs) 같은 UI용 표시
   }
 });
+// 쉬는 연결 유지 시간: Node 기본 5초(+1초)면, PDFium 동기 호출(OCR·용량 줄이기 등)로 이벤트 루프가 6초 넘게 멈춘 사이 쉬던 연결의 시간이 지나
+// 루프가 풀리는 순간 서버가 그 연결을 끊는데, 클라이언트는 같은 연결에 다음 요청을 이미 보낸 뒤라 'read ECONNRESET'이 난다
+// (실측 2026-10-16: 같은 프로세스에서 6.5초 막으면 5번 중 5번 재현, 이 값이면 0번 — npm test가 가끔 pdf-features에서 깨진 원인).
+// 127.0.0.1 전용 앱 서버라 연결을 오래 쥐어도 손해가 없다
+server.keepAliveTimeout = 10 * 60 * 1000;
 // 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속
 // listen(p, cb)의 cb는 'listening' 리스너로 남아 실패한 시도의 것까지 다음 성공 때 함께 불린다 → 리스너를 직접 달고 실패하면 떼어 낸다
 // RETEXTPDF_NO_LISTEN=1 이면 포트를 열지 않는다 — server.test.js가 순수 함수(snapshot·downsampleToTarget·jobs)만 불러 쓰기 위한 것

@@ -229,6 +229,7 @@
   .searchHit.cur{background:rgba(217,119,87,.55);outline:1px solid var(--accStrong)}
   /* Markdown: 왼쪽 원문(아이보리 흰 바탕) | 오른쪽 미리보기(옅은 회색 위의 흰 종이) */
   .split{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;background:var(--docBg)}
+  .split.plain{grid-template-columns:1fr}.split.plain .prev{display:none}.split.plain textarea{border-right:0} /* v6.1 텍스트(.txt): 미리보기 없이 폭 전체 */
   textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(--line);background:var(--input);color:var(--fg);padding:18px;font:13px/1.6 Consolas,'D2Coding',monospace;outline:none}
   .prev{overflow:auto;margin:14px 16px;padding:22px 30px;background:var(--paper);color:var(--paperInk);box-shadow:0 1px 3px rgba(0,0,0,.12),0 4px 16px rgba(0,0,0,.08)}.prev h1,.prev h2{margin-top:.6em}.prev table{border-collapse:collapse}.prev td,.prev th{border:1px solid #ccc;padding:3px 8px}.prev a{color:#1d5fa8}
   /* 쪽은 한 줄에 한 장(쪽 기준 보기). 세로 스크롤 막대를 늘 두어 맞춤 계산의 폭이 막대 유무로 흔들리지 않게 한다.
@@ -900,9 +901,9 @@
   <!-- v6 Wave C 시작 화면(연 문서가 없을 때): 큰 작업 단추(파일을 고르면 그 작업 창까지 바로 연다) · 최근 파일(이름·폴더·마지막으로 연 때) · 끌어다 놓기 안내 -->
   <div id="emptyState">
     <div class="startPage">
-      <div class="startHead"><h1>무엇을 할까요?</h1><p class="hint2">PDF · Markdown 파일을 이 창에 끌어다 놓아도 열립니다</p></div>
+      <div class="startHead"><h1>무엇을 할까요?</h1><p class="hint2">PDF · Markdown · 텍스트 · 그림 파일을 이 창에 끌어다 놓아도 열립니다 (그림은 PDF로 엽니다)</p></div>
       <div class="startTasks" role="group" aria-label="작업">
-        <button type="button" id="emptyOpen" class="startTask main" data-sicon="open" hidden><b>PDF 열기</b><span>PDF·Markdown 파일을 탭으로 엽니다</span></button>
+        <button type="button" id="emptyOpen" class="startTask main" data-sicon="open" hidden><b>PDF 열기</b><span>PDF·Markdown·텍스트·그림 파일을 탭으로 엽니다</span></button>
         <button type="button" id="startEdit" class="startTask" data-sicon="toolEdit" data-electron><b>편집</b><span>글자를 그 자리에서 고칩니다</span></button>
         <button type="button" id="emptyMerge" class="startTask" data-sicon="merge"><b>병합</b><span>여러 PDF를 하나로 잇습니다</span></button>
         <button type="button" id="emptyDownsampleFiles" class="startTask" data-sicon="downsample" data-electron><b>압축(용량 줄이기)</b><span>여러 파일 용량 줄이기</span></button>
@@ -999,6 +1000,18 @@
   <p class="hint2" id="ctMsg"></p>
   <ul class="ctList" id="ctList"></ul>
   <div class="row"><span class="sp"></span><button type="button" id="ctDiscard" class="danger">저장하지 않고 닫기</button><button type="button" id="ctCancel" class="pri">취소</button></div>
+</div></dialog>
+<!-- v6.1 그림 여러 장을 한꺼번에 열 때: 한 PDF로 합치기(그림마다 한 쪽) / 따로 열기(그림마다 PDF 하나) -->
+<dialog id="imgMergeDialog" class="panel" aria-labelledby="imTitle"><div class="card" style="width:460px">
+  <h2 id="imTitle">그림 여러 장 열기</h2>
+  <p class="hint2" id="imMsg"></p>
+  <div class="row"><span class="sp"></span><button type="button" id="imMerge" class="pri">한 PDF로 합치기</button><button type="button" id="imApart">따로 열기</button><button type="button" id="imCancel">취소</button></div>
+</div></dialog>
+<!-- v6.1 텍스트 저장: 원래 인코딩(CP949)으로 쓸 수 없는 글자가 있으면 UTF-8로 저장할지 묻는다 -->
+<dialog id="encDialog" class="panel" aria-labelledby="encTitle"><div class="card" style="width:480px">
+  <h2 id="encTitle">이 인코딩으로 저장할 수 없는 글자</h2>
+  <p class="hint2" id="encMsg"></p>
+  <div class="row"><span class="sp"></span><button type="button" id="encUtf8" class="pri">UTF-8로 저장</button><button type="button" id="encCancel">취소</button></div>
 </div></dialog>
 <div id="dragLabel" aria-hidden="true"></div>
 <dialog id="pageExtractDialog" class="panel"><div class="card" style="width:640px">
@@ -1626,6 +1639,11 @@ let reading = false, readingFull = false; // v6 Wave C 읽기 모드(F11이면 �
 const docNoted = new Map();
 function notedOnce(name, kind) { const s = docNoted.get(name) || new Set(); if (s.has(kind)) return false; s.add(kind); docNoted.set(name, s); return true; }
 let mdEol = '\n'; // 지금 연 Markdown 파일의 원래 줄바꿈('\r\n'이면 저장할 때 되돌린다)
+// v6.1 텍스트(.txt): 열 때 알아본 인코딩(저장할 때 같은 인코딩으로 쓴다) · 그림으로 만든 새 PDF(서버 info.fresh = { dir: 그림이 있던 폴더 })
+let curEnc = 'utf-8', curFresh = null;
+const freshDocs = new Set(); // 그림으로 만든 새 PDF의 임시 경로 — 최근 파일에 넣지 않는다(저장하면 새 경로가 들어간다)
+const isTxt = (p) => UM.fileKind(p) === 'txt';
+const ENC_LABEL = { 'utf-8': 'UTF-8', 'utf-8-bom': 'UTF-8 (BOM)', 'utf-16le': 'UTF-16 LE', 'utf-16be': 'UTF-16 BE', cp949: 'CP949' };
 const ZOOM_MIN = 0.25, ZOOM_MAX = 4, ZOOM_DEFAULT = 1;
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4]; // 상태줄 확대 목록(#zoomSelect)과 −/+ 단계
 const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
@@ -1657,7 +1675,11 @@ const showDirty = () => {
   if (cur && tabs.includes(cur)) { const v = tabViews.get(cur) || {}; if (v.dirty !== d) { v.dirty = d; tabViews.set(cur, v); renderFiles(); } } // v6 Wave C: 탭의 ●
 };
 // 인터넷·메일에서 바로 열린 임시 파일이거나 읽기전용이면 배너를 띄우고, 저장(Ctrl+S/버튼)은 다른 이름으로 저장으로 유도한다(WP-B1)
-const updateTempBanner = () => { $('#tempBanner').hidden = !(curTemp || curReadOnly); };
+const updateTempBanner = () => {
+  $('#tempBanner').hidden = !(curTemp || curReadOnly);
+  // v6.1: 그림으로 만든 새 PDF도 임시 폴더에 있다 — 경고가 아니라 저장 위치를 고르라는 안내
+  $('#tempBanner').textContent = curFresh ? '그림으로 만든 새 PDF입니다 — 아직 저장하지 않았습니다. 저장하면 위치를 고릅니다 (Ctrl+S)' : '⚠ 임시 파일입니다. 편집을 남기려면 다른 이름으로 저장하세요 (Ctrl+S)';
+};
 
 // ---- 앱 이름·버전 표시(상태줄 오른쪽 끝 #ver) ----
 async function showVersion() {
@@ -1720,7 +1742,7 @@ function renderEmptyRecent() {
   if (!r.length) { $('#emptyRecent').replaceChildren(Object.assign(document.createElement('div'), { className: 'rEmpty', textContent: '최근에 연 파일이 없습니다' })); return; }
   $('#emptyRecent').replaceChildren(...r.map((p) => {
     const row = document.createElement('div'); row.className = 'rItem'; row.dataset.r = p; row.title = p; row.tabIndex = 0; row.setAttribute('role', 'listitem');
-    row.innerHTML = `<span class="ext">${/\.pdf$/i.test(p) ? 'PDF' : 'MD'}</span><span class="rn"></span><span class="rd"></span><span class="rt"></span><button type="button" class="rx" title="최근 목록에서 지우기" aria-label="최근 목록에서 지우기">×</button>`;
+    row.innerHTML = `<span class="ext">${UM.kindLabel(p)}</span><span class="rn"></span><span class="rd"></span><span class="rt"></span><button type="button" class="rx" title="최근 목록에서 지우기" aria-label="최근 목록에서 지우기">×</button>`;
     row.querySelector('.rn').textContent = basename(p);
     row.querySelector('.rd').textContent = p.slice(0, Math.max(p.lastIndexOf('\\'), p.lastIndexOf('/'))) || p;
     row.querySelector('.rt').textContent = UM.whenText(at[p], Date.now());
@@ -1739,7 +1761,7 @@ async function fileExists(p) {
   try {
     const url = (p.endsWith('.pdf') ? '/api/pdf/info?name=' : '/api/file?name=') + encodeURIComponent(p);
     const r = await fetch(url, { signal: ctrl.signal });
-    return r.ok || r.status === 401; // 401 = 암호가 걸린 PDF(파일은 있다) — 열 때 암호 창을 띄운다
+    return r.ok || r.status === 401 || r.status === 413; // 401 = 암호가 걸린 PDF(파일은 있다) — 열 때 암호 창을 띄운다 · 413 = 너무 큰 글 파일(열 때 알린다)
   } catch { return false; } finally { clearTimeout(t); }
 }
 async function openRecent(p) {
@@ -1754,13 +1776,18 @@ function renderFiles() {
     else { const x = item.querySelector('.x'); if (x) x.title = '닫기'; if (tabDirty(f)) item.firstChild.textContent += ' ●'; }
     return item;
   });
-  if (!entries.length) { const empty = document.createElement('div'); empty.className = 'f'; empty.style.color = 'var(--mut)'; empty.textContent = '.md / .pdf 파일 없음'; entries.push(empty); }
+  if (!entries.length) { const empty = document.createElement('div'); empty.className = 'f'; empty.style.color = 'var(--mut)'; empty.textContent = 'PDF·Markdown·텍스트 파일 없음'; entries.push(empty); }
   $('#files').replaceChildren(...entries);
   renderTabs();
 }
 // 여러 파일을 한꺼번에 열면 탭으로 더하고 첫 파일을 고른다. 탭은 UM.MAX_TABS(20)개까지 — 넘는 파일은 열지 않고 알린다
 function addFiles(paths) {
   if (!paths || !paths.length) return;
+  // v6.1: 그림은 PDF로 바꿔 새 탭(미저장)으로 연다 — 여러 장이면 합칠지 묻는다. 열 수 없는 종류는 건너뛴다
+  const images = paths.filter((p) => UM.fileKind(p) === 'image');
+  paths = paths.filter((p) => { const k = UM.fileKind(p); return k && k !== 'image'; });
+  if (images.length) openImages(images);
+  if (!paths.length) return;
   let skipped = 0;
   for (const p of paths) {
     const r = UM.tabOpen({ order: tabs, active: cur }, p);
@@ -1770,6 +1797,72 @@ function addFiles(paths) {
   if (skipped) flash(`⚠ 탭은 ${UM.MAX_TABS}개까지 엽니다 — ${skipped}개 파일은 열지 않았습니다`, 5000);
   if (tabs.includes(paths[0])) open(paths[0]);
 }
+// ---- v6.1 그림을 PDF로 열기 ----
+// 서버(/api/pdf/from-images)가 PNG·JPEG·BMP를 풀어 그림 크기 그대로의 쪽(96dpi)으로 만들고, 임시 폴더에 미저장 PDF로 연다.
+// 서버가 못 푸는 그림(WebP·GIF·인터레이스 PNG·RLE BMP)은 422 needDecode → 여기서 브라우저 디코더로 풀어 다시 보낸다
+const IMAGE_MAX_SIDE = 7000; // 서버(image-pdf.js)와 같은 상한: 긴 변이 넘으면 줄여 넣는다
+async function openImages(images) {
+  let merge = false;
+  if (images.length > 1) {
+    const choice = await askImageMerge(images);
+    if (!choice) return;
+    merge = choice === 'merge';
+  }
+  const decoded = {}, scaledHere = [];
+  flash(`그림 ${images.length}장을 PDF로 만드는 중…`, 3000);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let r;
+    try {
+      r = await apiPost('/api/pdf/from-images', { images: images.map((p, k) => ({ path: p, ...(decoded[k] ? { data: decoded[k] } : {}) })), merge }, { silent: true });
+    } catch (error) {
+      if (error.status === 422 && Array.isArray(error.data?.needDecode) && !attempt) {
+        try {
+          for (const k of error.data.needDecode) { const d = await decodeImageInPage(images[k]); decoded[k] = d.data; if (d.scaled) scaledHere.push(d.scaled); }
+        } catch (e) { flash('⚠ 그림을 읽지 못했습니다: ' + e.message, 6000); return; }
+        continue;
+      }
+      flash('⚠ ' + error.message, 6000); return;
+    }
+    for (const f of r.files) freshDocs.add(f.path);
+    const scaled = [...scaledHere, ...r.files.flatMap((f) => (f.scaled || []).map((x) => `${x.name} ${x.from.join('×')} → ${x.to.join('×')}px`))];
+    if (scaled.length) toast(`큰 그림을 긴 변 ${IMAGE_MAX_SIDE.toLocaleString()}px로 줄여 넣었습니다: ${scaled.join(', ')}`, { kind: 'info', ms: 9000 });
+    addFiles(r.files.map((f) => f.path));
+    return;
+  }
+}
+// 브라우저 디코더로 그림 한 장 → base64(투명이 있거나 무손실 원본이면 PNG, 투명 없는 WebP·JPEG는 JPEG). GIF는 첫 장면
+async function decodeImageInPage(p) {
+  const r = await fetch('/api/file?name=' + encodeURIComponent(p));
+  if (!r.ok) throw new Error(`${basename(p)}을(를) 읽지 못했습니다`);
+  let bmp;
+  try { bmp = await createImageBitmap(await r.blob()); } catch { throw new Error(`${basename(p)}: 그림 형식을 읽을 수 없습니다`); }
+  const k = Math.min(1, IMAGE_MAX_SIDE / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext('2d');
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  const scaled = k < 1 ? `${basename(p)} ${bmp.width}×${bmp.height} → ${c.width}×${c.height}px` : null;
+  bmp.close();
+  const px = g.getImageData(0, 0, c.width, c.height).data;
+  let alpha = false;
+  for (let i = 3; i < px.length; i += 4) if (px[i] !== 255) { alpha = true; break; }
+  const lossy = !alpha && /\.(webp|jpe?g)$/i.test(p);
+  const blob = await new Promise((resolve) => c.toBlob(resolve, lossy ? 'image/jpeg' : 'image/png', 0.92));
+  if (!blob) throw new Error(`${basename(p)}: 그림을 바꾸지 못했습니다`);
+  const url = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = () => reject(fr.error); fr.readAsDataURL(blob); });
+  return { data: String(url).slice(String(url).indexOf(',') + 1), scaled };
+}
+function askImageMerge(images) {
+  return new Promise((resolve) => {
+    const d = $('#imgMergeDialog');
+    $('#imMsg').textContent = `그림 ${images.length}장을 열었습니다. 한 PDF로 합칠까요(그림마다 한 쪽), 그림마다 따로 PDF로 열까요? — ${images.slice(0, 4).map(basename).join(', ')}${images.length > 4 ? ' …' : ''}`;
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); };
+    $('#imMerge').onclick = () => finish('merge'); $('#imApart').onclick = () => finish('apart'); $('#imCancel').onclick = () => finish(null);
+    d.onclose = () => finish(null);
+    d.showModal(); $('#imMerge').focus();
+  });
+}
 // 탭 닫기(× · 가운데 단추 · Ctrl+W · 파일 목록 ×). opts.confirmed: 이미 물었다(여러 탭 닫기) · opts.noSwitch: 다른 탭으로 옮기지 않는다
 async function removeFile(p, opts = {}) {
   // v6 Wave F: 다른 탭에 적용하지 않은 글을 기억해 둔 채 그 탭을 닫으면 — 그 탭으로 가서 편집기를 되살린 뒤 예전처럼 묻는다(여러 탭 닫기는 이미 물었다)
@@ -1778,14 +1871,14 @@ async function removeFile(p, opts = {}) {
   if (!opts.confirmed && tabDirty(p) && !(await confirmCloseTabs([p]))) return;
   const next = UM.tabClose({ order: tabs, active: cur }, p).active;
   tabs = tabs.filter((f) => f !== p); saveFilesLS();
-  tabViews.delete(p); docNoted.delete(p);
+  tabViews.delete(p); docNoted.delete(p); freshDocs.delete(p);
   if (cur === p) {
     if (next && !opts.noSwitch) await open(next, { noStash: true }); // 오른쪽(없으면 왼쪽) 탭으로
     else {
       pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); p9ResetDoc(); // P9: 개인정보 창·주석 그리기·목차 상태는 그 문서 것이다
       cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
       curSigned = false; $('#sigBadge').hidden = true;
-      curTemp = curReadOnly = false; updateTempBanner();
+      curTemp = curReadOnly = false; curFresh = null; updateTempBanner();
       $('#fname').textContent = ''; $('#fname').title = '';
       $('#md').hidden = $('#pdf').hidden = true;
       setTool('edit'); pageSel.clear(); setReading(false);
@@ -1822,10 +1915,10 @@ function confirmCloseTabs(paths) {
 function renderTabs() {
   const box = $('#dtList');
   box.replaceChildren(...tabs.map((p) => {
-    const t = document.createElement('div'), on = p === cur, md = !/\.pdf$/i.test(p);
+    const t = document.createElement('div'), on = p === cur, md = !/\.pdf$/i.test(p); // md: Markdown·텍스트(꼬리표는 UM.kindLabel — MD·TXT)
     t.className = 'dt' + (on ? ' on' : ''); t.dataset.path = p; t.title = p; t.draggable = true;
     t.setAttribute('role', 'tab'); t.setAttribute('aria-selected', on); t.tabIndex = on || (!cur && p === tabs[0]) ? 0 : -1;
-    t.innerHTML = `<span class="ext${md ? ' md' : ''}">${md ? 'MD' : 'PDF'}</span><span class="nm"></span>${pendingIn(p) ? '<span class="pend" title="편집 중 — 적용하지 않은 글이 있습니다">✎</span>' : ''}${tabDirty(p) ? '<span class="dot" title="고친 내용 있음">●</span>' : ''}<button type="button" class="x" tabindex="-1" title="닫기 (Ctrl+W)" aria-label="닫기">×</button>`;
+    t.innerHTML = `<span class="ext${md ? ' md' : ''}">${UM.kindLabel(p)}</span><span class="nm"></span>${pendingIn(p) ? '<span class="pend" title="편집 중 — 적용하지 않은 글이 있습니다">✎</span>' : ''}${tabDirty(p) ? '<span class="dot" title="고친 내용 있음">●</span>' : ''}<button type="button" class="x" tabindex="-1" title="닫기 (Ctrl+W)" aria-label="닫기">×</button>`;
     t.querySelector('.nm').textContent = basename(p);
     return t;
   }));
@@ -1958,10 +2051,10 @@ document.addEventListener('drop', (e) => {
   if (!list.length) return;
   if (!(window.retextPdf && window.retextPdf.pathForFile)) return flash('끌어다 놓기는 설치된 앱에서만 됩니다 — 브라우저 화면에서는 [파일 열기]를 쓰세요', 4000);
   const all = list.map((f) => window.retextPdf.pathForFile(f)).filter(Boolean);
-  const paths = all.filter((p) => /\.(pdf|md)$/i.test(p));
+  const paths = all.filter((p) => UM.fileKind(p)); // v6.1: PDF · .md/.markdown · .txt · 그림(PDF로 연다)
   if (paths.length) return addFiles(paths);
   // 조용히 실패하지 않는다: 무엇이 문제인지 알려 준다
-  flash(all.length ? 'PDF·Markdown 파일만 열 수 있습니다' : '파일 경로를 읽지 못했습니다 — [파일 열기]로 열어 주세요', 4000);
+  flash(all.length ? 'PDF·Markdown·텍스트·그림(PNG·JPEG·WebP·GIF·BMP) 파일만 열 수 있습니다' : '파일 경로를 읽지 못했습니다 — [파일 열기]로 열어 주세요', 4000);
 });
 $('#files').onclick = (e) => {
   const x = e.target.closest('[data-x]'); if (x) return removeFile(x.dataset.x);
@@ -2004,8 +2097,9 @@ async function open(name, opts = {}) {
   p9ResetDoc(); // P9: 개인정보 결과·쓰는 중인 주석·주석/목차 목록은 이전 문서 것이다
   pdfDocName = null; externalWarned = null; signedNoted = null; curSigned = false; $('#sigBadge').hidden = true; // 다시 그리는 것이 아니라 여는 것 — 보던 자리는 view로 되살린다
   cur = name; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = !!view?.dirty;
-  curTemp = curReadOnly = false; updateTempBanner();
-  pushRecent(name); renderFiles();
+  curTemp = curReadOnly = false; curFresh = null; curEnc = 'utf-8'; updateTempBanner();
+  if (!freshDocs.has(name)) pushRecent(name); // v6.1: 그림으로 만든 새 PDF(임시 경로)는 최근 파일에 넣지 않는다
+  renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name;
   const isPdf = name.endsWith('.pdf');
   setTool('edit'); pageSel.clear(); pageAnchor = null;
@@ -2013,6 +2107,8 @@ async function open(name, opts = {}) {
   if (view?.zoomMode) { zoomMode = view.zoomMode; if (zoomMode === 'manual' && view.pdfScale) pdfScale = view.pdfScale; } // 탭으로 돌아오면 그 탭의 확대
   setViewLayout(view?.layout || defaultLayout(), false);
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf;
+  // v6.1 텍스트(.txt): 미리보기 없이 편집 칸만(폭 전체). .md·.markdown은 예전처럼 원문 | 미리보기
+  $('#md').classList.toggle('plain', isTxt(name)); $('#src').setAttribute('aria-label', isTxt(name) ? '텍스트' : 'Markdown 원문');
   updateEmptyState(); showDirty();
   showAsideTab(view?.aside || (isPdf ? 'page' : 'file')); // PDF는 쪽 목록, Markdown은 파일 목록(탭으로 돌아오면 그 탭에서 보던 패널)
   setUndoRedoState(0, 0);
@@ -2027,17 +2123,28 @@ async function open(name, opts = {}) {
     if (cur !== name) return;
     reopenDocDialogs(view); // v6 Wave F: 찾아 바꾸기·맞춤법 창
   } else if (view?.md && view.md.text !== view.md.saved) { // 고친 Markdown: 탭 기억의 글(디스크에서 다시 읽지 않는다)
-    mdEol = view.md.eol; curTemp = !!view.md.temp; curReadOnly = !!view.md.readOnly; updateTempBanner();
+    mdEol = view.md.eol; curEnc = view.md.enc || 'utf-8'; curTemp = !!view.md.temp; curReadOnly = !!view.md.readOnly; updateTempBanner();
     docText = view.md.text; savedText = view.md.saved; $('#src').value = docText; preview(); updateMdStatus();
     $('#src').scrollTop = view.md.scrollTop || 0; $('#src').setSelectionRange(view.md.selStart || 0, view.md.selEnd || 0);
     renderPageThumbs();
   } else {
-    const r = await fetch('/api/file?name=' + encodeURIComponent(name));
+    // v6.1 텍스트(.txt)는 서버가 인코딩(UTF-8·BOM·UTF-16·CP949)을 알아보고 글로 풀어 준다(/api/text). Markdown은 원문(UTF-8) 그대로
+    const txt = isTxt(name);
+    const r = await fetch((txt ? '/api/text?name=' : '/api/file?name=') + encodeURIComponent(name));
     if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다 — 늦은 결과로 다른 문서를 덮어쓰지 않는다
-    if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name, { confirmed: true }); }
-    const text = await r.text();
-    if (cur !== name) return;
-    curTemp = r.headers.get('X-Retext-Pdf-Temp') === '1'; curReadOnly = r.headers.get('X-Retext-Pdf-Readonly') === '1'; updateTempBanner();
+    if (!r.ok) { const e = await r.json().catch(() => ({})); flash('⚠ ' + (e.tooLarge ? e.error : '파일을 읽지 못했습니다'), e.tooLarge ? 7000 : 4000); return removeFile(name, { confirmed: true }); }
+    let text;
+    if (txt) {
+      const j = await r.json();
+      if (cur !== name) return;
+      text = j.text; curEnc = j.encoding || 'utf-8'; curTemp = !!j.temp; curReadOnly = !!j.readOnly;
+      if (j.lossy) toast('글자 인코딩을 알아보지 못해 UTF-8로 열었습니다 — 깨진 글자(�)가 보이면 저장하지 마세요', { kind: 'warning', ms: 9000 });
+    } else {
+      text = await r.text();
+      if (cur !== name) return;
+      curTemp = r.headers.get('X-Retext-Pdf-Temp') === '1'; curReadOnly = r.headers.get('X-Retext-Pdf-Readonly') === '1';
+    }
+    updateTempBanner();
     // 편집 창(textarea)은 CRLF를 LF로 바꿔 담는다 — 원문 그대로 비교하면 한 글자만 입력했다 되돌려도 미저장(●)이 남았다.
     // 화면 안에서는 LF로 다루고, 저장할 때 원래 줄바꿈(CRLF)으로 되돌려 쓴다
     mdEol = /\r\n/.test(text) ? '\r\n' : '\n';
@@ -2063,7 +2170,7 @@ function stashView() {
     v.dialogs = { replace: $('#replaceDialog').open ? { find: $('#rpFind').value, with: $('#rpWith').value, matchCase: $('#rpCase').checked, word: $('#rpWord').checked } : null, spell: $('#spellDialog').open };
   } else {
     const ta = $('#src');
-    v.md = { text: docText, saved: savedText, eol: mdEol, scrollTop: ta.scrollTop, selStart: ta.selectionStart, selEnd: ta.selectionEnd, temp: curTemp, readOnly: curReadOnly };
+    v.md = { text: docText, saved: savedText, eol: mdEol, scrollTop: ta.scrollTop, selStart: ta.selectionStart, selEnd: ta.selectionEnd, temp: curTemp, readOnly: curReadOnly, enc: curEnc };
   }
   tabViews.set(cur, v);
 }
@@ -2165,6 +2272,7 @@ async function openThen(fn, pdfOnly = true) {
 // 원격 이미지는 자동으로 불러오지 않는다(열람만으로 외부에 요청이 나가는 것을 막음) — 링크로 바꿔 누르면 기본 브라우저로 연다.
 // innerHTML에 바로 넣으면 img가 즉시 요청을 보내므로, 요청이 없는 DOMParser 문서에서 치환한 뒤 옮긴다. data:·상대 경로 이미지는 그대로 둔다.
 function preview() {
+  if (cur && isTxt(cur)) { $('#prev').replaceChildren(); return; } // v6.1 텍스트(.txt): Markdown으로 그리지 않는다
   const doc = new DOMParser().parseFromString(DOMPurify.sanitize(marked.parse($('#src').value)), 'text/html');
   doc.querySelectorAll('img').forEach((img) => {
     const src = img.getAttribute('src') || '';
@@ -2177,10 +2285,33 @@ function preview() {
 }
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); updateMdStatus(); };
 // Markdown 저장. 실패(파일 잠김·권한)를 그대로 알리고 미저장 표시를 유지한다 — 조용히 "저장됨"으로 넘어가면 닫을 때 편집을 잃는다
-async function putText(name, text, eol = mdEol) {
+// v6.1 텍스트(.txt)는 /api/text로 보내 열 때의 인코딩(enc)으로 쓴다 — 못 쓰는 글자가 있으면 422 { unencodable }(예외의 status·data)
+async function putText(name, text, eol = mdEol, enc = curEnc) {
   if (eol === '\r\n') text = text.replace(/\r?\n/g, '\r\n');
-  let r; try { r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+  const url = isTxt(name) ? `/api/text?name=${encodeURIComponent(name)}&encoding=${encodeURIComponent(enc || 'utf-8')}` : '/api/file?name=' + encodeURIComponent(name);
+  let r; try { r = await fetch(url, { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
+  if (!r.ok) { const data = await r.json().catch(() => ({})); throw Object.assign(new Error(data.error || `HTTP ${r.status}`), { status: r.status, data }); }
+}
+// 저장하고 실제로 쓴 인코딩을 돌려준다. CP949로 못 쓰는 글자(이모지 등)가 있으면 UTF-8로 저장할지 묻는다 — 취소하면 null(저장 안 함)
+async function putTextAsk(name, text, eol, enc) {
+  try { await putText(name, text, eol, enc); return enc; }
+  catch (error) {
+    if (error.status !== 422 || !Array.isArray(error.data?.unencodable)) throw error;
+    if (!(await askUtf8(name, enc, error.data.unencodable))) return null;
+    await putText(name, text, eol, 'utf-8');
+    return 'utf-8';
+  }
+}
+function askUtf8(name, enc, chars) {
+  return new Promise((resolve) => {
+    const d = $('#encDialog');
+    $('#encMsg').textContent = `${basename(name)}은(는) ${ENC_LABEL[enc] || enc}로 열었는데, 그 인코딩으로는 쓸 수 없는 글자가 있습니다: 「${chars.join(' ')}」. UTF-8로 저장할까요? (메모장 등 대부분의 프로그램이 UTF-8을 읽습니다)`;
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; if (d.open) d.close(); resolve(v); };
+    $('#encUtf8').onclick = () => finish(true); $('#encCancel').onclick = () => finish(false);
+    d.onclose = () => finish(false);
+    d.showModal(); $('#encCancel').focus();
+  });
 }
 // ---- v6 Wave B: 저장 전 확인(쪽 위 편집기의 적용하지 않은 글 · 전자서명 · 대체 글꼴) ----
 // 쪽 위 편집기에 적용하지 않은 글이 있으면 저장·인쇄·문서 바꾸기 전에 [적용하고 …] / [버리고 …] / [취소]를 묻는다 — 고친 글을 조용히 빼고 저장하지 않는다.
@@ -2270,6 +2401,7 @@ async function confirmSubstitutions(name) {
 // opts.pending: 'apply'(창 닫기에서 저장을 고름 — 묻지 않고 적용), opts.checked: 확인을 이미 거쳤다(보호 원본 → 다른 이름으로 저장)
 async function save(opts = {}) {
   if (!cur) return;
+  if (curFresh && window.retextPdf) return saveAs(opts); // v6.1 그림으로 만든 새 PDF: 처음 저장은 위치를 고른다(그림이 있던 폴더)
   if (cur.endsWith('.pdf') && !opts.checked) {
     if (!(await settleInplace('저장', opts.pending))) return;
     if (curSigned && !signedAck.has(cur)) { // 처음 저장할 때(고치기 전에 묻지 못했으면) 묻는다
@@ -2284,9 +2416,15 @@ async function save(opts = {}) {
   const name = cur, seq = mutationSeq, text = $('#src').value; // 저장하는 동안 다른 파일로 가거나 편집이 생길 수 있다
   try {
     if (name.endsWith('.pdf')) { await apiPost('/api/pdf/save', { name }, { silent: true }); if (cur === name && seq === mutationSeq) pdfDirty = false; } // 저장 중 편집이 있었으면 미저장 표시 유지
-    else { await putText(name, text); if (cur === name) savedText = text; }
+    else {
+      const used = await putTextAsk(name, text, mdEol, curEnc); // v6.1: 텍스트는 열 때의 인코딩으로
+      if (used === null) return;
+      if (cur === name) { savedText = text; curEnc = used; updateMdStatus(); }
+    }
     showDirty(); flash('저장됨');
   } catch (error) {
+    // v6.1 그림으로 만든 새 PDF(409 fresh): 위치를 골라 저장 — 브라우저 화면은 저장 창이 없어 알리기만 한다
+    if (error.data?.fresh && cur === name) return window.retextPdf ? saveAs({ checked: true }) : flash('⚠ ' + error.message, 6000);
     // 암호·편집 제한이 걸린 원본(409 needSaveAs): 그 자리에 덮어쓰면 보호가 사라지므로 다른 이름으로 저장으로 넘긴다
     if (error.data?.needSaveAs && cur === name) return saveProtected(name, error.data);
     flash('⚠ ' + error.message, 5000);
@@ -2311,21 +2449,25 @@ async function saveAs(opts = {}) {
     if (!(await confirmSubstitutions(cur))) return;
     if (!(await confirmRequiredFields(cur))) return; // v6 Wave E
   }
-  const name = cur, seq = mutationSeq;
-  const to = await window.retextPdf.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
+  const name = cur, seq = mutationSeq, fresh = curFresh;
+  // v6.1 그림으로 만든 새 PDF는 그림이 있던 폴더에 <그림 이름>.pdf를 권한다(임시 폴더·문서 폴더가 아니라)
+  const to = await window.retextPdf.saveAs(cur, fresh ? { defaultDir: fresh.dir } : { suggestDocFolder: curTemp || curReadOnly });
   if (!to) return;
   const text = $('#src').value;
+  let encUsed = curEnc;
   try {
     if (name.endsWith('.pdf')) await apiPost('/api/pdf/saveas', { name, to });
-    else await putText(to, text);
+    else { encUsed = await putTextAsk(to, text, mdEol, curEnc); if (encUsed === null) return; }
   } catch (error) { flash('⚠ ' + error.message, 5000); return; }
+  freshDocs.delete(name);
   // v6 Wave C: 탭은 그 자리에서 새 이름으로 바뀐다(PDF는 서버도 문서를 새 경로로 옮긴다). 새 경로가 다른 탭에 열려 있었으면 그 탭은 닫는다
   const oldTab = tabs.includes(to) && to !== name;
   tabs = tabs.filter((f) => f !== to || f === name).map((f) => (f === name ? to : f)); if (!tabs.includes(to)) tabs.push(to);
   if (oldTab) tabViews.delete(to);
   if (tabViews.has(name)) { tabViews.set(to, tabViews.get(name)); tabViews.delete(name); }
   if (cur !== name) { saveFilesLS(); renderFiles(); flash('다른 이름으로 저장됨 — 그사이 다른 문서로 옮겨 현재 화면은 그대로 둡니다', 4000); return; } // 늦은 결과로 다른 문서를 바꿔치지 않는다
-  if (name.endsWith('.pdf')) { if (seq === mutationSeq) pdfDirty = false; } else savedText = text;
+  if (name.endsWith('.pdf')) { if (seq === mutationSeq) pdfDirty = false; } else { savedText = text; curEnc = encUsed; updateMdStatus(); }
+  curFresh = null;
   saveFilesLS(); cur = to; if (pdfDocName === name) pdfDocName = to; pushRecent(to); renderFiles();
   $('#fname').textContent = basename(to); $('#fname').title = to;
   if (pdfPages.length) renderPageThumbs(); // 축소본 주소가 새 경로를 가리키게
@@ -2352,11 +2494,16 @@ async function saveOtherTabs() {
     if (parkedDirty(p)) { await open(p); if (cur !== p) return false; await save({ pending: 'apply' }); if (dirty() || (inplace && inplace.dirty())) return false; continue; }
     try {
       if (p.endsWith('.pdf')) await apiPost('/api/pdf/save', { name: p }, { silent: true });
-      else { await putText(p, v.md.text, v.md.eol); v.md.saved = v.md.text; }
+      else {
+        const used = await putTextAsk(p, v.md.text, v.md.eol, v.md.enc || 'utf-8'); // v6.1: 텍스트는 그 탭의 인코딩으로
+        if (used === null) throw new Error('저장을 취소했습니다');
+        v.md.saved = v.md.text; v.md.enc = used;
+      }
       v.dirty = false;
     } catch (error) {
       renderFiles(); await open(p);
-      toast(error.data?.needSaveAs ? `${basename(p)}: 보호된 원본이라 그 자리에 저장하지 않습니다 — 다른 이름으로 저장하세요` : `${basename(p)}을(를) 저장하지 못했습니다: ${error.message}`, { kind: 'warning', ms: 8000 });
+      toast(error.data?.fresh ? `${basename(p)}: 그림으로 만든 새 PDF라 저장할 위치를 골라야 합니다 — 다른 이름으로 저장하세요`
+        : error.data?.needSaveAs ? `${basename(p)}: 보호된 원본이라 그 자리에 저장하지 않습니다 — 다른 이름으로 저장하세요` : `${basename(p)}을(를) 저장하지 못했습니다: ${error.message}`, { kind: 'warning', ms: 8000 });
       return false;
     }
   }
@@ -2596,7 +2743,8 @@ async function renderPdfDoc(name, restore = null) { // restore: 탭으로 돌아
   }
   pdfPages = info.pages; pdfObjects = [];
   pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); maybeFlashUndoTrimmed(info); noteExternalChange(info); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
-  curTemp = !!info.temp; curReadOnly = !!info.readOnly; updateTempBanner();
+  curTemp = !!info.temp; curReadOnly = !!info.readOnly; curFresh = info.fresh || null; updateTempBanner(); // v6.1 fresh: 그림으로 만든 새 PDF
+  if (curFresh) freshDocs.add(name);
   noteSecurity(name, info.security);
   showSigned(name, info.security); // v6 Wave B: 전자서명 — 토스트·상태줄 표시
   // 맞춤 방식(쪽 전체 보기·폭 맞춤)이면 그릴 때마다 배율을 다시 잰다 — 처음 열 때는 1쪽, 다시 그릴 때(회전 등)는 보던 쪽 기준
@@ -4153,7 +4301,9 @@ function updateStatusPage() { // 쪽 번호 입력·전체쪽 표시를 현재 �
   if (reading) $('#readPage').textContent = `${currentPageIndex() + 1} / ${pdfPages.length}쪽`;
   highlightPageThumb();
 }
-function updateMdStatus() { $('#sbMdInfo').textContent = `${docText.length.toLocaleString()}자`; } // Markdown: 쪽 대신 글자 수
+function updateMdStatus() { // Markdown: 쪽 대신 글자 수 · v6.1 텍스트(.txt)는 인코딩·줄바꿈도(저장할 때 그대로 쓴다)
+  $('#sbMdInfo').textContent = `${docText.length.toLocaleString()}자` + (cur && isTxt(cur) ? ` · ${ENC_LABEL[curEnc] || curEnc} · ${mdEol === '\r\n' ? 'CRLF' : 'LF'}` : '');
+}
 $('#pdf').addEventListener('scroll', () => { if (cur && cur.endsWith('.pdf')) updateStatusPage(); });
 $('#pageNumInput').addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
@@ -4852,8 +5002,9 @@ const MARKUP_TOOLS = ['highlight', 'underline', 'strikeout'], SHAPE_TOOLS = ['sq
 const isAnnotTool = (t) => MARKUP_TOOLS.includes(t) || SHAPE_TOOLS.includes(t) || t === 'note' || t === 'ink';
 // 상황줄 오른쪽 한 줄 사용법은 모두 여기에 둔다(상태·도구별)
 const HINTS = {
-  empty: 'PDF·Markdown 파일을 열거나 창에 끌어다 놓으세요',
+  empty: 'PDF·Markdown·텍스트·그림 파일을 열거나 창에 끌어다 놓으세요',
   md: '왼쪽에서 고치면 오른쪽 미리보기에 바로 반영됩니다 · Ctrl+S로 저장',
+  txt: '텍스트 파일 — 열 때의 인코딩·줄바꿈 그대로 저장합니다 · Ctrl+S로 저장',
   edit: '고칠 줄을 클릭하세요. 여러 줄은 Shift+클릭',
   // v6 Wave F 글자 선택
   select: '고를 글자를 끌어서 감싸세요 · 두 번 클릭 낱말 · 세 번 클릭 줄 · Ctrl+A 쪽 전체 · Ctrl+C로 복사 · 오른쪽 클릭으로 형광펜·가리기 · Esc로 끝',
@@ -4914,7 +5065,7 @@ function updateCtxBar() {
   const mode = docMode(), pdf = mode === 'pdf';
   let name, hint;
   if (mode === 'empty') { name = '시작하기'; hint = HINTS.empty; }
-  else if (mode === 'md') { name = 'Markdown 편집'; hint = HINTS.md; }
+  else if (mode === 'md') { const t = isTxt(cur); name = t ? '텍스트 편집' : 'Markdown 편집'; hint = t ? HINTS.txt : HINTS.md; }
   else {
     name = TOOL_NAMES[tool];
     hint = multi.size ? HINTS.multi : selectedMask ? HINTS.mask : tool === 'edit' && inplace ? HINTS.editInplace : tool === 'edit' && selectedObj ? HINTS.editOpen
@@ -7117,7 +7268,7 @@ $('#setPop').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.st
 // ---- 명령 검색(Ctrl+Q): 리본 버튼(이름·설명·탭·묶음) + 단축키(SHORTCUTS) + 별칭 + 보기·탭·테마 명령 ----
 // 찾기는 uiModel.searchCommands(한글 이름·별칭·초성 "ㅇㅎ" → 암호·영문). 고르면 그 탭으로 가서 버튼을 잠깐 빛내고 누른다
 const CMD_ALIASES = {
-  openBtn: ['파일 열기', 'open'], save: ['저장하기', 'save'], saveAs: ['사본 저장', 'save as'], printBtn: ['프린트', 'print'],
+  openBtn: ['파일 열기', 'open', '그림 열기', '사진 열기', '이미지 열기', '이미지를 pdf로', 'jpg를 pdf로', '텍스트 열기'], save: ['저장하기', 'save'], saveAs: ['사본 저장', 'save as'], printBtn: ['프린트', 'print'],
   undoBtn: ['되돌리기', 'undo'], redoBtn: ['redo'], toolEdit: ['편집', '텍스트 편집', '글 고치기', 'edit'], toolText: ['텍스트 추가', '글 넣기', '텍스트 상자'],
   toolStamp: ['서명', '사인', '스탬프', '인감'], menuInsertImage: ['이미지 넣기', '사진 넣기', '그림 넣기'], rectTool: ['검게 칠하기', '지우고 덮기', 'redact'],
   searchToggle: ['검색', 'find'], replaceBtn: ['치환', 'replace'], helpBtn: ['단축키', '도움'],

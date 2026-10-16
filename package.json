@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js && node app/pdf-ocr.test.js && node app/pdf-wave-f.test.js && node app/pdf-form-redact.test.js",
+    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/grouping-corpus.test.js && node app/ui-wiring.test.js && node app/server.test.js && node app/pdf-fonts.test.js && node app/pdf-system-fonts.test.js && node app/pdf-edit-service.test.js && node app/pdf-features.test.js && node app/pdf-wave-d.test.js && node app/pdf-wave-e.test.js && node app/pdf-ocr.test.js && node app/pdf-wave-f.test.js && node app/pdf-form-redact.test.js && node app/open-formats.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
@@ -29,6 +29,8 @@
     "files": [
       "app/**",
       "!app/test-data/**",
+      "!app/**/*.test.js",
+      "!app/pdf-test-fixtures.js",
       "package.json",
       "workspace/독서모임_안내.md",
       "workspace/독서모임_안내.pdf",
@@ -93,7 +95,8 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "artifactName": "Retext-PDF-${version}-setup.exe",
-      "shortcutName": "Retext PDF"
+      "shortcutName": "Retext PDF",
+      "include": "build/installer.nsh"
     },
     "appx": {
       "applicationId": "RetextPDF",
@@ -108,7 +111,8 @@
       ],
       "artifactName": "Retext-PDF-${version}-store.${ext}",
       "minVersion": "10.0.17763.0",
-      "maxVersionTested": "10.0.26100.0"
+      "maxVersionTested": "10.0.26100.0",
+      "customExtensionsPath": "build/appx-extensions.xml"
     }
   },
   "repository": {

@@ -4,3 +4,4 @@
 *.svg text eol=lf
 app/test-data/markdown-golden/*.md text eol=lf
 *.traineddata binary
+*.bin binary

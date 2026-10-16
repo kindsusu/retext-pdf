@@ -225,7 +225,7 @@ console.log('OK — AI 제거 단언 통과');
 // 2026-10-03: CRLF Markdown은 화면 안에서 LF로 다루고 저장할 때 원래 줄바꿈으로 되돌린다(입력 뒤 되돌려도 미저장 표시가 남던 문제)
 assert.match(script, /mdEol = \/\\r\\n\/\.test\(text\)/, 'Markdown 원래 줄바꿈을 기억한다');
 assert.match(script, /savedText = text\.replace\(\/\\r\\n\/g, '\\n'\)/, '비교 기준(savedText)은 LF로 정규화한다');
-assert.match(script, /async function putText\(name, text, eol = mdEol\) \{\s*if \(eol === '\\r\\n'\) text = text\.replace/, '저장할 때 CRLF로 되돌린다(v6 Wave C: 탭마다 원래 줄바꿈)');
+assert.match(script, /async function putText\(name, text, eol = mdEol, enc = curEnc\) \{\s*if \(eol === '\\r\\n'\) text = text\.replace/, '저장할 때 CRLF로 되돌린다(v6 Wave C: 탭마다 원래 줄바꿈)');
 // 2026-10-03: 여러 조각으로 된 줄도 폰트 맞추기가 된다 — 나머지 조각 idx를 remove로 넘긴다
 assert.doesNotMatch(script, /fontButton\.disabled = selectedObj\.objs\.length !== 1/, '폰트 맞추기가 조각 하나짜리 줄로 묶여 있지 않다');
 assert.match(script, /openPdfFontEditor\(\{[^}]*remove: selection\.objs\.slice\(1\)/, '폰트 창에 나머지 조각을 넘긴다');
@@ -366,7 +366,7 @@ console.log('OK — 앱 이름 변경(Retext PDF 6.0.0) 단언 통과');
   assert.doesNotMatch(script, /(localStorage|sessionStorage)\.setItem\([^)]*(password|passwordInput|암호)/i, '암호를 localStorage·sessionStorage에 쓰지 않는다');
   assert.doesNotMatch(script, /console\.\w+\([^)]*password/i, '암호를 로그에 남기지 않는다');
   assert.match(script, /if \(info\.needPassword\) \{[\s\S]{0,200}await askPdfPassword\(name\)/, 'PDF를 열 때 401 needPassword면 암호 창');
-  assert.match(script, /return r\.ok \|\| r\.status === 401;/, '최근 파일 확인에서 암호 PDF(401)를 "없는 파일"로 지우지 않는다');
+  assert.match(script, /return r\.ok \|\| r\.status === 401 \|\| r\.status === 413;/, '최근 파일 확인에서 암호 PDF(401)를 "없는 파일"로 지우지 않는다');
   assert.match(script, /'암호를 풀고 열었습니다\. 저장하면 암호 없는 사본이 됩니다\.'/, '암호를 풀고 연 문서 안내');
   assert.match(script, /'편집 제한을 풀고 열었습니다\./, '편집 제한을 풀고 연 문서 안내');
   assert.match(script, /if \(error\.data\?\.needSaveAs && cur === name\) return saveProtected\(name, error\.data\)/, '저장 409 needSaveAs → 다른 이름으로 저장으로');
@@ -1338,7 +1338,7 @@ function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${s
   const walk = (dir) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) { if (!['node_modules', 'tmp', 'dist', '.git', 'vendor'].includes(e.name) && !e.name.startsWith('.')) walk(p); }
-    else if (/\.(js|html|md|json|css|yml|txt)$/i.test(e.name) && p !== __filename && e.name !== 'package-lock.json') files.push(p);
+    else if (/\.(js|html|md|json|css|yml|txt|nsh|xml)$/i.test(e.name) && p !== __filename && e.name !== 'package-lock.json') files.push(p); // v6.1: 설치 스크립트(.nsh)·Store 매니페스트 조각(.xml)도
   } };
   walk(root);
   const hits = files.filter((f) => re.test(fs.readFileSync(f, 'utf8'))).map((f) => path.relative(root, f));
@@ -1346,4 +1346,70 @@ function fnBodyOf(src, sig) { const k = src.indexOf(sig); assert.ok(k >= 0, `${s
   const sample = fs.readFileSync(path.join(root, 'workspace', 'sample.pdf'), 'latin1');
   assert.ok(!re.test(sample) && !/claude|codex|chatgpt/i.test(sample), 'sample.pdf 본문에 다른 프로그램 이름이 없다');
   console.log(`OK — 다른 프로그램 이름 없음(${files.length}개 파일 검사)`);
+}
+
+// ── v6.1 열 수 있는 파일 넓히기: .markdown·.txt·그림(PDF로) · 연결 프로그램 목록 · 패키지 정리 ──────────────────
+{
+  const s = script, root = path.join(__dirname, '..');
+  // A. 한 목록(ui-model)을 화면·main.js·server.js가 같이 쓴다
+  assert.match(mainSource, /const UM = require\('\.\/ui-model'\)/, 'main.js가 파일 종류 목록(ui-model)을 쓴다');
+  assert.match(fnBodyOf(mainSource, 'function pathsFromArgv(argv)'), /if \(!UM\.fileKind\(a\)\) continue;/, '실행 인자·두 번째 실행: PDF·.md·.markdown·.txt·그림을 받는다');
+  assert.match(mainSource, /ipcMain\.handle\('openFiles'[\s\S]{0,400}extensions: UM\.OPEN_EXT \}[\s\S]{0,200}extensions: \['md', 'markdown', 'txt'\][\s\S]{0,120}extensions: UM\.IMAGE_EXT/, '열기 대화상자 첫 칸 = 열 수 있는 파일 모두, 그다음 PDF · Markdown·텍스트 · 그림');
+  assert.match(mainSource, /kind === 'txt' \? \[\{ name: '텍스트', extensions: \['txt'\] \}\]/, '다른 이름으로 저장: .txt는 .txt');
+  assert.match(mainSource, /ext === 'markdown' \? \['markdown', 'md'\] : \['md', 'markdown'\]/, '다른 이름으로 저장: .markdown은 .markdown이 기본');
+  assert.match(mainSource, /opts\.defaultDir[\s\S]{0,160}path\.join\(opts\.defaultDir, path\.basename\(defaultPath\)\)/, '그림으로 만든 새 PDF: 그림 폴더에 <그림 이름>.pdf');
+  assert.match(serverSource, /const isDoc = \(f\) => \['pdf', 'md', 'txt'\]\.includes\(uiModel\.fileKind\(f\)\);/, '작업 폴더·폴더 열기 목록: PDF·.md·.markdown·.txt(그림 제외)');
+  assert.doesNotMatch(serverSource, /\/\\\.\(md\|pdf\)\$\/i/, '옛 .md/.pdf 정규식이 남지 않는다');
+  // B. 화면: 끌어다 놓기·열기·탭 꼬리표
+  assert.match(s, /const paths = all\.filter\(\(p\) => UM\.fileKind\(p\)\);/, '끌어다 놓기도 같은 목록');
+  const add = fnBodyOf(s, 'function addFiles(paths)');
+  assert.match(add, /const images = paths\.filter\(\(p\) => UM\.fileKind\(p\) === 'image'\);[\s\S]*if \(images\.length\) openImages\(images\);/, '그림은 openImages(PDF로 바꿔 새 탭)로');
+  assert.match(s, /<span class="ext">\$\{UM\.kindLabel\(p\)\}<\/span>/, '시작 화면 최근 파일 꼬리표(PDF·MD·TXT)');
+  assert.match(s, /<span class="ext\$\{md \? ' md' : ''\}">\$\{UM\.kindLabel\(p\)\}<\/span>/, '탭 꼬리표(PDF·MD·TXT)');
+  // C. 그림 → PDF: 여러 장이면 묻는다 · 서버가 못 푸는 그림은 화면 디코더로 · 새 PDF는 최근 파일에 넣지 않는다
+  const oi = fnBodyOf(s, 'async function openImages(images)');
+  assert.match(oi, /if \(images\.length > 1\) \{\s*const choice = await askImageMerge\(images\);/, '여러 장이면 합칠지 묻는다');
+  assert.match(oi, /apiPost\('\/api\/pdf\/from-images', \{ images: images\.map/, '서버 길 /api/pdf/from-images');
+  assert.match(oi, /error\.status === 422 && Array\.isArray\(error\.data\?\.needDecode\)[\s\S]*decodeImageInPage\(images\[k\]\)/, '422 needDecode면 화면에서 풀어 다시 보낸다');
+  assert.match(fnBodyOf(s, 'async function decodeImageInPage(p)'), /createImageBitmap\([\s\S]*IMAGE_MAX_SIDE[\s\S]*c\.toBlob\(resolve, lossy \? 'image\/jpeg' : 'image\/png', 0\.92\)/, '브라우저 디코더 → PNG(투명)·JPEG(사진), 긴 변 상한');
+  assert.match(html, /<dialog id="imgMergeDialog"[\s\S]{0,400}id="imMerge" class="pri">한 PDF로 합치기<\/button><button type="button" id="imApart">따로 열기<\/button>/, '[한 PDF로 합치기] / [따로 열기]');
+  assert.match(s, /if \(!freshDocs\.has\(name\)\) pushRecent\(name\);/, '새 PDF(임시 경로)는 최근 파일에 넣지 않는다');
+  assert.match(fnBodyOf(s, 'async function save(opts = {})'), /if \(curFresh && window\.retextPdf\) return saveAs\(opts\);/, '새 PDF의 처음 저장은 위치를 고른다');
+  assert.match(fnBodyOf(s, 'async function saveAs(opts = {})'), /window\.retextPdf\.saveAs\(cur, fresh \? \{ defaultDir: fresh\.dir \} : \{ suggestDocFolder: curTemp \|\| curReadOnly \}\)/, '저장 기본 폴더 = 그림이 있던 폴더');
+  assert.match(s, /curFresh = info\.fresh \|\| null;/, '서버 info.fresh로 새 PDF를 안다');
+  for (const route of ['/api/pdf/from-images', '/api/text']) assert.ok(serverSource.includes(`'${route}'`), `서버에 ${route}`);
+  assert.match(serverSource, /if \(entry\.fresh\) throw Object\.assign\(httpError\(409/, '새 PDF의 그 자리 저장은 409 fresh');
+  // D. 텍스트(.txt): 미리보기 없이 폭 전체 · 인코딩 그대로 저장 · 못 쓰는 글자는 UTF-8로 저장할지 묻는다
+  assert.match(html, /\.split\.plain\{grid-template-columns:1fr\}\.split\.plain \.prev\{display:none\}/, '텍스트는 편집 칸이 폭 전체');
+  assert.match(s, /\$\('#md'\)\.classList\.toggle\('plain', isTxt\(name\)\)/, '.txt를 열면 plain');
+  assert.match(fnBodyOf(s, 'function preview()'), /if \(cur && isTxt\(cur\)\) \{ \$\('#prev'\)\.replaceChildren\(\); return; \}/, '텍스트는 Markdown으로 그리지 않는다');
+  assert.match(s, /fetch\(\(txt \? '\/api\/text\?name=' : '\/api\/file\?name='\) \+ encodeURIComponent\(name\)\)/, '.txt는 /api/text(인코딩 알아보기)');
+  assert.match(fnBodyOf(s, 'async function putText(name, text, eol = mdEol, enc = curEnc)'), /isTxt\(name\) \? `\/api\/text\?name=\$\{encodeURIComponent\(name\)\}&encoding=/, '.txt 저장은 열 때의 인코딩으로');
+  assert.match(fnBodyOf(s, 'async function putTextAsk(name, text, eol, enc)'), /error\.status !== 422[\s\S]*askUtf8\([\s\S]*putText\(name, text, eol, 'utf-8'\)/, 'CP949로 못 쓰면 UTF-8로 저장할지 묻는다');
+  assert.match(html, /<dialog id="encDialog"[\s\S]{0,300}id="encUtf8" class="pri">UTF-8로 저장<\/button>/, 'UTF-8로 저장 확인 창');
+  assert.ok(s.includes("v.md = { text: docText, saved: savedText, eol: mdEol, scrollTop: ta.scrollTop, selStart: ta.selectionStart, selEnd: ta.selectionEnd, temp: curTemp, readOnly: curReadOnly, enc: curEnc };"), '탭 기억에 인코딩');
+  assert.match(s, /putTextAsk\(p, v\.md\.text, v\.md\.eol, v\.md\.enc \|\| 'utf-8'\)/, '창 닫기 → 다른 탭 저장도 그 탭의 인코딩');
+  // E. 연결 프로그램: .pdf만 electron-builder fileAssociations(기본 앱 등록), 나머지는 목록에만(NSIS OpenWithProgids · Store uap:FileTypeAssociation)
+  assert.deepStrictEqual(pkg.build.fileAssociations.map((f) => f.ext), ['pdf'], 'fileAssociations는 .pdf만(APP_ASSOCIATE는 기본 앱 자리를 가져간다)');
+  assert.strictEqual(pkg.build.nsis.include, 'build/installer.nsh');
+  assert.strictEqual(pkg.build.appx.customExtensionsPath, 'build/appx-extensions.xml');
+  const nsh = fs.readFileSync(path.join(root, 'build', 'installer.nsh'), 'utf8');
+  const exts = ['md', 'markdown', 'txt', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'];
+  for (const e of exts) {
+    assert.match(nsh, new RegExp(`!insertmacro retextOpenWith "${e}" "RetextPDF\\.(Text|Image)"`), `설치: .${e} 연결 프로그램 목록`);
+    assert.match(nsh, new RegExp(`!insertmacro retextUnOpenWith "${e}" "RetextPDF\\.(Text|Image)"`), `제거: .${e}`);
+  }
+  assert.match(nsh, /WriteRegNone SHELL_CONTEXT "Software\\Classes\\\.\$\{EXT\}\\OpenWithProgids" "\$\{PROGID\}"/, 'OpenWithProgids 값만 더한다');
+  assert.doesNotMatch(nsh, /"Software\\Classes\\\.\$\{EXT\}" ""/, '확장자 키의 기본값(기본 앱)은 쓰지 않는다');
+  assert.doesNotMatch(nsh, /DeleteRegKey[^\n]*\\\.\$\{EXT\}/, '제거할 때 확장자 키를 통째로 지우지 않는다(값 하나만)');
+  const xml = fs.readFileSync(path.join(root, 'build', 'appx-extensions.xml'), 'utf8');
+  for (const e of exts) assert.ok(xml.includes(`<uap:FileType>.${e}</uap:FileType>`), `Store: .${e}`);
+  // F. 패키지 정리: 시험 파일·시험 데이터는 앱에 넣지 않는다(실행 코드는 시험 파일을 읽지 않는다)
+  for (const f of ['!app/test-data/**', '!app/**/*.test.js', '!app/pdf-test-fixtures.js']) assert.ok(pkg.build.files.includes(f), `build.files ${f}`);
+  for (const f of fs.readdirSync(__dirname).filter((n) => n.endsWith('.js') && !n.endsWith('.test.js') && n !== 'pdf-test-fixtures.js')) {
+    assert.doesNotMatch(fs.readFileSync(path.join(__dirname, f), 'utf8'), /require\(['"]\.\/[^'"]*(\.test|pdf-test-fixtures)['"]?\)/, `${f}는 시험 파일을 읽지 않는다`);
+  }
+  assert.ok(fs.existsSync(path.join(__dirname, 'cp949.bin')) && fs.statSync(path.join(__dirname, 'cp949.bin')).size === 126 * 190 * 2, 'CP949 표(app/cp949.bin)가 앱에 들어간다');
+  assert.ok(pkg.scripts.test.includes('node app/open-formats.test.js'), 'npm test에 v6.1 시험');
+  console.log('OK — v6.1 열 수 있는 파일(.markdown·.txt·그림)·연결 프로그램 목록(NSIS·Store)·패키지 정리 단언 통과');
 }

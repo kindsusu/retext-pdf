@@ -9,7 +9,10 @@ const os = require('os');
 if (!app.requestSingleInstanceLock()) app.quit();
 else main();
 
-// 실행 인자에서 열어야 할 .pdf/.md 경로(존재하는 파일만)를 찾는다.
+// v6.1 열 수 있는 파일 종류(PDF · .md/.markdown · .txt · 그림) — 화면·서버와 같은 목록(ui-model.js)
+const UM = require('./ui-model');
+
+// 실행 인자에서 열어야 할 파일 경로(존재하는 파일만)를 찾는다. 그림은 화면이 PDF로 바꿔 연다.
 // 패키징 exe는 argv[0]이 실행 파일이라 argv[1]부터 보고, 개발 실행(`electron .`)은 argv[0]이 electron.exe·argv[1]이 '.'이라 argv[2]부터 봐야 한다.
 // `--`로 시작하는 옵션 인자(--inspect 등)는 파일 경로가 아니므로 건너뛴다.
 function pathsFromArgv(argv) {
@@ -18,7 +21,7 @@ function pathsFromArgv(argv) {
   for (let i = start; i < argv.length; i++) {
     const a = argv[i];
     if (!a || a.startsWith('--')) continue;
-    if (!/\.(pdf|md)$/i.test(a)) continue;
+    if (!UM.fileKind(a)) continue;
     try { if (fs.statSync(a).isFile()) out.push(path.resolve(a)); } catch {} // 존재하지 않으면 조용히 무시
   }
   return out;
@@ -99,7 +102,10 @@ function main() {
     });
 
     ipcMain.handle('openFiles', async () => {
-      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF · Markdown', extensions: ['pdf', 'md'] }], title: '파일 열기' });
+      // v6.1: 처음 고른 칸은 열 수 있는 파일 모두 — 그림은 PDF로 바꿔 연다
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], title: '파일 열기', filters: [
+        { name: 'PDF · Markdown · 텍스트 · 그림', extensions: UM.OPEN_EXT }, { name: 'PDF', extensions: ['pdf'] },
+        { name: 'Markdown · 텍스트', extensions: ['md', 'markdown', 'txt'] }, { name: '그림 (PDF로 열기)', extensions: UM.IMAGE_EXT }] });
       return r.canceled ? [] : r.filePaths;
     });
 
@@ -121,8 +127,10 @@ function main() {
     });
 
     ipcMain.handle('saveAs', async (_e, defaultPath, opts) => {
-      const isPdf = /\.pdf$/i.test(defaultPath || '');
-      const filters = isPdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [{ name: 'Markdown', extensions: ['md'] }];
+      // v6.1: 확장자를 지킨다 — .markdown은 .markdown으로, .txt는 .txt로(첫 칸의 첫 확장자가 기본)
+      const kind = UM.fileKind(defaultPath || ''), ext = UM.extOf(defaultPath || '');
+      const filters = kind === 'pdf' ? [{ name: 'PDF', extensions: ['pdf'] }] : kind === 'txt' ? [{ name: '텍스트', extensions: ['txt'] }]
+        : [{ name: 'Markdown', extensions: ext === 'markdown' ? ['markdown', 'md'] : ['md', 'markdown'] }];
       // 임시·읽기전용 파일의 "다른 이름으로 저장"은 같은 임시 폴더가 아니라 문서 폴더의 Retext PDF에 원래 파일명으로 유도한다
       if (opts && opts.suggestDocFolder && defaultPath) {
         let documents = path.join(os.homedir(), 'Documents');
@@ -130,6 +138,8 @@ function main() {
         const dir = path.join(documents, 'Retext PDF');
         try { fs.mkdirSync(dir, { recursive: true }); } catch {}
         defaultPath = path.join(dir, path.basename(defaultPath));
+      } else if (opts && typeof opts.defaultDir === 'string' && opts.defaultDir && defaultPath) {
+        defaultPath = path.join(opts.defaultDir, path.basename(defaultPath)); // v6.1 그림으로 만든 새 PDF: 그림이 있던 폴더에 <그림 이름>.pdf
       }
       const r = await dialog.showSaveDialog(win, { defaultPath, filters, title: '다른 이름으로 저장' });
       return r.canceled ? null : r.filePath;
