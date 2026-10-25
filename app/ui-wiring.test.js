@@ -1293,11 +1293,31 @@ console.log('OK — 앱 이름 변경(Retext PDF 6.1.0) 단언 통과');
   assert.match(fnBodyOf(s, 'function updateEmptyState('), /if \(mode !== 'pdf'\) \$\('#ocrBanner'\)\.hidden = true;/, 'PDF가 아니면 알림을 숨긴다');
   const pagesText = new Function(`${fnBodyOf(s, 'function ocrPagesText(')}\n}\nreturn ocrPagesText;`)();
   assert.strictEqual(pagesText([0, 1, 2, 4, 6, 7]), '1-3,5,7-8', '스캔한 쪽 목록 → 쪽 범위 글');
-  // scanPageInfo: 글자 없는 큰 그림 쪽만 스캔한 쪽
-  assert.deepStrictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }], { w: 595, h: 842 }), { scanned: true, chars: 0, imageCover: 1 });
-  assert.strictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }, { type: 'text', text: '보이지 않는 OCR 글자가 스무 자 넘게 들어 있는 쪽', hidden: true }], { w: 595, h: 842 }).scanned, false, 'OCR한 쪽(투명 글자)은 스캔한 쪽이 아니다');
-  assert.strictEqual(UM.scanPageInfo([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 200, y1: 200 } }], { w: 595, h: 842 }).scanned, false, '작은 그림은 스캔이 아니다');
-  assert.strictEqual(UM.scanPageInfo([], { w: 595, h: 842 }).scanned, false, '빈 쪽은 스캔이 아니다');
+  // 윤곽선 글자 쪽만 있으면 알림 문구를 바꾼다(그림 쪽이 섞이면 원래 문구)
+  assert.match(fnBodyOf(s, 'function ocrUpdateBanner('), /\.kind === 'outline'\);[\s\S]*\$\('#ocrBannerText'\)\.textContent = outlineOnly \? '글자가 도형\(윤곽선\)으로 그려져 있어 고를 수 없습니다/);
+  // scanPageInfo: 글자 없는 큰 그림 쪽 · 띠 그림 여러 장으로 쪼갠 쪽 · 글자를 윤곽선으로 그린 쪽
+  const A4 = { w: 595, h: 842 }, SCAN = (objs, pg = A4) => UM.scanPageInfo(objs, pg);
+  assert.deepStrictEqual(SCAN([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }]), { scanned: true, kind: 'image', chars: 0, imageCover: 1, glyphPaths: 0 });
+  assert.strictEqual(SCAN([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 842 } }, { type: 'text', text: '보이지 않는 OCR 글자가 스무 자 넘게 들어 있는 쪽', hidden: true }]).scanned, false, 'OCR한 쪽(투명 글자)은 스캔한 쪽이 아니다');
+  assert.strictEqual(SCAN([{ type: 'image', bounds: { x0: 0, y0: 0, x1: 200, y1: 200 } }]).scanned, false, '작은 그림은 스캔이 아니다');
+  assert.strictEqual(SCAN([]).scanned, false, '빈 쪽은 스캔이 아니다');
+  const strips = Array.from({ length: 28 }, (_, k) => ({ type: 'image', bounds: { x0: 0, y0: 842 - (k + 1) * 30.07, x1: 595, y1: 842 - k * 30.07 } }));
+  assert.deepStrictEqual([SCAN(strips).scanned, SCAN(strips).kind, SCAN(strips).imageCover], [true, 'image', 1], '쪽 폭 띠 그림 28장(한 장은 3.6%) = 함께 덮은 넓이로 스캔한 쪽');
+  const twice = [{ type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 337 } }, { type: 'image', bounds: { x0: 0, y0: 0, x1: 595, y1: 337 } }];
+  assert.strictEqual(SCAN(twice).imageCover, 0.4, '겹친 그림은 한 번만 센다(합이 아니라 합집합)');
+  assert.strictEqual(SCAN(twice).scanned, false);
+  const cross = [{ type: 'image', bounds: { x0: 0, y0: 0, x1: 400, y1: 842 } }, { type: 'image', bounds: { x1: 595, y1: 600, x0: 200, y0: 0 } }];
+  assert.strictEqual(SCAN(cross).imageCover, Math.round((400 * 842 + 195 * 600) / (595 * 842) * 1000) / 1000, '어긋나게 겹친 두 장의 합집합 넓이');
+  const glyph = (k) => ({ type: 'path', bounds: { x0: 40 + (k % 60) * 8, y0: 780 - Math.floor(k / 60) * 14, x1: 46 + (k % 60) * 8, y1: 789 - Math.floor(k / 60) * 14 } });
+  const outlined = Array.from({ length: 120 }, (_, k) => glyph(k));
+  assert.deepStrictEqual(SCAN(outlined), { scanned: true, kind: 'outline', chars: 0, imageCover: 0, glyphPaths: 120 }, '글자 크기 도형 120개 = 윤곽선 글자 쪽');
+  assert.strictEqual(SCAN(outlined.slice(0, 59)).scanned, false, '도형이 적으면(59개) 그림 쪽이 아니다');
+  assert.strictEqual(SCAN([...outlined, { type: 'text', text: '글꼴로 쓴 진짜 글자가 스무 자 넘게 있는 쪽입니다' }]).scanned, false, '글자가 있으면 윤곽선 도형이 있어도 아니다');
+  const rules = Array.from({ length: 200 }, (_, k) => (k % 2 ? { type: 'path', bounds: { x0: 40, y0: 100 + k * 3, x1: 555, y1: 100.5 + k * 3 } } : { type: 'path', bounds: { x0: 40 + k * 2, y0: 100, x1: 40.5 + k * 2, y1: 120 } }));
+  assert.strictEqual(SCAN(rules).glyphPaths, 0, '표 선(한쪽이 1pt보다 얇은 선)은 글자 도형으로 세지 않는다');
+  assert.strictEqual(SCAN(outlined.map((o) => ({ ...o, mask: true }))).scanned, false, '가림 상자는 세지 않는다');
+  assert.strictEqual(SCAN(outlined.map((o) => ({ ...o, ocr: 'cover' }))).scanned, false, 'OCR 배경 덮개는 세지 않는다');
+  assert.strictEqual(SCAN(outlined, { w: 842, h: 595 }).kind, 'outline', '가로 쪽도 같다');
   // D. 대화상자: 언어(한국어+영어 기본)·쪽·방식 둘·편집 가능 경고·건너뛰기 → 진행 창(runJob) + pdfMutate(실행 취소 한 번)
   assert.match(html, /<dialog id="ocrDialog" class="panel"/);
   assert.match(html, /<input type="checkbox" class="ocrLang" value="kor" checked>한국어<\/label><label><input type="checkbox" class="ocrLang" value="eng" checked>영어/);

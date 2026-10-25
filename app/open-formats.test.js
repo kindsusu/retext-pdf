@@ -25,7 +25,7 @@ const UM = require('./ui-model');
 const iu = require('./image-util');
 const imagePdf = require('./image-pdf');
 const { open } = require('./pdf-engine');
-const { makePng } = require('./pdf-test-fixtures');
+const { makePng, buildRawPdf } = require('./pdf-test-fixtures');
 const WIN = process.platform === 'win32';
 
 // ── 시험 그림 만들기 ─────────────────────────────────────────────────────────
@@ -148,7 +148,24 @@ const has = (buf, s) => buf.includes(Buffer.from(s, 'latin1'));
     assert.ok(px(10, 40)[0] > 150 && px(10, 40)[2] < 80, `왼쪽 절반은 그림 색: ${px(10, 40)}`);
     assert.ok(px(100, 40).every((v) => v > 240), `투명한 오른쪽 절반은 흰 바탕이 보인다: ${px(100, 40)}`);
     assert.deepStrictEqual(UM.scanPageInfo(d.objects(1), d.pageSize(1)).scanned, true, '그림 한 장짜리 쪽 = 스캔한 쪽(글자 인식 알림이 뜬다)');
-    d.close();
+    // 쪽을 가로 띠 그림 28장으로 쪼갠 PDF(띠 한 장은 쪽의 3.6%)와 글자를 윤곽선 도형으로 그린 PDF도 글자 인식을 권한다 — 저장·다시 열기 뒤 엔진 objects로
+    d.insertBlankPage(2, 595, 842);
+    const strip = { kind: 'jpeg', data: makeJpeg(400, 20, (x) => [x % 255, 120, 80]) };
+    for (let k = 0; k < 28; k++) d.insertImage(2, strip, { x: 0, y: 842 - (k + 1) * (842 / 28), w: 595, h: 842 / 28 });
+    const e = await open(d.save()); d.close();
+    const sStrip = UM.scanPageInfo(e.objects(2), e.pageSize(2));
+    assert.deepStrictEqual([sStrip.scanned, sStrip.kind, sStrip.imageCover >= 0.99, e.objects(2).filter((o) => o.type === 'image').length], [true, 'image', true, 28], `띠 그림 28장 쪽 ${JSON.stringify(sStrip)}`);
+    e.close();
+    // 윤곽선 글자: 글자 크기 채운 도형 150개(따로 칠한 경로 = 경로 객체 하나씩) + 표 선 40개(0.5pt — 세지 않는다). 엔진 addPolygon은 가림 상자 표시가 붙어 원시 PDF로 만든다
+    const glyphs = Array.from({ length: 150 }, (_, k) => `${40 + (k % 50) * 10} ${780 - Math.floor(k / 50) * 16} 6 9 re f`).join('\n');
+    const ruleLines = Array.from({ length: 40 }, (_, k) => `40 ${100 + k * 12} 515 0.5 re f`).join('\n');
+    const content = Buffer.from(`${glyphs}\n${ruleLines}\n`, 'latin1');
+    const outlinePdf = buildRawPdf(['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+      '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << >> >>', { dict: `<< /Length ${content.length} >>`, data: content }]);
+    const f = await open(outlinePdf);
+    const sOutline = UM.scanPageInfo(f.objects(0), f.pageSize(0));
+    assert.deepStrictEqual([sOutline.scanned, sOutline.kind, sOutline.chars, sOutline.glyphPaths, f.objects(0).filter((o) => o.type === 'path').length], [true, 'outline', 0, 150, 190], `윤곽선 글자 쪽 ${JSON.stringify(sOutline)}`);
+    f.close();
     // EXIF 방향 6: 픽셀을 돌려 넣는다 → 쪽이 세로(48×64px → 36×48pt)
     const rot = imagePdf.prepareImage(withOrientation(jpg, 6));
     assert.deepStrictEqual([rot.image.kind, rot.width, rot.height], ['rgba', 48, 64], 'EXIF 방향대로 돌린다');

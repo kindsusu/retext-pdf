@@ -179,20 +179,44 @@
   const resolveTheme = (pref, systemDark) => (pref === 'dark' || (pref === 'system' && systemDark) ? 'dark' : 'light');
 
   // ---- v6 Wave E2: 스캔한 쪽 알아보기(글자 인식 권하기 · 일괄 OCR이 글자 있는 쪽을 건너뛰기) ----
-  // objs = 엔진 objects(i), page = { w, h }(쪽 크기 pt). 글자(보이는 것·투명한 것 모두)가 거의 없고(공백 빼고 20자 미만)
-  // 가장 큰 그림이 쪽의 절반 이상을 덮으면 스캔한 쪽 → { scanned, chars, imageCover(0~1) }. OCR을 한 쪽은 글자가 생겨 더는 스캔한 쪽이 아니다
-  const SCAN_MAX_CHARS = 20, SCAN_MIN_COVER = 0.5;
+  // objs = 엔진 objects(i), page = { w, h }(쪽 크기 pt). 글자(보이는 것·투명한 것 모두)가 거의 없고(공백 빼고 20자 미만) 다음 중 하나면 글자 인식을 권한다
+  //   kind 'image':   그림들이 함께 덮은 넓이(겹친 곳은 한 번)가 쪽의 절반 이상 — 한 장짜리 스캔과 쪽을 띠 그림 여러 장으로 쪼갠 PDF 모두
+  //   kind 'outline': 글자 크기의 작은 도형이 많다 — 글자를 윤곽선(벡터 경로)으로 바꿔 저장한 PDF. 표 선(한쪽이 얇은 선)은 세지 않는다
+  // → { scanned, kind('image'|'outline'|null), chars, imageCover(0~1), glyphPaths }. OCR을 한 쪽은 글자가 생겨 더는 스캔한 쪽이 아니다
+  const SCAN_MAX_CHARS = 20, SCAN_MIN_COVER = 0.5, SCAN_MIN_GLYPHS = 60, UNION_MAX_RECTS = 400;
+  // 사각형들의 합집합 넓이(좌표 압축: x 띠마다 y 구간을 합친다). 너무 많으면(띠 그림 수백 장) 넓이 합으로 어림한다 — 덮은 비율은 1에서 자른다
+  function unionArea(rects) {
+    if (rects.length > UNION_MAX_RECTS) return rects.reduce((n, r) => n + (r.x1 - r.x0) * (r.y1 - r.y0), 0);
+    const xs = [...new Set(rects.flatMap((r) => [r.x0, r.x1]))].sort((a, b) => a - b);
+    let area = 0;
+    for (let k = 0; k + 1 < xs.length; k++) {
+      const xa = xs[k], xb = xs[k + 1];
+      const ys = rects.filter((r) => r.x0 <= xa && r.x1 >= xb).map((r) => [r.y0, r.y1]).sort((a, b) => a[0] - b[0]);
+      let len = 0, lo = null, hi = null;
+      for (const [y0, y1] of ys) {
+        if (hi === null || y0 > hi) { if (hi !== null) len += hi - lo; lo = y0; hi = y1; } else hi = Math.max(hi, y1);
+      }
+      if (hi !== null) len += hi - lo;
+      area += len * (xb - xa);
+    }
+    return area;
+  }
   function scanPageInfo(objs, page) {
     const list = Array.isArray(objs) ? objs : [];
     const chars = list.filter((o) => o && o.type === 'text').reduce((n, o) => n + String(o.text || '').replace(/\s/g, '').length, 0);
-    const area = Math.max(1, (Number(page?.w) || 0) * (Number(page?.h) || 0));
-    let cover = 0;
-    for (const o of list) {
-      if (!o || o.type !== 'image' || !o.bounds) continue;
-      const b = o.bounds, a = Math.max(0, b.x1 - b.x0) * Math.max(0, b.y1 - b.y0);
-      cover = Math.max(cover, Math.min(1, a / area));
-    }
-    return { scanned: chars < SCAN_MAX_CHARS && cover >= SCAN_MIN_COVER, chars, imageCover: Math.round(cover * 1000) / 1000 };
+    const W = Number(page?.w) || 0, H = Number(page?.h) || 0, area = Math.max(1, W * H);
+    const box = (o) => { const b = o.bounds; return { x0: Math.min(b.x0, b.x1), y0: Math.min(b.y0, b.y1), x1: Math.max(b.x0, b.x1), y1: Math.max(b.y0, b.y1) }; };
+    const imgs = list.filter((o) => o && o.type === 'image' && o.bounds).map(box).filter((r) => r.x1 > r.x0 && r.y1 > r.y0);
+    const cover = Math.min(1, unionArea(imgs) / area);
+    // 글자 크기 도형: 높이 2pt~쪽 높이 6%, 폭 1pt~쪽 폭 30%(쪽이 돌아 있어도 되게 긴 변 기준). 가림 상자·OCR 덮개는 빼고 센다
+    const big = Math.max(W, H), glyphPaths = list.filter((o) => {
+      if (!o || o.type !== 'path' || !o.bounds || o.mask || o.ocr) return false;
+      const r = box(o), w = r.x1 - r.x0, h = r.y1 - r.y0;
+      return Math.min(w, h) >= 1 && Math.max(w, h) >= 2 && h <= big * 0.06 && w <= big * 0.3;
+    }).length;
+    const few = chars < SCAN_MAX_CHARS;
+    const kind = !few ? null : cover >= SCAN_MIN_COVER ? 'image' : glyphPaths >= SCAN_MIN_GLYPHS ? 'outline' : null;
+    return { scanned: !!kind, kind, chars, imageCover: Math.round(cover * 1000) / 1000, glyphPaths };
   }
 
   // ---- v6.1 열 수 있는 파일 종류: PDF · Markdown(.md·.markdown) · 텍스트(.txt) · 그림(PDF로 바꿔 연다) ----

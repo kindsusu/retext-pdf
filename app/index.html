@@ -8351,7 +8351,7 @@ async function ocrLoadStatus() {
   try { st.status = await apiGet('/api/ocr/status'); } catch { st.status = { available: false, langs: [] }; }
   return st.status;
 }
-// 스캔한 쪽(0 기준) — 글자가 거의 없고 큰 그림이 쪽 절반 이상을 덮은 쪽. 서버 일괄 OCR의 건너뛰기와 같은 계산(ui-model scanPageInfo)
+// 스캔한 쪽(0 기준) — 글자가 거의 없고 그림들이 쪽 절반 이상을 덮었거나 글자를 윤곽선으로 그린 쪽. 서버 일괄 OCR의 건너뛰기와 같은 계산(ui-model scanPageInfo)
 function ocrScannedPages() { return pdfPages.map((pg, i) => (pdfObjects[i] && UM.scanPageInfo(pdfObjects[i], pg).scanned ? i : -1)).filter((i) => i >= 0); }
 // 0 기준 쪽 목록 → '1-3,5' (쪽 범위 칸에 그대로 넣는 글)
 function ocrPagesText(list) {
@@ -8366,6 +8366,9 @@ function ocrUpdateBanner() {
   const b = $('#ocrBanner');
   const pages = pdfOpen() && !ocrSt().dismissed.has(cur) ? ocrScannedPages() : [];
   b.hidden = !pages.length;
+  // 글자를 윤곽선(도형)으로 바꾼 쪽만 있으면 "스캔한 쪽"이 아니라 그대로 알린다 — 그림 쪽이 하나라도 섞이면 원래 문구
+  const outlineOnly = pages.length && pages.every((i) => UM.scanPageInfo(pdfObjects[i], pdfPages[i]).kind === 'outline');
+  $('#ocrBannerText').textContent = outlineOnly ? '글자가 도형(윤곽선)으로 그려져 있어 고를 수 없습니다 — 글자 인식(OCR)을 하면 검색·복사·편집할 수 있습니다' : '스캔한 쪽입니다 — 글자 인식(OCR)을 하면 검색·복사·편집할 수 있습니다';
   if (pages.length) $('#ocrBannerPages').textContent = pages.length === pdfPages.length ? (pdfPages.length > 1 ? ` (모든 쪽 ${pdfPages.length}쪽)` : '') : ` (${ocrPagesText(pages)}쪽)`;
 }
 function ocrAfterRender(name) { ocrHidePop(); if (cur === name) ocrUpdateBanner(); }
