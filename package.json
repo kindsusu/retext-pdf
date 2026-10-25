@@ -1,7 +1,7 @@
 {
   "name": "retext-pdf",
   "productName": "Retext PDF",
-  "version": "6.1.0",
+  "version": "6.1.1",
   "description": "Local PDF and Markdown editor with true text editing and redaction",
   "main": "app/main.js",
   "scripts": {

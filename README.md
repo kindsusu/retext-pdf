@@ -34,8 +34,9 @@ Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or 
 - **"Open with" for more file types.** The installer and the Store version add Retext PDF to the Windows "Open with" list for `.md`, `.markdown`, `.txt`, and images. Your default apps are not changed.
 - **Smaller package** (test files are no longer shipped) and more reliable tests.
 - Limits: Find & Replace and spell check are not available in the text and Markdown editor; an animated GIF opens as its first frame.
+- **6.1.1:** OCR is now suggested for two more kinds of PDFs without text — pages split into many image strips, and pages whose text was saved as vector outlines. Before, no banner appeared, so it was unclear why nothing could be selected.
 
-Full notes: [v6.1.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.0).
+Full notes: [v6.1.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.0) · [v6.1.1 release](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.1).
 
 ## What's new in 6.0
 

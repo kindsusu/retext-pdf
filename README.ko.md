@@ -34,8 +34,9 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 - **"연결 프로그램" 등록 확대.** 설치판과 Store판이 `.md`·`.markdown`·`.txt`와 그림 파일의 Windows "연결 프로그램" 목록에 Retext PDF를 올립니다. 기본 앱은 바꾸지 않습니다.
 - **더 작은 패키지**(테스트 파일을 앱에서 뺌)와 더 안정적인 테스트.
 - 한계: 텍스트·Markdown 편집 칸에는 찾아 바꾸기와 맞춤법 검사가 없습니다. 움직이는 GIF는 첫 장면만 엽니다.
+- **6.1.1:** 글자가 없는 PDF 두 종류에도 글자 인식(OCR)을 권합니다 — 쪽을 띠 모양 그림 여러 장으로 쪼갠 PDF, 글자를 도형(윤곽선)으로 바꿔 저장한 PDF. 전에는 알림이 뜨지 않아 글자를 고를 수 없는 이유를 알기 어려웠습니다.
 
-전체 내용: [v6.1.0 릴리스](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.0)
+전체 내용: [v6.1.0 릴리스](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.0) · [v6.1.1 릴리스](https://github.com/kindsusu/retext-pdf/releases/tag/v6.1.1)
 
 ## 6.0의 새 기능
 
