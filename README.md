@@ -87,6 +87,8 @@ Full notes: [v6.0.0 release](https://github.com/kindsusu/retext-pdf/releases/tag
 
 ## Run from source
 
+Requires Node.js 22 or later.
+
 ```bash
 git clone https://github.com/kindsusu/retext-pdf.git
 cd retext-pdf
@@ -94,7 +96,7 @@ npm install
 npm start
 ```
 
-Double-clicking `run-retext-pdf.bat` runs the same source without opening a terminal. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
+Double-clicking `run-retext-pdf.bat` runs the same source and keeps a command window open to show the server log; close the app window to quit. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
 
 ## PDF editing
 
