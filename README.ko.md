@@ -87,6 +87,8 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 
 ## 소스에서 실행
 
+Node.js 22 이상이 필요합니다.
+
 ```bash
 git clone https://github.com/kindsusu/retext-pdf.git
 cd retext-pdf
@@ -94,7 +96,7 @@ npm install
 npm start
 ```
 
-터미널 없이 같은 소스를 실행하려면 `run-retext-pdf.bat`을 더블클릭합니다. 브라우저 전용 모드는 `npm run serve` 후 <http://localhost:4747>에서 열리며, 이 모드에서는 파일 대화상자와 PNG 삽입을 쓸 수 없습니다(Electron 전용).
+`run-retext-pdf.bat`을 더블클릭하면 같은 소스를 실행하고 서버 로그를 보여 주는 명령창이 열려 있습니다. 앱 창을 닫으면 종료됩니다. 브라우저 전용 모드는 `npm run serve` 후 <http://localhost:4747>에서 열리며, 이 모드에서는 파일 대화상자와 PNG 삽입을 쓸 수 없습니다(Electron 전용).
 
 ## PDF 편집
 
