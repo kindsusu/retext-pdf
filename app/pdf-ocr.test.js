@@ -24,7 +24,7 @@ const { buildPdf } = require('./pdf-test-fixtures');
 const UM = require('./ui-model');
 const pii = require('./pii');
 const MD = require('./pdf-markdown');
-const { redactArea } = require('./pdf-edit-service');
+const { redactArea, maskParts } = require('./pdf-edit-service');
 const T0 = Date.now();
 const lap = (label) => console.log(`  ${label} (${((Date.now() - T0) / 1000).toFixed(1)}초)`);
 
@@ -221,6 +221,58 @@ const inkIn = (raw, scale, r) => { // 쪽 좌표 사각형 안의 진한 픽셀 
     assert.strictEqual(e.find(0, 'quick').length, 1);
     e.close();
     lap('편집 가능한 글자(배경 칠하기·크기·색·다시 인식 교체) 검사 통과');
+  }
+
+  // ── 3b. 검색용 글자를 고치거나 가려도 쪽 전체 스캔 그림은 그대로다 ─────────────────
+  // 2026-11-09 사용자 보고: 회전한 스캔 쪽(가로 그림 + /Rotate 270)에서 OCR한 제목 줄을 가리자 쪽 전체가 하얘지고 검은 덮개만 남았다.
+  // 투명 글자를 드러내는 덮개가 쪽 전체 그림을 "타일"로 여겨 그림 전체로 커졌고, 회전한 쪽에서는 줄 방향이 아닌 축으로 좁혔다
+  {
+    const covers = (d) => d.objects(0).filter((o) => o.mask);
+    const whiteShare = (raw) => { let n = 0; for (let k = 0; k < raw.data.length; k += 4) if (raw.data[k] + raw.data[k + 1] + raw.data[k + 2] > 735) n++; return n / (raw.data.length / 4); };
+    // (가) 보통 스캔의 검색용 낱말 고치기(투명 글자 드러내기): 덮개는 그 낱말 자리만 — 쪽 끝까지 이어진 띠가 아니다
+    {
+      const d = await open(searchBytes);
+      const w = d.objects(0).find((o) => o.ocr === 'search' && o.text.trim() === '개인정보');
+      assert.ok(w, '검색용 낱말 "개인정보"');
+      const r = d.setText(0, w.idx, '개인정보');
+      assert.ok(r.ok && r.revealed, JSON.stringify(r));
+      const cv = covers(d);
+      assert.strictEqual(cv.length, 1, '배경 덮개 하나');
+      const th = w.bounds.y1 - w.bounds.y0, ch = cv[0].bounds.y1 - cv[0].bounds.y0, cw = cv[0].bounds.x1 - cv[0].bounds.x0;
+      assert.ok(ch <= th * 3 && cw <= (w.bounds.x1 - w.bounds.x0) * 3, `덮개는 낱말 크기(${JSON.stringify(cv[0].bounds)} vs 낱말 ${JSON.stringify(w.bounds)})`);
+      d.close();
+    }
+    // (나) 스캐너가 세로 문서를 가로 그림 + /Rotate 270으로 저장한 쪽 — OCR 글자는 쪽 좌표에서 세로로 흐른다(회전 글자)
+    {
+      const src = await open(scan.bytes), raw = src._renderRaw(0, 150 / 72); src.close();
+      const W = raw.w, H = raw.h, data = Buffer.alloc(W * H * 4);
+      // 시계 방향 90°로 돌린 가로 그림(H×W): 새 (x, y) = 원래 (y, H−1−x). 쪽을 270° 돌려 보이면 다시 바로 선다
+      for (let y = 0; y < W; y++) for (let x = 0; x < H; x++) { const s = (H - 1 - x) * raw.stride + y * 4; raw.data.copy(data, (y * H + x) * 4, s, s + 4); }
+      const d0 = await open(buildPdf({ pages: [{ w: 842, h: 595, content: '' }] }));
+      d0.insertImage(0, { kind: 'rgba', data, width: H, height: W, quality: 90 }, { x: 0, y: 0, w: 842, h: 595 });
+      d0.rotatePages([0], 270);
+      const d = await open(d0.save()); d0.close();
+      assert.strictEqual(d.pageSize(0).rotation, 3);
+      const { r, lines } = await ocrDocPage(d, 0);
+      assert.strictEqual(r.orientation, 0, '쪽 회전대로 그리면 바로 선 글');
+      d.addOcrLayers([{ i: 0, lines }], { mode: 'search' });
+      const words = d.objects(0).filter((o) => o.ocr === 'search');
+      const title = words.slice(0, lines[0].words.length); // 첫 줄(제목) 낱말들
+      assert.ok(title.length >= 3 && similarity(title.map((o) => o.text).join(''), LINES[0][0]) >= 0.85, `제목 줄 낱말: ${title.map((o) => o.text).join(' ')}`);
+      const before = whiteShare(d._renderRaw(0, 0.5));
+      const m = maskParts(d, 0, title.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })));
+      assert.ok(m.ok && !m.skipped.length, JSON.stringify(m));
+      const cv = covers(d);
+      assert.ok(cv.length >= 1 && cv.every((o) => o.color.slice(0, 3).every((v) => v === 0)), `덮개는 검은 줄 덮개뿐(흰 배경 덮개 없음): ${JSON.stringify(cv.map((o) => [o.color, o.bounds]))}`);
+      assert.ok(cv.every((o) => o.bounds.x1 - o.bounds.x0 < 60), '줄 덮개는 줄 높이만큼(쪽 폭으로 번지지 않는다)');
+      assert.strictEqual(d.objects(0).filter((o) => o.type === 'image').length, 1, '스캔 그림은 그대로');
+      const after = whiteShare(d._renderRaw(0, 0.5));
+      assert.ok(after <= before + 0.005, `쪽이 하얘지지 않는다(흰 비율 ${before.toFixed(3)} → ${after.toFixed(3)})`);
+      assert.strictEqual(d.find(0, '독서').length, 0, '가린 제목 글자는 텍스트에서 빠졌다');
+      assert.ok(d.find(0, 'quick').length >= 1, '다른 줄 글자는 그대로');
+      d.close();
+    }
+    lap('검색용 글자 고치기·가리기가 스캔 그림을 지우지 않음(보통 쪽·회전한 쪽) 검사 통과');
   }
 
   // ── 4. 라우트(진짜 PDFium): 상태 · 문서 OCR(진행·취소·실행 취소) · 찾기 · 영역 인식·넣기 · 일괄 처리 ─────────

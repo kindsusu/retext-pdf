@@ -32,6 +32,7 @@ const FPDF_FONT_TRUETYPE = 2;
 const FIND_MATCHCASE = 1, FIND_MATCHWHOLEWORD = 2;
 const FIND_LIMIT = 500; // 한 페이지에서 가져올 최대 결과 수(폭주 방지). 서버가 문서 전체를 합칠 때도 같은 상한을 쓴다
 const LINE_HEIGHT = 1.2; // 줄바꿈 편집 시 행간(글자 크기 배수). PDF는 행간 정보를 주지 않는다
+const TILE_MAX_CROSS = 3; // 투명 글자를 드러낼 때 덮개에 넣는 그림 타일의 최대 크기(줄 높이 방향, 글자 높이 배수) — 이보다 크면 쪽 스캔이다
 
 // FPDFBitmap_* 포맷 (FPDFBitmap_GetFormat). 픽셀당 바이트 수가 다르다
 const BMP_GRAY = 1, BMP_BGR = 2, BMP_BGRx = 3, BMP_BGRA = 4;
@@ -1778,19 +1779,23 @@ function openWith(P, buffer, password) {
         const all = api.objects(i), b = all[idx].bounds, pad = 3;
         cover = { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
         // 보이는 글자는 그림 타일이고, 타일은 투명 텍스트 상자와 어긋나 있다(PowerPoint: 한 조각의 타일이 옆 조각 자리까지 걸침).
-        // 텍스트 상자와 세로로 절반 이상 겹치고 가로로 겹치거나 맞닿은(2pt) 이미지 타일을 모두 덮는 범위에 넣는다.
-        const th = b.y1 - b.y0;
+        // 텍스트 상자와 줄 높이 방향으로 절반 이상 겹치고 줄 방향으로 겹치는 이미지 타일을 모두 덮는 범위에 넣는다.
+        // 줄 방향은 글자 행렬로 정한다: 회전한 쪽에 OCR로 넣은 글자는 쪽 좌표에서 세로(y)로 흐른다
+        const m0 = matOf(o0), along = m0 && Math.abs(m0[1]) > Math.abs(m0[0]) ? 'y' : 'x', X = along === 'x';
+        const span = (r, a) => (a === 'x' ? [r.x0, r.x1] : [r.y0, r.y1]);
+        const [ta0, ta1] = span(b, along), [tc0, tc1] = span(b, X ? 'y' : 'x'), th = tc1 - tc0;
         for (const o of all) {
           if (o.type !== 'image' || !o.bounds) continue;
-          const vy = Math.min(o.bounds.y1, b.y1) - Math.max(o.bounds.y0, b.y0);
-          const hx = Math.min(o.bounds.x1, b.x1) - Math.max(o.bounds.x0, b.x0);
-          const tw = o.bounds.x1 - o.bounds.x0;
-          // 가로로 '실질적으로' 겹치는 타일만(겹침 폭이 타일·텍스트 중 좁은 쪽의 절반 이상). 맞닿기만 한 옆 조각 타일은 제외
-          if (vy > 0.5 * th && hx > 0.5 * Math.min(tw, b.x1 - b.x0)) cover = { x0: Math.min(cover.x0, o.bounds.x0), y0: Math.min(cover.y0, o.bounds.y0), x1: Math.max(cover.x1, o.bounds.x1), y1: Math.max(cover.y1, o.bounds.y1) };
+          const [oa0, oa1] = span(o.bounds, along), [oc0, oc1] = span(o.bounds, X ? 'y' : 'x');
+          // 줄 높이보다 훨씬 큰 그림(쪽 전체 스캔)은 타일이 아니다 — 넣으면 덮개가 그림 전체, 곧 쪽 전체가 된다(2026-11-09 사용자 보고: 가리기 뒤 쪽이 하얗게)
+          if (oc1 - oc0 > TILE_MAX_CROSS * th) continue;
+          const vy = Math.min(oc1, tc1) - Math.max(oc0, tc0), hx = Math.min(oa1, ta1) - Math.max(oa0, ta0);
+          // 줄 방향으로 '실질적으로' 겹치는 타일만(겹침 폭이 타일·텍스트 중 좁은 쪽의 절반 이상). 맞닿기만 한 옆 조각 타일은 제외
+          if (vy > 0.5 * th && hx > 0.5 * Math.min(oa1 - oa0, ta1 - ta0)) cover = { x0: Math.min(cover.x0, o.bounds.x0), y0: Math.min(cover.y0, o.bounds.y0), x1: Math.max(cover.x1, o.bounds.x1), y1: Math.max(cover.y1, o.bounds.y1) };
         }
-        // 타일은 옆 단어까지 걸치므로, 타일 범위 안에서 '이 단어의 잉크가 이어지는 가로 구간'만 덮는다:
-        // 텍스트 상자 가운데에서 좌우로 나가며 잉크 없는 빈 열이 gap(글자 크기의 0.25) 이상 이어지면 멈춘다
-        cover = api._inkExtent(i, cover, b);
+        // 타일은 옆 단어까지 걸치므로, 타일 범위 안에서 '이 단어의 잉크가 이어지는 줄 방향 구간'만 덮는다:
+        // 텍스트 상자 가운데에서 줄 방향 앞뒤로 나가며 잉크 없는 빈 열이 gap(글자 크기의 0.25) 이상 이어지면 멈춘다
+        cover = api._inkExtent(i, cover, b, along);
         ink = api.sampleInk(i, cover);
         background = api.sampleColor(i, cover);
       }
@@ -2367,25 +2372,30 @@ function openWith(P, buffer, password) {
       return [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255];
     },
 
-    // region 안에서 seed(텍스트 상자) 가운데를 기준으로 잉크가 이어지는 가로 구간을 찾는다 (2배 렌더, 배경과 다른 픽셀 = 잉크)
-    // 페이지 x축은 회전 0·2에서 비트맵 가로, 1·3에서 세로다 → 그 축(t)을 따라 훑고, 찾은 끝을 선형으로 페이지 x로 되돌린다
-    _inkExtent(i, region, seed) {
+    // region 안에서 seed(텍스트 상자) 가운데를 기준으로 잉크가 이어지는 줄 방향 구간을 찾는다 (2배 렌더, 배경과 다른 픽셀 = 잉크)
+    // along: 줄이 흐르는 쪽 좌표축('x' 기본 · 회전한 쪽에 OCR로 넣은 글자는 'y'). 그 축이 비트맵 가로인지 세로인지는 쪽 회전에 따라 다르다 →
+    // 그 축(t)을 따라 훑고, 찾은 끝을 선형으로 쪽 좌표로 되돌린다. 줄과 수직인 축은 region 그대로
+    _inkExtent(i, region, seed, along = 'x') {
       const s = 2, raw = api._renderRaw(i, s), bg = api.sampleColor(i, region);
-      const d = deviceRect(i, region, s), vert = api.pageSize(i).rotation % 2 === 1;
+      const Y = along === 'y', lo = Y ? region.y0 : region.x0, hi = Y ? region.y1 : region.x1;
+      const mid = Y ? (region.x0 + region.x1) / 2 : (region.y0 + region.y1) / 2;
+      const dev = (v) => (Y ? toDevice(i, mid, v, s) : toDevice(i, v, mid, s));
+      const p0 = dev(lo), p1 = dev(hi), vert = Math.abs(p1[1] - p0[1]) > Math.abs(p1[0] - p0[0]); // 줄 방향이 비트맵 세로인가
+      const d = deviceRect(i, region, s);
       const [t0, t1, c0, c1] = vert ? [d.y0, d.y1, d.x0, d.x1] : [d.x0, d.x1, d.y0, d.y1];
       const inkCol = (t) => { for (let c = c0; c <= c1; c++) { const p = vert ? t * raw.stride + c * 4 : c * raw.stride + t * 4; if (Math.abs(raw.data[p] - bg[0]) + Math.abs(raw.data[p + 1] - bg[1]) + Math.abs(raw.data[p + 2] - bg[2]) >= 120) return true; } return false; };
-      const gap = Math.max(3, Math.round(0.25 * (seed.y1 - seed.y0) * s));
-      const ym = (region.y0 + region.y1) / 2, axis = (x) => toDevice(i, x, ym, s)[vert ? 1 : 0];
-      const tA = axis(region.x0), tB = axis(region.x1);
+      const gap = Math.max(3, Math.round(0.25 * (Y ? seed.x1 - seed.x0 : seed.y1 - seed.y0) * s));
+      const axis = (v) => dev(v)[vert ? 1 : 0];
+      const tA = axis(lo), tB = axis(hi);
       if (tA === tB) return region;
-      const cx = axis((seed.x0 + seed.x1) / 2);
+      const cx = axis(Y ? (seed.y0 + seed.y1) / 2 : (seed.x0 + seed.x1) / 2);
       let L = cx, R = cx;
       for (let t = cx, blank = 0; t >= t0; t--) { if (inkCol(t)) { blank = 0; L = t; } else if (++blank >= gap) break; }
       for (let t = cx, blank = 0; t <= t1; t++) { if (inkCol(t)) { blank = 0; R = t; } else if (++blank >= gap) break; }
       if (R - L < 4) return region; // 잉크를 못 찾으면(이미 덮였거나 비어 있음) 그대로
-      const toX = (t) => region.x0 + (t - tA) / (tB - tA) * (region.x1 - region.x0), xa = toX(L), xb = toX(R);
-      const pad = 1.5;
-      return { x0: Math.max(region.x0, Math.min(xa, xb) - pad), x1: Math.min(region.x1, Math.max(xa, xb) + pad), y0: region.y0, y1: region.y1 };
+      const back = (t) => lo + (t - tA) / (tB - tA) * (hi - lo), va = back(L), vb = back(R);
+      const pad = 1.5, a0 = Math.max(lo, Math.min(va, vb) - pad), a1 = Math.min(hi, Math.max(va, vb) + pad);
+      return Y ? { x0: region.x0, x1: region.x1, y0: a0, y1: a1 } : { x0: a0, x1: a1, y0: region.y0, y1: region.y1 };
     },
 
     // 시험용: 객체 채움색 강제 (알파 0 → 투명 글자 재현)

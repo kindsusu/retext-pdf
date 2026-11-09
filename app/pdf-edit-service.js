@@ -188,7 +188,9 @@ function maskParts(doc, i, parts, { color, fallbackRects = [], forms = true, lin
       const band = obj && obj.bounds ? doc.lineBand(i, obj, all) : null; // 글자를 지우기 전에 줄 높이를 잰다
       // v6 Wave B: 회전·기울임 글자는 글자 방향 덮개(지우기 전 글자 자리로 잰다). 가로 기울임(이탤릭)은 가로 줄 덮개와 합쳐지게 줄 정보를 단다
       const tilt = r.reason === 'rotated' && typeof doc.addPolygon === 'function' ? tiltCover(obj) : null;
-      const cleared = doc.setText(i, idx, ' ');
+      // 투명 글자(OCR 검색용 층·그림 위 숨은 글자)는 제자리에서 비우기만 한다: setText는 투명 글자를 "드러내며" 그 자리 그림을 배경색 사각형으로
+      // 덮는데, 가릴 때는 줄 덮개가 그 자리를 덮으므로 필요 없고, 덮개 계산이 빗나가면 쪽 전체가 하얘진다(2026-11-09 사용자 보고: 회전한 스캔 쪽)
+      const cleared = obj && obj.hidden && typeof doc._setOneRaw === 'function' ? doc._setOneRaw(i, idx, ' ') : doc.setText(i, idx, ' ');
       if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
       cut++;
       // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
