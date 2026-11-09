@@ -1,6 +1,6 @@
 # Microsoft Store 제출서 문안 (Partner Center에 붙여 넣을 내용)
 
-작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영, 2026-10-14 5.0.0 기능 반영, 2026-10-15 5.1.0 기능 반영, 2026-10-15 6.0.0 기능 반영, 2026-10-16 6.1.0 기능 반영, 2026-10-26 6.1.1 반영) · 기준 버전 6.1.1 · 언어: 한국어(ko-KR), 영어(en-US)
+작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영, 2026-10-14 5.0.0 기능 반영, 2026-10-15 5.1.0 기능 반영, 2026-10-15 6.0.0 기능 반영, 2026-10-16 6.1.0 기능 반영, 2026-10-26 6.1.1 반영, 2026-11-09 6.1.2 반영) · 기준 버전 6.1.2 · 언어: 한국어(ko-KR), 영어(en-US)
 
 ## 기본 정보
 
@@ -90,8 +90,9 @@ Retext PDF는 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 �
 19. Markdown 편집과 실시간 미리보기, 텍스트(.txt) 편집(인코딩 유지), 그림을 PDF로 열기·여러 그림 합치기
 20. 문서는 PC 안에서만 처리, 데이터 수집 없음, 거의 모든 편집 실행 취소
 
-### 이 버전의 새로운 기능 (6.1.1)
+### 이 버전의 새로운 기능 (6.1.2)
 
+6.1.2: 스캔한 쪽을 글자 인식한 뒤 줄을 가리면 쪽 전체가 하얘지던 문제를 고쳤습니다.
 6.1.1: 쪽을 띠 모양 그림 여러 장으로 쪼갠 PDF와 글자를 도형(윤곽선)으로 바꿔 저장한 PDF에도 글자 인식(OCR)을 권합니다.
 텍스트 파일 열기: .txt를 미리보기 없는 편집 칸으로 엽니다. 인코딩(UTF-8·UTF-16·한국어 CP949)을 알아보고, 저장할 때 같은 인코딩과 줄바꿈으로 씁니다. .markdown도 .md처럼 엽니다.
 그림을 PDF로 열기: PNG·JPG·WebP·GIF(첫 장면)·BMP를 한 쪽짜리 PDF로 열고, 여러 장을 한 PDF로 합칠 수 있습니다. 그다음 가리기·글자 인식·서명·저장을 그대로 씁니다.
@@ -152,8 +153,9 @@ Free for personal, non-commercial use. Work use by companies or institutions req
 19. Markdown editing with live preview, plain-text (.txt) editing that keeps the encoding, and images opened or merged as a PDF
 20. Documents stay on your PC with no data collection, and almost every edit can be undone
 
-### What's new in this version (6.1.1)
+### What's new in this version (6.1.2)
 
+6.1.2: Fixed redacting a recognized line on a scanned page turning the whole page white.
 6.1.1: OCR is now suggested for PDFs split into many image strips and for PDFs whose text was saved as outlines.
 Open text files: .txt opens in a plain editor. The encoding (UTF-8, UTF-16 or Korean CP949) is detected, and saving keeps the same encoding and line endings. .markdown opens like .md.
 Open images as a PDF: PNG, JPG, WebP, GIF (first frame) and BMP open as a one-page PDF, and several images can be merged into one PDF. Then redact, run OCR, sign or save it like any PDF.
